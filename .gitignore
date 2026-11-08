@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Xcode user state and build output
+build/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Signing material and local secrets
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.pfx
+*.cer
+*.certSigningRequest
+*.pem
+*.key
+.env
+.env.*

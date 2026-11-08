@@ -1,0 +1,135 @@
+import SwiftUI
+
+/// 黑胶唱片：同心沟槽 + 镜面扇形高光 + 中心标签，播放时持续旋转。
+///
+/// 物理细节：唱片的**沟槽与中心标签**随盘转动，但**镜面反光是环境反射，方向固定**，
+/// 不能跟着转。因此把旋转层与固定高光层拆开，转起来才有真实的黑胶质感。
+struct VinylDiscView: View {
+    let angle: Angle
+    var pull: CGFloat = 0
+
+    var body: some View {
+        ZStack {
+            // 底色
+            Circle()
+                .fill(RadialGradient(colors: [Color(hex: 0x1E1E21), Color(hex: 0x0B0B0D), Color(hex: 0x151517)],
+                                    center: .center, startRadius: 8, endRadius: DS.disc / 2))
+
+            // ① 随盘旋转：沟槽 + 扇光 + 中心标签
+            ZStack {
+                Canvas { context, size in
+                    let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                    var r: CGFloat = 26
+                    while r < size.width / 2 - 3 {
+                        let rect = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
+                        context.stroke(Path(ellipseIn: rect),
+                                       with: .color(.white.opacity(0.045)),
+                                       lineWidth: 0.7)
+                        r += 2.4
+                    }
+                }
+                Circle()
+                    .fill(AngularGradient(colors: [
+                        .white.opacity(0.10), .clear, .clear,
+                        .white.opacity(0.055), .clear, .clear
+                    ], center: .center))
+                    .blendMode(.screen)
+                Image("planet")
+                    .resizable()
+                    .frame(width: 80, height: 80)
+                    .clipShape(Circle())
+                    .overlay(Circle().fill(.white).frame(width: 5, height: 5))
+            }
+            .clipShape(Circle())
+            .rotationEffect(angle)
+
+            // ② 固定环境镜面反光（不随盘转）：右下主高光 + 左上弱高光
+            Circle()
+                .fill(AngularGradient(colors: [
+                    .clear, .clear, .white.opacity(0.05),
+                    .white.opacity(0.20), .clear, .white.opacity(0.11), .clear
+                ], center: .center))
+                .blendMode(.screen)
+            Circle().stroke(.white.opacity(0.08), lineWidth: 1)
+            Circle()
+                .stroke(.black.opacity(0.55), lineWidth: 12)
+                .blur(radius: 12)
+                .clipShape(Circle())
+        }
+        .frame(width: DS.disc, height: DS.disc)
+        // 抽出时唱片离开封套、投影随位移加深，制造景深
+        .shadow(color: .black.opacity(Double(0.35 + 0.12 * pull)),
+                radius: 20 + 12 * pull, y: 10 + 8 * pull)
+    }
+}
+
+/// 封套中心圆孔后的「星球」：静止为蓝色星空，抽出唱片后变为黑白半月（原片 f52–f91）。
+struct PlanetView: View {
+    let moon: CGFloat
+
+    var body: some View {
+        ZStack {
+            Image("planet")
+                .resizable()
+            Circle()
+                .fill(LinearGradient(stops: [
+                    .init(color: Color(hex: 0xF0EBE0), location: 0),
+                    .init(color: Color(hex: 0xF0EBE0), location: 0.5),
+                    .init(color: Color(hex: 0x0A0A0C), location: 0.5),
+                    .init(color: Color(hex: 0x0A0A0C), location: 1)
+                ], startPoint: .leading, endPoint: .trailing))
+                .opacity(Double(moon))
+        }
+        .clipShape(Circle())
+        .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
+    }
+}
+
+/// 封套 + 唱片的完整组合动效。自身尺寸固定为 306×306，位置由父视图决定。
+/// 层次（从下到上）：唱片 → 圆孔星球 → 挖孔封套。
+struct SleeveArtwork: View {
+    /// 封套图：默认原片挖孔素材；点其它专辑时传入该封面，用同一比例的遮罩挖孔
+    var coverName: String = "sleeve_cutout"
+    let pull: CGFloat
+    let flip: Double
+    let spin: Angle
+
+    private var discInset: CGFloat { (DS.sleeve - DS.disc) / 2 }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            // 唱片在封套之后，抽出时向右位移并旋转
+            VinylDiscView(angle: spin, pull: pull)
+                .offset(x: discInset + DS.discPull * pull, y: discInset)
+
+            // 封套缩小 + 左移，制造景深（对应原片 f44–f51）
+            ZStack(alignment: .topLeading) {
+                PlanetView(moon: pull)
+                    .frame(width: DS.planet, height: DS.planet)
+                    .offset(x: 108.3, y: 113.7)
+
+                Image(coverName)
+                    .resizable()
+                    .frame(width: DS.sleeve, height: DS.sleeve)
+                    // 孔直径 = 306 × 28.06%，与原片 sleeve_cutout 实测一致
+                    .mask {
+                        Rectangle()
+                            .overlay {
+                                Circle()
+                                    .frame(width: DS.sleeve * CGFloat(0.2806),
+                                           height: DS.sleeve * CGFloat(0.2806))
+                                    .blendMode(.destinationOut)
+                            }
+                            .compositingGroup()
+                    }
+                    .shadow(color: .black.opacity(0.26), radius: 22, y: 12)
+            }
+            .scaleEffect(1 - DS.pullScale * pull, anchor: .center)   // 以中心缩放，封套中线不动 → 唱片始终上下居中
+            .offset(x: -DS.sleevePull * pull)
+        }
+        .frame(width: DS.sleeve, height: DS.sleeve, alignment: .topLeading)
+        // 原片 f116–f119 的绕 Y 轴 3D 翻转；转到侧面时受光变暗
+        .brightness(-0.16 * min(abs(flip) / 86.0, 1.0))
+        .rotation3DEffect(.degrees(flip), axis: (x: 0, y: 1, z: 0), perspective: 0.55)
+    }
+}

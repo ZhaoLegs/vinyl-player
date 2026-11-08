@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vinyl · 逐帧复刻原型</title>
+<style>
+  :root{
+    --ink:#17181a; --sub:#8b8783; --line:rgba(0,0,0,.08);
+    --glass:rgba(255,255,255,.62);
+    --accent:#8fd694;
+  }
+  /* iOS 27 Liquid Glass：更明确的边框 + 更亮镜面高光 + 更暗的边缘描线 */
+  .lg{background:linear-gradient(135deg,rgba(255,255,255,.50),rgba(255,255,255,.16) 48%,rgba(255,255,255,.34));
+    backdrop-filter:blur(20px) saturate(1.9) brightness(1.05);
+    -webkit-backdrop-filter:blur(20px) saturate(1.9) brightness(1.05);
+    border:1px solid rgba(255,255,255,.72);
+    box-shadow:inset 0 2px 0 rgba(255,255,255,.98),inset 0 -1px 0 rgba(255,255,255,.55),
+      inset 1px 0 0 rgba(255,255,255,.40),inset -1px 0 0 rgba(255,255,255,.40),
+      inset 0 0 0 1px rgba(0,0,0,.055),
+      inset 0 10px 20px rgba(255,255,255,.20),0 12px 28px rgba(0,0,0,.13),0 2px 5px rgba(0,0,0,.06)}
+  /* 苹果系统控件库：Button + .buttonStyle(.glass)（GlassButtonStyle）。
+     原生工程里这些都是系统控件，不是自绘圆；此处用 <button> 语义元素做视觉等价呈现。 */
+  .sysbtn{appearance:none;-webkit-appearance:none;margin:0;padding:0;font-family:inherit;
+    display:grid;place-items:center;cursor:pointer;border-radius:50%;
+    background:linear-gradient(145deg,rgba(255,255,255,.54),rgba(255,255,255,.13) 54%,rgba(255,255,255,.32));
+    backdrop-filter:blur(18px) saturate(2.05) brightness(1.02);
+    -webkit-backdrop-filter:blur(18px) saturate(2.05) brightness(1.02);
+    border:1px solid rgba(255,255,255,.78);
+    box-shadow:inset 0 2px 0 rgba(255,255,255,.98),inset 0 -1px 0 rgba(255,255,255,.50),
+      inset 0 0 0 1px rgba(0,0,0,.06),
+      inset 0 0 9px rgba(255,255,255,.26),0 5px 14px rgba(0,0,0,.12);
+    transition:transform .18s cubic-bezier(.2,.8,.2,1),box-shadow .18s}
+  .sysbtn:hover{transform:scale(1.06)}
+  .sysbtn:active{transform:scale(.91);box-shadow:inset 0 2px 8px rgba(0,0,0,.12),0 2px 6px rgba(0,0,0,.09)}
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+  body{margin:0;background:#0d0e10;color:#e9e9ec;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",Arial,sans-serif;}
+  .top{padding:22px 30px 14px;border-bottom:1px solid #22242a;display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+  .top h1{font-size:19px;margin:0;letter-spacing:.5px;font-weight:650}
+  .top .tag{font-size:11px;color:#8b8f9a;border:1px solid #31343c;border-radius:20px;padding:3px 10px}
+  .top .desc{font-size:12px;color:#777b85;line-height:1.6}
+  .layout{display:grid;grid-template-columns:230px minmax(0,1fr) 300px;gap:22px;padding:24px 30px 40px;align-items:start;max-width:1400px;margin:0 auto}
+  @media(max-width:1080px){.layout{grid-template-columns:1fr;justify-items:center}}
+  .panel{background:#15171b;border:1px solid #24272e;border-radius:14px;padding:16px}
+  .panel h2{font-size:11px;letter-spacing:1.6px;color:#6f747e;text-transform:uppercase;margin:0 0 14px;font-weight:600}
+  .kv{display:flex;justify-content:space-between;font-size:12px;padding:7px 0;border-bottom:1px dashed #262a31}
+  .kv:last-child{border:0}
+  .kv span:first-child{color:#8a8f99}
+  .kv span:last-child{font-variant-numeric:tabular-nums;color:#d8dbe2}
+  .phases{display:flex;flex-direction:column;gap:5px;margin-top:6px}
+  .phase{display:flex;gap:9px;align-items:center;font-size:11.5px;padding:7px 9px;border-radius:8px;cursor:pointer;color:#989ca6;border:1px solid transparent;transition:.15s}
+  .phase:hover{background:#1d2026;color:#e3e6ec}
+  .phase.on{background:#202a24;border-color:#3d5d45;color:#b9e7c1}
+  .phase b{font-variant-numeric:tabular-nums;color:#5f6672;font-weight:500;width:52px;flex:none;font-size:10.5px}
+  .phase.on b{color:#8fd694}
+  .ctl{display:flex;gap:8px;margin-bottom:12px}
+  button{font-family:inherit;font-size:12px;background:#23262d;color:#e6e8ee;border:1px solid #333740;border-radius:8px;padding:8px 12px;cursor:pointer;transition:.15s}
+  button:not(.tab):not(.sysbtn):hover{background:#2e323b;border-color:#454b57}
+  button.primary{background:#2f6b3d;border-color:#3d8a4e;color:#e8f8ec}
+  button.primary:hover{background:#3a7f49}
+  input[type=range]{width:100%;accent-color:#8fd694;margin:8px 0 4px}
+  .ticks{display:flex;justify-content:space-between;font-size:10px;color:#5d626d;font-variant-numeric:tabular-nums}
+  .refbox{margin-top:14px;border-top:1px solid #262a31;padding-top:12px}
+  .refbox img{width:118px;display:block;margin:8px auto 0;border-radius:8px;border:1px solid #30343c}
+  .refcap{font-size:10.5px;color:#6d727d;text-align:center;margin-top:6px;line-height:1.5}
+  .overview{width:100%;border-radius:8px;border:1px solid #30343c;margin-top:10px;cursor:zoom-in}
+
+  /* ---------- device ---------- */
+  .device-wrap{display:flex;justify-content:center;perspective:1400px}
+  .device{width:413px;height:872px;border-radius:58px;padding:10px;background:linear-gradient(145deg,#8b8d92,#e6e6e8 18%,#9a9ca1 42%,#f2f2f3 62%,#8a8c91 100%);box-shadow:0 34px 70px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.12);position:relative;flex:none}
+  .device:before{content:"";position:absolute;left:-3px;top:172px;width:3px;height:62px;background:#9a9ca2;border-radius:2px}
+  .device:after{content:"";position:absolute;right:-3px;top:220px;width:3px;height:88px;background:#9a9ca2;border-radius:2px}
+  .screen{width:393px;height:852px;border-radius:48px;overflow:hidden;position:relative;background:#f2efec;isolation:isolate}
+  .wallpaper{position:absolute;inset:0;background:
+     radial-gradient(120px 90px at 12% 8%,rgba(255,196,214,.62),transparent 70%),
+     radial-gradient(160px 120px at 88% 16%,rgba(198,224,255,.6),transparent 72%),
+     radial-gradient(180px 130px at 78% 56%,rgba(255,225,182,.55),transparent 72%),
+     radial-gradient(200px 160px at 18% 78%,rgba(206,240,220,.55),transparent 74%),
+     radial-gradient(160px 120px at 50% 100%,rgba(228,214,255,.5),transparent 72%),
+     linear-gradient(160deg,#faf8f6,#edeae7 55%,#f4f0ee);
+     z-index:0}
+  .grain{position:absolute;inset:0;opacity:.22;mix-blend-mode:multiply;z-index:1;pointer-events:none;
+     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.22'/%3E%3C/svg%3E")}
+  .statusbar{position:absolute;top:0;left:0;right:0;height:54px;z-index:40;display:flex;align-items:center;justify-content:space-between;padding:16px 30px 0;font-size:14px;font-weight:600;color:#111;pointer-events:none}
+  .statusbar .right{display:flex;align-items:center;gap:6px}
+  .island{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:124px;height:35px;background:#08090b;border-radius:20px;z-index:41;box-shadow:inset 0 0 0 1px #1d1f23}
+  .island:after{content:"";position:absolute;right:11px;top:11px;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#2b3a52,#0b0d12 70%)}
+  .homebar{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:134px;height:5px;border-radius:3px;background:rgba(0,0,0,.72);z-index:45}
+
+  /* ---------- home ---------- */
+  .home,.detail{position:absolute;inset:0;z-index:5}
+  .home{z-index:5}
+  .detail{z-index:6;opacity:0;pointer-events:none}
+  .home-head{position:absolute;top:64px;left:27px;right:27px;display:flex;justify-content:space-between;align-items:center}
+  /* 左右上角：系统 Button + .buttonStyle(.glass) 的视觉等价 ——
+     一个 44pt 圆形玻璃底，里面只有一个 20pt 单色图标，没有任何额外图形或文字。
+     玻璃面 = 半透明 + 背景模糊 + 顶面镜面高光 + 内暗描边 + 外投影。 */
+  .logo,.cube{width:44px;height:44px;flex:none}
+  .logo svg,.cube svg{width:20px;height:20px;stroke:#1b1b1d;fill:none;
+    stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;
+    filter:drop-shadow(0 .5px 0 rgba(255,255,255,.9))}
+  /* 网格几何按原片实测：左右 27pt、4 列、列宽 72pt、间距 17pt */
+  .grid{position:absolute;top:118px;left:27px;right:27px;bottom:31px;overflow:hidden;
+    display:grid;grid-template-columns:repeat(4,1fr);gap:17px;align-content:start}
+  .cell{aspect-ratio:1;border-radius:4px;overflow:hidden;background:#ddd;cursor:pointer;transition:transform .18s,box-shadow .18s;box-shadow:0 1px 3px rgba(0,0,0,.09)}
+  .cell:hover{transform:scale(1.07);box-shadow:0 6px 16px rgba(0,0,0,.2);z-index:3}
+  .cell img{width:100%;height:100%;object-fit:cover;display:block}
+  .cell.target{outline:2px solid rgba(70,130,80,.85);outline-offset:2px}
+  /* 延展中的封面：起点由点击的那一格注入（left/top/width/height + 图片），
+     transform-origin 固定在左上角，位移+缩放在同一坐标系内一次算完 */
+  .flying{position:absolute;left:0;top:0;width:72px;height:72px;z-index:12;border-radius:4px;overflow:hidden;opacity:0;transform-origin:top left;pointer-events:none;will-change:transform}
+  .flying img{width:100%;height:100%;object-fit:cover;display:block}
+
+  /* 系统 scrollEdgeEffectStyle(.soft, for: .bottom) 的视觉等价：
+     一层 24px backdrop-filter + 由弱到强的同向 mask（模糊不透明度渐进），
+     末端再叠极薄背景雾。不用多层叠加：Chromium 里叠在另一层 backdrop-filter
+     之上的层会拿不到正确的 backdrop，反而只剩最底一层生效、留下硬边。
+     容器下沿伸到 mini / tab bar 底下由它们盖住，避免模糊突然中断出现硬边。 */
+  .homefade{position:absolute;left:0;right:0;bottom:26px;height:280px;z-index:10;pointer-events:none}
+  .homefade i{position:absolute;inset:0;display:block}
+  .homefade i:nth-child(1){backdrop-filter:blur(30px) saturate(.96) brightness(1.01);
+    -webkit-backdrop-filter:blur(30px) saturate(.96) brightness(1.01);
+    -webkit-mask-image:linear-gradient(to bottom,transparent 6%,rgba(0,0,0,.28) 26%,rgba(0,0,0,.86) 52%,#000 72%);
+    mask-image:linear-gradient(to bottom,transparent 6%,rgba(0,0,0,.28) 26%,rgba(0,0,0,.86) 52%,#000 72%)}
+  /* 极薄的一层背景色雾，只负责把画面对齐到页面底色；透明度远低于之前的 0.94 */
+  .homefade:after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(to bottom,rgba(246,243,240,0) 18%,rgba(246,243,240,.03) 44%,rgba(246,243,240,.16) 64%,rgba(246,243,240,.38) 80%,rgba(246,243,240,.52) 92%,rgba(246,243,240,.58))}
+  /* mini player 用高不透明度实色：backdrop-filter 在 28pt 圆角元素上会出现水平接缝，
+     而且它下面就是网格缩略图，模糊本来也读不出来 */
+  /* 系统 .glassEffect(.regular, in: Capsule()) 的视觉等价：
+     圆角由父层裁剪，模糊层是 inset:0 的方形伪元素 —— 这样 Chromium 不会在
+     28pt 圆角元素上画出那条水平接缝。底下网格的颜色会真的透上来。 */
+  .mini{position:absolute;left:16px;right:16px;bottom:92px;height:40px;border-radius:20px;
+    display:flex;align-items:center;gap:8px;padding:0 14px 0 12px;z-index:20;
+    overflow:hidden;
+    background:linear-gradient(180deg,rgba(255,255,255,.56),rgba(255,255,255,.38));
+    border:.75px solid rgba(255,255,255,.62);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.92),inset 0 -1px 0 rgba(255,255,255,.38),
+      inset 0 0 0 .5px rgba(0,0,0,.045),0 8px 20px rgba(0,0,0,.10),0 1px 3px rgba(0,0,0,.05)}
+  .mini:before{content:"";position:absolute;inset:0;z-index:-1;
+    backdrop-filter:blur(26px) saturate(1.7) brightness(1.03);
+    -webkit-backdrop-filter:blur(26px) saturate(1.95) brightness(1.04)}
+   .mini .art{width:27px;height:27px;border-radius:50%;background:radial-gradient(circle at 50% 45%,#2b3b6b,#0d1020 65%);position:relative;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+  .mini .art:after{content:"";position:absolute;left:50%;top:50%;width:4px;height:4px;border-radius:50%;background:#fff;transform:translate(-50%,-50%)}
+  .mini .txt{flex:1;min-width:0}
+  .mini .t1{font-size:13px;font-weight:650;color:#141416;line-height:16px;letter-spacing:.1px}
+  .mini .t2{font-size:10.5px;color:#5f5b57;font-weight:500;line-height:13px;margin-top:0}
+  .pause{width:17px;height:17px;flex:none;fill:#1a1a1c;display:block}
+  /* ---------- 底部 Tab Bar：系统 UITabBar（iOS 26/27 Liquid Glass）等价呈现 ----------
+     真机上这一整条由 SwiftUI `TabView { Tab(...) }` 生成，材质/高光/折射/安全区/无障碍
+     全部由系统负责。iOS 26 的选中态不是一块小方块，而是一枚几乎占满 1/4 宽的
+     玻璃滑块（capsule），切换时带弹簧滑过去 —— 这是「像不像系统」最关键的一处。 */
+  .tabbar{position:absolute;left:16px;right:16px;bottom:31px;height:56px;border-radius:28px;
+    display:flex;align-items:center;padding:0 4px;z-index:22;
+    background:linear-gradient(180deg,rgba(252,252,251,.76) 0%,rgba(242,243,241,.66) 52%,rgba(247,247,245,.72) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.96),               /* 顶部镜面高光 */
+      inset 0 -1px 0 rgba(255,255,255,.42),              /* 底部回光 */
+      inset 0 0 0 .5px rgba(255,255,255,.48),
+      inset 0 0 0 1px rgba(0,0,0,.05),                   /* iOS 27：更明确的暗描边 */
+      inset 0 12px 20px -14px rgba(255,255,255,.42),
+      0 0 0 .6px rgba(74,78,74,.17),
+      0 10px 26px rgba(0,0,0,.12),
+      0 1px 3px rgba(0,0,0,.05)}
+  /* 玻璃折射：左上高光扫过 + 右下反光，叠在材质之上 */
+  .tabbar::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+    background:
+      radial-gradient(120% 92% at 6% 0%,rgba(255,255,255,.52),rgba(255,255,255,0) 56%),
+      radial-gradient(90% 72% at 100% 104%,rgba(255,255,255,.28),rgba(255,255,255,0) 62%),
+      linear-gradient(114deg,rgba(255,255,255,.24) 0%,rgba(255,255,255,0) 36%,rgba(255,255,255,.10) 60%,rgba(255,255,255,0) 76%);
+    mix-blend-mode:screen;opacity:.46}
+  /* 选中滑块：系统 SelectionIndicator（玻璃胶囊，宽约 1/4 条，高 44） */
+  .tabpill{position:absolute;left:0;top:6px;height:44px;border-radius:22px;pointer-events:none;z-index:0;
+    background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(255,255,255,.74) 58%,rgba(255,255,255,.82));
+    border:.75px solid rgba(255,255,255,.98);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.98),inset 0 -1px 0 rgba(255,255,255,.34),
+      inset 0 0 0 .5px rgba(0,0,0,.02),0 0 0 .6px rgba(0,0,0,.075),0 2px 5px rgba(0,0,0,.09);
+    transition:transform .42s cubic-bezier(.32,1.22,.48,1),width .42s cubic-bezier(.32,1.22,.48,1)}
+  /* 每个 tab 是等宽的 1/4，选中滑块正好盖住它 */
+  .tab{flex:1 1 0;height:44px;border-radius:22px;display:grid;place-items:center;cursor:pointer;
+    transition:opacity .2s,transform .18s;position:relative;z-index:1;
+    appearance:none;-webkit-appearance:none;border:0;padding:0;margin:0;background:transparent;font-family:inherit}
+  .tab svg{width:23px;height:23px;display:block;transition:opacity .2s}
+  .tab:active{transform:scale(.94);background:transparent}
+  .tab:focus-visible{outline:2px solid rgba(70,130,80,.7);outline-offset:-2px}
+  /* 未选中：系统会给图标约 60% 的存在感；选中：纯黑、无额外描边 */
+  .tab:not(.sel) svg{opacity:.58}
+  .tab.sel svg{opacity:1}
+
+  /* ---------- detail ---------- */
+  .dhead{position:absolute;top:66px;left:20px;right:20px;display:flex;align-items:center;justify-content:space-between}
+  .close{width:36px;height:36px}
+  .close svg{width:15px;height:15px;stroke:#1c1c1e;stroke-width:2.1;fill:none;stroke-linecap:round}
+  .dtitle{text-align:center;line-height:1.25;transform:translateX(-2px)}
+  .dtitle .a{font-size:14px;font-weight:650;color:#1a1a1c}
+  .dtitle .b{font-size:11px;color:#8b8783;margin-top:1px}
+  .artwork{position:absolute;left:43.5px;top:130px;width:306px;height:306px;cursor:pointer;transform-style:preserve-3d}
+  .artwork .discWrap,.artwork .planetLayer,.artwork .sleeve{position:absolute;top:0;left:0;width:306px;height:306px}
+  .discWrap{left:18.5px!important;top:18.5px!important;width:269px!important;height:269px!important;z-index:1;border-radius:50%;
+    box-shadow:0 12px 26px rgba(0,0,0,.35);transform-origin:center center}
+  .disc{position:absolute;inset:0;border-radius:50%;transform-origin:center center;overflow:hidden;
+    background:
+      radial-gradient(circle at 50% 50%,rgba(255,255,255,.16) 0 2%,transparent 2.4%),
+      repeating-radial-gradient(circle at 50% 50%,#0b0b0d 0 1px,#1b1b1e 1px 2.4px,#0d0d0f 2.4px 3.6px),
+      #111}
+  /* 随唱片一起旋转的沟槽扇光 */
+  .disc .spinGroove{position:absolute;inset:0;border-radius:50%;
+    background:conic-gradient(from 0deg,rgba(255,255,255,.11) 0deg,transparent 26deg,transparent 150deg,rgba(255,255,255,.06) 182deg,transparent 212deg);
+    mix-blend-mode:screen}
+  /* 环境镜面反射：方向固定，不随唱片旋转 */
+  .specular{position:absolute;inset:0;border-radius:50%;pointer-events:none;z-index:3;
+    background:conic-gradient(from 205deg,transparent 0deg,rgba(255,255,255,.05) 12deg,rgba(255,255,255,.20) 31deg,transparent 58deg,transparent 170deg,rgba(255,255,255,.11) 198deg,transparent 228deg);
+    mix-blend-mode:screen}
+  .specular:after{content:"";position:absolute;inset:0;border-radius:50%;box-shadow:inset 0 0 26px rgba(0,0,0,.85),inset 0 0 0 1px rgba(255,255,255,.07)}
+  .disclabel{position:absolute;left:50%;top:50%;width:80px;height:80px;margin:-40px 0 0 -40px;border-radius:50%;z-index:2;overflow:hidden;
+    background:radial-gradient(circle,#12142a 0 60%,#1b1e3a 100%)}
+  .disclabel img{width:100%;height:100%;object-fit:cover}
+  .disclabel:after{content:"";position:absolute;left:50%;top:50%;width:5px;height:5px;background:#fff;border-radius:50%;transform:translate(-50%,-50%)}
+  .planetLayer{position:absolute;z-index:2;transform-origin:center center}
+  .planet{position:absolute;left:108.8px;top:113.7px;width:86px;height:86px;border-radius:50%;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+  .planet .sky{position:absolute;inset:0}
+  .planet .sky img{width:100%;height:100%;object-fit:cover}
+  .planet .moon{position:absolute;inset:0;background:linear-gradient(90deg,#f0ebe0 0 50%,#0a0a0c 50% 100%);opacity:0}
+  .sleeve{z-index:3;object-fit:fill;box-shadow:0 14px 30px rgba(0,0,0,.26);transform-origin:center center;display:block}
+  /* 非原片专辑没有预制挖孔素材：用同一比例的径向遮罩挖出中心圆孔，
+     孔位/直径与 sleeve_cutout.png 一致（边长 41.6%），唱片仍能从孔里露出来 */
+  .sleeve.masked{box-shadow:none;filter:drop-shadow(0 14px 30px rgba(0,0,0,.26));
+    /* 孔直径 = 306 × 28.06% = 85.9px，与 sleeve_cutout.png 实测一致（用 px 避免百分比基准差异） */
+    -webkit-mask-image:radial-gradient(circle 43px at 50% 50%,transparent 0 42.9px,#000 43.4px);
+    mask-image:radial-gradient(circle 43px at 50% 50%,transparent 0 42.9px,#000 43.4px)}
+  .dtable{position:absolute;left:28px;right:28px;top:466px}
+  .thead,.trow{display:grid;grid-template-columns:38px 46px 18px 1fr;align-items:center}
+  .thead{font-size:10px;font-weight:700;letter-spacing:.4px;color:#2a2927;margin-bottom:12px}
+  .trow{height:33px;font-size:12.5px;color:#8e8a86}
+  .trow.on{color:#17171a;font-weight:600}
+  .trow .side{font-size:12px;font-weight:700;color:#1d1c1b}
+  .trow .bpm{font-variant-numeric:tabular-nums}
+  .trow .ply{font-size:10px;color:#1c1c1e}
+  .trow:not(.on) .ply{color:#a9a5a1}
+  .release{position:absolute;left:28px;top:640px;display:flex;gap:12px;align-items:flex-start}
+  .release img{width:60px;height:60px;border-radius:2px}
+  .release .n1{font-size:14px;font-weight:700;color:#1a1a1c;margin-top:5px}
+  .release .n2{font-size:11px;color:#8b8783;margin-top:2px}
+  .release .n3{font-size:10px;color:#b6b1ac;margin-top:2px}
+  .wavebar{position:absolute;left:16px;right:16px;bottom:92px;height:40px;border-radius:20px;display:flex;align-items:center;gap:10px;padding:0 14px;z-index:20}
+  .wavebar .pause{width:14px;height:14px;flex:none}
+  .wave{display:flex;align-items:center;gap:1.5px;height:26px;flex:1;overflow:hidden}
+  .wave i{flex:none;width:1.5px;border-radius:1px;background:#b9b5b1;display:block}
+  .wave i.done{background:#1e1e20}
+  .wave i.head{background:#1a1a1c;box-shadow:0 0 5px rgba(0,0,0,.28)}
+  .detail .tabbar{opacity:.96;
+    background:linear-gradient(180deg,rgba(252,252,251,.60) 0%,rgba(242,243,241,.46) 52%,rgba(247,247,245,.54) 100%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.96),inset 0 0 0 .5px rgba(255,255,255,.5),
+      inset 0 0 0 1px rgba(0,0,0,.05),0 0 0 .5px rgba(0,0,0,.09),
+      0 10px 24px rgba(0,0,0,.10),0 1px 3px rgba(0,0,0,.05)}
+  .detail .wavebar{background:linear-gradient(180deg,rgba(255,255,255,.52),rgba(255,255,255,.30));
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.95),inset 0 0 0 .5px rgba(255,255,255,.5),
+      inset 0 0 0 1px rgba(0,0,0,.045),0 0 0 .5px rgba(0,0,0,.08),
+      0 8px 20px rgba(0,0,0,.10),0 1px 3px rgba(0,0,0,.04)}
+  .footnote{font-size:11px;color:#626772;line-height:1.65;margin-top:14px}
+  .legend{font-size:11px;color:#7d828d;line-height:1.75;margin-top:10px}
+  .legend b{color:#aeb3bd;font-weight:600}
+  .api{font-size:10.5px;line-height:1.7}
+  .api .h{color:#8fd694;font-weight:700;letter-spacing:.4px;margin:9px 0 3px;font-size:10px}
+  .api code{display:block;color:#c9ced9;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;
+    background:#101216;border:1px solid #262a31;border-radius:7px;padding:7px 8px;white-space:pre-wrap;word-break:break-word}
+  .api .n{color:#727884;margin-top:8px;line-height:1.6}
+  .api table.ver{width:100%;border-collapse:collapse;font-size:9.5px;margin:3px 0 2px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .api table.ver td{padding:2.5px 0;border-bottom:1px solid #23262c;color:#a9aeba}
+  .api table.ver td:last-child{text-align:right;color:#7f8794;font-variant-numeric:tabular-nums}
+  .api table.ver td.new{color:#8fd694;font-weight:700}
+  .curvebox{margin-top:14px;border-top:1px solid #262a31;padding-top:12px}
+  #curveSvg{width:100%;height:118px;display:block;background:#101216;border:1px solid #262a31;border-radius:8px}
+  .curveinfo{font-size:10.5px;color:#aeb3bd;line-height:1.65;margin-top:8px}
+  .curveinfo b{color:#8fd694;font-weight:650}
+  .curvetable{width:100%;border-collapse:collapse;margin-top:9px;font-size:9px;color:#8a8f99}
+  .curvetable th{color:#6f747e;font-weight:600;text-align:left;padding:3px 4px;border-bottom:1px solid #262a31}
+  .curvetable td{padding:3px 4px;border-bottom:1px dashed #22252b;font-variant-numeric:tabular-nums}
+  .curvetable tr.on td{color:#b9e7c1;background:#1a241d}
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>Vinyl · 逐帧复刻原型</h1>
+  <span class="tag">185 帧 / 30fps / 6.17s</span>
+  <span class="tag">Xcode 工程：TabView 系统控件 · 本页为 CSS 等价呈现</span>
+  <span class="desc">基于原片逐帧拆解的 1:1 视觉与动效复刻 · 拖时间轴可对照任意帧</span>
+</div>
+
+<div class="layout">
+  <!-- 左：实时参数 -->
+  <div class="panel">
+    <h2>当前帧状态</h2>
+    <div class="kv"><span>帧号</span><span id="kFrame">001 / 185</span></div>
+    <div class="kv"><span>时间</span><span id="kTime">0.033 s</span></div>
+    <div class="kv"><span>阶段</span><span id="kPhase">首页</span></div>
+    <div class="kv"><span>背景模糊</span><span id="kBlur">0.0 px</span></div>
+    <div class="kv"><span>封面缩放</span><span id="kZoom">1.00 ×</span></div>
+    <div class="kv"><span>唱片位移</span><span id="kDisc">0 px</span></div>
+    <div class="kv"><span>唱片旋转</span><span id="kSpin">0°</span></div>
+    <div class="kv"><span>封套缩放</span><span id="kSleeve">1.00 ×</span></div>
+    <div class="kv"><span>Y 轴翻转</span><span id="kFlip">0°</span></div>
+    <div class="kv"><span>详情页不透明度</span><span id="kOpacity">0.00</span></div>
+    <div class="kv"><span>当前动效曲线</span><span id="kCurve">静止</span></div>
+    <div class="curvebox">
+      <h2>动效曲线 · 实时</h2>
+      <svg id="curveSvg" viewBox="0 0 260 118" preserveAspectRatio="none"></svg>
+      <div class="curveinfo" id="curveInfo">静止段 · 无动画</div>
+      <table class="curvetable" id="curveTable">
+        <thead><tr><th>阶段</th><th>resp</th><th>damp</th><th>过冲</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="refbox">
+      <h2>原片对照帧</h2>
+      <img id="refImg" src="assets/ref/f001.png" alt="原片帧">
+      <div class="refcap" id="refCap">f001 · 首页网格静止</div>
+      <img class="overview" src="assets/ref/overview.jpg" alt="原片总览" onclick="window.open(this.src)">
+      <div class="refcap">点击放大：原片 19 帧抽帧总览</div>
+    </div>
+  </div>
+
+  <!-- 中：设备 -->
+  <div class="device-wrap">
+    <div class="device">
+      <div class="screen" id="screen">
+        <div class="wallpaper"></div><div class="grain"></div>
+        <div class="statusbar">
+          <span>15:30</span>
+          <span class="right">
+            <svg width="17" height="12" viewBox="0 0 17 12"><path d="M1 4.2a10 10 0 0 1 15 0M3.6 6.8a6.4 6.4 0 0 1 9.8 0M6.3 9.3a2.6 2.6 0 0 1 4.4 0" fill="none" stroke="#111" stroke-width="1.5" stroke-linecap="round"/><circle cx="8.5" cy="11" r="1" fill="#111"/></svg>
+            <svg width="25" height="12" viewBox="0 0 25 12"><rect x="1" y="1.5" width="20" height="9" rx="2.5" fill="none" stroke="#111" stroke-width="1.2" opacity=".45"/><rect x="2.6" y="3" width="16.5" height="6" rx="1.4" fill="#111"/><path d="M22.5 4.5v3a2 2 0 0 0 0-3z" fill="#111" opacity=".45"/></svg>
+          </span>
+        </div>
+        <div class="island"></div>
+
+        <!-- 首页 -->
+        <div class="home" id="home">
+          <div class="home-head">
+            <button type="button" class="sysbtn logo" id="btnLogo" aria-label="Vinyl">
+              <!-- SF Symbol 等价的叠层封套轮廓，单色描边，不用彩色位图 -->
+              <svg viewBox="0 0 24 24"><rect x="3.2" y="8.2" width="11.6" height="12.4" rx="2.2"/><path d="M7.4 5.6h9.2a2.2 2.2 0 0 1 2.2 2.2v9"/></svg>
+            </button>
+            <button type="button" class="sysbtn cube" id="btnCube" aria-label="新建">
+              <!-- SF Symbol "cube" 的等轴测轮廓 -->
+              <svg viewBox="0 0 24 24"><path d="M12 2.9 20.4 7.3v9.4L12 21.1 3.6 16.7V7.3z"/><path d="M3.6 7.3 12 11.7l8.4-4.4M12 11.7v9.4"/></svg>
+            </button>
+          </div>
+          <div class="grid" id="grid"></div>
+          <div class="homefade" aria-hidden="true"><i></i></div>
+          <div class="mini">
+            <div class="art"></div>
+            <div class="txt"><div class="t1">A1 · Mind Games</div><div class="t2">Deluka</div></div>
+            <svg class="pause" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.1" y="2.1" width="3.4" height="11.8" rx="1.2"/><rect x="9.5" y="2.1" width="3.4" height="11.8" rx="1.2"/></svg>
+          </div>
+          <div class="tabbar lg" data-bar="home"></div>
+        </div>
+
+        <!-- 详情页 -->
+        <div class="detail" id="detail">
+          <div class="dhead">
+            <button type="button" class="sysbtn close" id="btnClose" aria-label="关闭"><svg viewBox="0 0 20 20"><path d="M4 4l12 12M16 4L4 16"/></svg></button>
+            <div class="dtitle"><div class="a" id="dtTitle">Mind Games</div><div class="b" id="dtArtist">Deluka</div></div>
+            <button type="button" class="sysbtn cube" id="btnCube2" aria-label="新建">
+              <svg viewBox="0 0 24 24"><path d="M12 2.9 20.4 7.3v9.4L12 21.1 3.6 16.7V7.3z"/><path d="M3.6 7.3 12 11.7l8.4-4.4M12 11.7v9.4"/></svg>
+            </button>
+          </div>
+          <div class="artwork" id="artwork">
+            <div class="discWrap" id="discWrap">
+              <div class="disc" id="disc">
+                <div class="spinGroove"></div>
+                <div class="disclabel" id="discLabel"><img src="assets/planet.png" alt=""></div>
+              </div>
+              <div class="specular"></div>
+            </div>
+            <div class="planetLayer" id="planetLayer">
+              <div class="planet">
+                <div class="sky"><img src="assets/planet.png" alt=""></div>
+                <div class="moon" id="moon"></div>
+              </div>
+            </div>
+            <img class="sleeve" id="sleeve" src="assets/sleeve_cutout.png" alt="">
+          </div>
+          <div class="dtable" id="dtable">
+            <div class="thead"><span>Side</span><span>BPM</span><span></span><span>Tracklist</span></div>
+            <div class="trow on"><span class="side">A</span><span class="bpm">140</span><span class="ply">Ⅱ</span><span class="tn">Deluka - Mind Games</span></div>
+            <div class="trow"><span class="side"></span><span class="bpm">140</span><span class="ply">▶</span><span class="tn">Deluka - Braunschweig</span></div>
+            <div class="trow"><span class="side">B</span><span class="bpm">140</span><span class="ply">▶</span><span class="tn">Deluka - Everybody Talkin</span></div>
+            <div class="trow"><span class="side"></span><span class="bpm">139</span><span class="ply">▶</span><span class="tn">Deluka - Bunker</span></div>
+          </div>
+          <div class="release">
+            <img src="assets/small_art.png" alt="">
+            <div><div class="n1">Deluka</div><div class="n2">SK_Eleven</div><div class="n3">SK11X027</div></div>
+          </div>
+          <div class="wavebar"><svg class="pause" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.1" y="2.1" width="3.4" height="11.8" rx="1.2"/><rect x="9.5" y="2.1" width="3.4" height="11.8" rx="1.2"/></svg><div class="wave" id="wave"></div></div>
+          <div class="tabbar lg" data-bar="detail"></div>
+        </div>
+        <!-- 延展中的封面：独立于首页层，不跟随 home 的 opacity / blur 一起淡出 -->
+        <div class="flying" id="flying"><img id="flyingImg" src="assets/covers/cover_13.png" alt=""></div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右：时间轴 -->
+  <div class="panel">
+    <h2>时间轴 / 逐帧对照</h2>
+    <div class="ctl">
+      <button class="primary" id="btnPlay">暂停</button>
+      <button id="btnReplay">重播</button>
+      <button id="btnHome">回首页</button>
+    </div>
+    <input type="range" id="scrub" min="1" max="185" step="1" value="1">
+    <div class="ticks"><span>f001</span><span>f046</span><span>f092</span><span>f139</span><span>f185</span></div>
+    <h2 style="margin-top:18px">分镜阶段</h2>
+    <div class="phases" id="phases"></div>
+    <div class="refbox">
+      <h2>系统控件接入 · 官方核验</h2>
+      <div class="api">
+        <div class="h">① 底部导航 · TabView / Tab</div>
+        <code>TabView(selection: $tab) {
+  Tab("资料库", systemImage: "square.grid.2x2",
+      value: .library) { LibraryView() }
+  Tab("电台", systemImage: "dot.radiowaves…",
+      value: .radio) { … }
+  Tab("我的", systemImage: "person.crop.circle",
+      value: .profile) { … }
+  Tab("搜索", systemImage: "magnifyingglass",
+      value: .search) { … }
+}
+.tabViewStyle(.tabBarOnly)              // iOS 18
+.toolbarMinimizationBehavior(           // iOS 27
+  .onScrollDown, for: .tabBar)</code>
+        <div class="h">② 底部渐变高斯模糊 · 系统 scroll edge effect</div>
+        <code>ScrollView {
+  LazyVGrid(…) { … }
+}
+.scrollEdgeEffectStyle(.soft, for: .bottom)   // iOS 26
+.safeAreaBar(edge: .bottom) {                 // iOS 26
+  MiniPlayer()   // 系统自动把边缘模糊延伸到它
+}
+
+// UIKit 同一套能力
+scrollView.bottomEdgeEffect.style = .soft</code>
+        <div class="h">③ 版本（developer.apple.com 实测）</div>
+        <table class="ver">
+          <tr><td>TabView / Tab / Tab(role:)</td><td>18.0</td></tr>
+          <tr><td>TabRole.search</td><td>18.0</td></tr>
+          <tr><td>TabRole.prominent</td><td class="new">27.0</td></tr>
+          <tr><td>.tabViewStyle(.tabBarOnly)</td><td>18.0</td></tr>
+          <tr><td>.tabBarMinimizeBehavior(_:)</td><td>26.0</td></tr>
+          <tr><td>.toolbarMinimizationBehavior</td><td class="new">27.0</td></tr>
+          <tr><td>.scrollEdgeEffectStyle(_:for:)</td><td class="new">26.0</td></tr>
+          <tr><td>.scrollEdgeEffectHidden(_:for:)</td><td class="new">26.0</td></tr>
+          <tr><td>.safeAreaBar(edge:…)</td><td class="new">26.0</td></tr>
+          <tr><td>ScrollEdgeEffectStyle</td><td class="new">26.0</td></tr>
+          <tr><td>.buttonStyle(.glass)</td><td class="new">26.0</td></tr>
+          <tr><td>.buttonBorderShape(.circle)</td><td>15.0</td></tr>
+        </table>
+        <div class="h">④ 圆形玻璃按钮 · 一个圆 + 一个图标</div>
+        <code>Button { } label: {
+  Image(systemName: "cube")
+    .frame(width: 44, height: 44)
+}
+.buttonStyle(.glass)          // iOS 26 · 系统玻璃
+.buttonBorderShape(.circle)   // 让系统把玻璃底裁成正圆</code>
+        <div class="n"><b>三个坑：</b>① 底部那层模糊<b>不要自己写 LinearGradient</b>——iOS 26 的 <b>.scrollEdgeEffectStyle(.soft, for: .bottom)</b> 就是系统渐进高斯模糊，配合 <b>.safeAreaBar</b> 还会自动延伸到 mini player。② <b>role: .search</b> 会让系统把该 tab 摘出主 bar 变独立圆钮；<b>role: .prominent</b>（27）只用于「购物车 / 票夹」这类<b>目的地</b>。本页 4 个 tab 等宽，两个 role 都没写。③ 不要给 <b>UITabBarAppearance</b> 设 <b>backgroundEffect</b>，那层平涂模糊会盖掉系统折射玻璃。</div>
+      </div>
+    <div class="legend">
+      <b>交互：</b>点击网格<b>任意一张</b>封面，都会从那一格的位置与封面图延展到详情页；点击封套切换唱片抽拉；点击 X 返回；点击底部 Tab 切换选中项。<br><br>
+      <b>控件：</b>Xcode 工程里底部 Tab 是系统 <b>TabView / Tab(_:systemImage:value:)</b>，圆形按钮是系统 <b>Button + .buttonStyle(.glass) + .buttonBorderShape(.circle)</b>，底部渐变模糊是系统 <b>.scrollEdgeEffectStyle(.soft, for: .bottom)</b>，零自绘。<b>本页是浏览器预览</b>：这一条、这些圆按钮、这层模糊都是用 HTML/CSS 按系统几何与光学做的等价呈现 —— 浏览器无法实例化 UIKit/SwiftUI 控件，也没法调用 scroll edge effect。<br><br>
+      <b>动效：</b>打开段按原片逐帧实测拟合为 <b>t^1.35</b> 加速曲线（72→306pt）；其余窗口各由一条 <b>iOS 二阶 spring</b> 主曲线驱动，所有属性共享进度、仅按 delay 错峰；唱片角速度缓入→匀速→缓出，累计角度连续。左栏「动效曲线」面板实时画出当前阶段的曲线与播放头位置。
+    </div>
+  </div>
+</div>
+
+<script>
+const FPS=30, TOTAL=185;
+const PHASES=[
+  {a:1,   b:8,   name:'首页 · 网格静止'},
+  {a:9,   b:16,  name:'打开 · 封面放大 + 背景模糊'},
+  {a:17,  b:43,  name:'详情页 · 静止'},
+  {a:44,  b:51,  name:'黑胶唱片抽出'},
+  {a:52,  b:91,  name:'唱片展开 · 持续旋转'},
+  {a:92,  b:96,  name:'唱片收回封套'},
+  {a:97,  b:115, name:'详情页 · 静止'},
+  {a:116, b:119, name:'封套 Y 轴 3D 翻转'},
+  {a:120, b:165, name:'详情页 · 静止'},
+  {a:166, b:175, name:'关闭 · 翻转收边 + 缩回'},
+  {a:176, b:185, name:'首页 · 恢复静止'}
+];
+const REFS=[1,10,14,20,44,48,52,60,80,94,96,116,117,118,119,120,166,168,170,172,176,181];
+
+/* 图标：SF Symbols 风格的 4 个 tab */
+/* 4 个 tab 的 SF Symbols 几何等价：square.grid.2x2 / dot.radiowaves.left.and.right
+   / person.crop.circle / magnifyingglass（真机由 systemImage: 交给系统渲染） */
+const ICONS=[
+ '<svg viewBox="0 0 24 24"><g fill="#1c1c1e"><rect x="2.9" y="2.9" width="8.3" height="8.3" rx="2"/><rect x="12.8" y="2.9" width="8.3" height="8.3" rx="2"/><rect x="2.9" y="12.8" width="8.3" height="8.3" rx="2"/><rect x="12.8" y="12.8" width="8.3" height="8.3" rx="2"/></g></svg>',
+ '<svg viewBox="0 0 24 24"><g fill="none" stroke="#1c1c1e" stroke-width="2.1" stroke-linecap="round"><path d="M8.5 8.5a4.9 4.9 0 0 0 0 7M15.5 8.5a4.9 4.9 0 0 1 0 7M5.4 5.4a9.3 9.3 0 0 0 0 13.2M18.6 5.4a9.3 9.3 0 0 1 0 13.2"/></g><circle cx="12" cy="12" r="2" fill="#1c1c1e"/></svg>',
+ '<svg viewBox="0 0 24 24"><defs><clipPath id="pcClip"><circle cx="12" cy="12" r="9.05"/></clipPath></defs><circle cx="12" cy="12" r="9.05" fill="none" stroke="#1c1c1e" stroke-width="1.65"/><g clip-path="url(#pcClip)" fill="#1c1c1e"><circle cx="12" cy="9.4" r="2.85"/><circle cx="12" cy="18.9" r="5.7"/></g></svg>',
+ '<svg viewBox="0 0 24 24"><g fill="none" stroke="#1c1c1e" stroke-width="1.9" stroke-linecap="round"><circle cx="10.4" cy="10.4" r="6.7"/><path d="M15.4 15.4L20.6 20.6"/></g></svg>'
+];
+function buildTabs(){
+  document.querySelectorAll('.tabbar').forEach(bar=>{
+    const n=bar.dataset.bar;
+    const icons=ICONS.map(svg=>svg.replace(/pcClip/g,'pcClip-'+n));
+    bar.innerHTML='<span class="tabpill"></span>'+icons.map((s,i)=>
+      `<button type="button" class="tab${i===0?' sel':''}" data-i="${i}" aria-label="标签 ${i+1}">${s}</button>`).join('');
+    const tabs=[...bar.querySelectorAll('.tab')];
+    const pill=bar.querySelector('.tabpill');
+    // 滑块几何直接读系统等宽 tab 的真实 frame：宽 = 1/4 条 - 8，左 = 该 tab 左沿 + 4
+    const movePill=i=>{
+      const t=tabs[i];
+      pill.style.width=(t.offsetWidth-4)+'px';
+      pill.style.transform=`translateX(${t.offsetLeft+2}px)`;
+    };
+    tabs.forEach((t,i)=>t.onclick=()=>{
+      tabs.forEach(x=>x.classList.remove('sel'));
+      t.classList.add('sel');
+      movePill(i);
+    });
+    requestAnimationFrame(()=>movePill(0));
+  });
+}
+/* 点哪张就展开哪张：原片专辑（第 13 张）有完整数据，其余用编号占位，
+   避免出现「放大的是 A、落地变成 B」的错配 */
+const REAL_ALBUM=13, REAL_TRACKS=['Deluka - Mind Games','Deluka - Braunschweig','Deluka - Everybody Talkin','Deluka - Bunker'];
+function applyAlbum(i){
+  const real=i===REAL_ALBUM;
+  const sleeve=document.getElementById('sleeve');
+  sleeve.src=real?'assets/sleeve_cutout.png':`assets/covers/cover_${String(i).padStart(2,'0')}.png`;
+  sleeve.classList.toggle('masked',!real);
+  document.getElementById('dtTitle').textContent=real?'Mind Games':`Album ${String(i).padStart(2,'0')}`;
+  document.getElementById('dtArtist').textContent=real?'Deluka':'Various Artists';
+  document.querySelectorAll('.trow .tn').forEach((n,k)=>{
+    n.textContent=real?REAL_TRACKS[k]:`Track ${String(k+1).padStart(2,'0')}`;
+  });
+}
+function buildGrid(){
+  const g=document.getElementById('grid');
+  let h='';
+  for(let i=1;i<=32;i++){
+    // 复用 28 张素材补满 8 行：内容要一直铺到屏幕底部，玻璃条才有东西可折射
+    const n=((i-1)%28)+1;
+    h+=`<div class="cell${n===13&&i<=28?' target':''}" data-i="${n}"><img src="assets/covers/cover_${String(n).padStart(2,'0')}.png" alt=""></div>`;
+  }
+  g.innerHTML=h;
+  g.querySelectorAll('.cell').forEach(c=>c.onclick=()=>{
+    // 已经在详情页时不重新触发开合
+    if(frame>=17&&frame<=165) return;
+    const sr=document.getElementById('screen').getBoundingClientRect();
+    const cr=c.getBoundingClientRect();
+    // 起点 = 被点击那一格在屏幕坐标系里的真实位置与尺寸
+    flyStart={x:cr.left-sr.left, y:cr.top-sr.top, w:cr.width};
+    applyFlyStart();
+    document.getElementById('flyingImg').src=c.querySelector('img').src;
+    applyAlbum(+c.dataset.i);
+    frame=9; playing=true; syncPlay(); render();
+  });
+}
+function buildWave(){
+  const w=document.getElementById('wave'); let h='';
+  for(let i=0;i<112;i++){
+    const v=6+Math.abs(Math.sin(i*1.7)*Math.cos(i*.41))*13+Math.abs(Math.sin(i*.13))*5;
+    h+=`<i style="height:${v.toFixed(1)}px"></i>`;
+  }
+  w.innerHTML=h;
+}
+function buildPhases(){
+  document.getElementById('phases').innerHTML=PHASES.map((p,i)=>
+    `<div class="phase" data-i="${i}"><b>f${String(p.a).padStart(3,'0')}–${String(p.b).padStart(3,'0')}</b><span>${p.name}</span></div>`).join('');
+  document.querySelectorAll('.phase').forEach(el=>el.onclick=()=>{
+    frame=PHASES[+el.dataset.i].a; playing=true; syncPlay(); render();
+  });
+}
+
+/* 延展起点：每次点击封面时按那一格的真实 frame 注入。
+   默认值 = 第 13 张（第 4 行第 1 列）：x=27, y=118+3*(72+17), w=72 */
+let flyStart={x:27, y:385, w:72};
+/* 起点的 left/top/尺寸必须同步写到元素上，否则第一帧会从 (0,0) 起飞 */
+function applyFlyStart(){
+  const fly=document.getElementById('flying');
+  fly.style.left=flyStart.x+'px'; fly.style.top=flyStart.y+'px';
+  fly.style.width=flyStart.w+'px'; fly.style.height=flyStart.w+'px';
+}
+const FLY_END={x:43.5, y:130, s:306};   // 详情页封套左上角与边长
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const seg=(f,a,b)=>clamp((f-a)/(b-a),0,1);
+const smooth=t=>{t=clamp(t,0,1);return t*t*(3-2*t)};          // smoothstep，端点导数为 0
+const sub=(t,a,b)=>clamp((t-a)/(b-a),0,1);                     // 归一化进度上的错峰窗口
+
+/* ── iOS 动效曲线：二阶阻尼阶跃响应，与 SwiftUI .spring(response:dampingFraction:) 同物理模型 ──
+   x(t)=1-e^(-ζω₀t)·[cos(ωd t)+(ζω₀/ωd)·sin(ωd t)]，ω₀=2π/response，ωd=ω₀√(1-ζ²)
+   归一化到阶段窗口：t=0→0、t=1→1，中间保留真实过冲与回弹，端点精确、与静止段无缝。
+   原则：一个阶段只有一条主 spring，所有属性共享 p，只按 delay 错峰（不再各跑一条曲线）。 */
+const CURVES={
+  open:   {r:1.35,z:0,dur:8/30, pow:1.35, name:'打开 · 封面放大'},
+  pull:   {r:.18,z:.62,dur:8/30, name:'抽出 · 黑胶唱片'},
+  retract:{r:.14,z:.90,dur:5/30, name:'收回 · 唱片归位'},
+  flip:   {r:.10,z:.92,dur:4/30, name:'翻转 · 封套 3D'},
+  close:  {r:.22,z:.72,dur:10/30,name:'关闭 · 缩回网格'},
+  spin:   {r:0,  z:0,  dur:52/30,name:'旋转 · 唱片角速度'}   // 非 spring：角速度平台曲线
+};
+function springRaw(time,r,z){
+  const w0=2*Math.PI/r;
+  if(z>=1){const e=Math.exp(-w0*time);return 1-e*(1+w0*time);}
+  const wd=w0*Math.sqrt(1-z*z), e=Math.exp(-z*w0*time);
+  return 1-e*(Math.cos(wd*time)+(z*w0/wd)*Math.sin(wd*time));
+}
+function spring(t,name){
+  const c=CURVES[name];
+  // 原片打开段逐帧实测是加速曲线（72→104→129→156→191→229→266→306pt），
+  // 用 t^1.35 拟合，误差 < 0.03；spring 在这里反而会让前 3 帧就冲到 86%。
+  if(c.pow) return t<=0?0:t>=1?1:Math.pow(t,c.pow);
+  if(t<=0)return 0; if(t>=1)return 1;
+  const end=springRaw(c.dur,c.r,c.z);
+  const v=Math.abs(end)<1e-6?t:springRaw(t*c.dur,c.r,c.z)/end;
+  return clamp(v,-0.15,1.15);
+}
+/* 翻转段是「转过去再回来」的单峰往返（峰值落在 f118），不是 0→1 的 spring；
+   其余四段都是 spring。曲线面板按实际动画形状绘制。 */
+function curveValue(t,key){
+  if(key==='flip') return Math.sin(Math.PI*Math.pow(clamp(t,0,1),1.3));
+  if(key==='spin'){const f=44+t*52;return Math.min(smooth(seg(f,44,50)),1-smooth(seg(f,90,96)));}
+  return spring(t,key);
+}
+/* 唱片角速度：0 → smoothstep 缓入 → 1.5°/帧(45°/s) 匀速 → smoothstep 缓出 → 0。
+   逐帧积分得累计角度，C¹ 连续；f96 后完全停住，不再「突然开始 / 突然静止」。 */
+const SPIN=(()=>{
+  const a=[0]; let acc=0;
+  for(let f=1;f<=TOTAL;f++){
+    let w=0;
+    if(f>=44&&f<=96) w=1.5*Math.min(smooth(seg(f,44,50)),1-smooth(seg(f,90,96)));
+    acc+=w; a[f]=acc;
+  }
+  return a;
+})();
+const spinAt=f=>SPIN[clamp(Math.round(f),1,TOTAL)]||0;
+/* 当前帧属于哪条曲线（曲线面板高亮用） */
+function curveOf(f){
+  if(f>=9&&f<=16)   return {k:'open',   t:seg(f,9,16)};
+  if(f>=44&&f<=51)  return {k:'pull',   t:seg(f,44,51)};
+  if(f>=52&&f<=91)  return {k:'spin',   t:seg(f,44,96)};
+  if(f>=92&&f<=96)  return {k:'retract',t:seg(f,92,96)};
+  if(f>=116&&f<=119)return {k:'flip',   t:seg(f,116,119)};
+  if(f>=166&&f<=175)return {k:'close',  t:seg(f,166,175)};
+  return null;
+}
+/* 曲线可视化：画当前阶段的 spring 曲线 + 线性参考 + 实时播放头 */
+function drawCurve(f){
+  const svg=document.getElementById('curveSvg'); if(!svg)return;
+  const W=260,H=118,pad=12,y0=H-15,y1=15;
+  const X=t=>pad+t*(W-2*pad), Y=v=>y0-clamp(v,-.15,1.15)*(y0-y1);
+  const co=curveOf(f);
+  const preview=f<9?'open':f<44?'pull':f<92?'spin':f<116?'flip':f<166?'close':'open';
+  const key=co?co.k:preview, c=CURVES[key];
+  const vals=[]; let path='';
+  for(let i=0;i<=80;i++){const t=i/80,v=curveValue(t,key);vals.push(v);path+=(i?'L':'M')+X(t).toFixed(1)+','+Y(v).toFixed(1)+' ';}
+  const grid=`<line x1="${pad}" y1="${Y(0)}" x2="${W-pad}" y2="${Y(0)}" stroke="#2a2e36"/>
+    <line x1="${pad}" y1="${Y(1)}" x2="${W-pad}" y2="${Y(1)}" stroke="#3a4049" stroke-dasharray="3 3"/>
+    <text x="${W-pad-2}" y="${Y(1)-4}" fill="#5d626d" font-size="8" text-anchor="end">1.0</text>`;
+  const lin=(key==='flip'||key==='spin')?'':`<path d="M${X(0)},${Y(0)} L${X(1)},${Y(1)}" fill="none" stroke="#4a505b" stroke-dasharray="3 3"/>`;
+  let head='';
+  if(co){const t=co.t,v=curveValue(t,key);
+    head=`<line x1="${X(t)}" y1="${y1-6}" x2="${X(t)}" y2="${y0+5}" stroke="#8fd694" opacity=".45"/>
+      <circle cx="${X(t)}" cy="${Y(v)}" r="4.2" fill="#8fd694" stroke="#101216" stroke-width="1.5"/>`;}
+  svg.innerHTML=grid+lin+`<path d="${path}" fill="none" stroke="#8fd694" stroke-width="2.2" stroke-linecap="round"/>`+head;
+  const over=Math.max(0,(Math.max(...vals)-1)*100);
+  const desc=key==='flip'
+    ? `单峰往返 <b>sin(π·t^1.3)</b> · 峰值 <b>${(Math.max(...vals)*86).toFixed(0)}°</b>`
+    : key==='spin'
+    ? `角速度 <b>0 → 45°/s → 0</b> · smoothstep 缓入 / 缓出 · 累计 <b>69°</b>`
+    : c.pow
+    ? `原片逐帧实测 <b>t^${c.pow.toFixed(2)}</b> · 加速曲线 · 72→306pt`
+    : `spring(response <b>${c.r.toFixed(2)}</b>, damping <b>${c.z.toFixed(2)}</b>) · 过冲 <b>${over.toFixed(1)}%</b>`;
+  const info=document.getElementById('curveInfo');
+  if(co) info.innerHTML=`<b>${c.name}</b> · t=${(co.t*100).toFixed(0)}%<br>${desc}<br>`+
+      `灰虚线=线性 · 绿线=实际曲线 · 圆点=当前帧`;
+  else info.innerHTML=`静止段 · 无动画<br>下一条曲线预览：<b>${c.name}</b>`;
+  document.querySelectorAll('#curveTable tbody tr').forEach(r=>r.classList.toggle('on',!!co&&r.dataset.k===co.k));
+}
+function buildCurveTable(){
+  const tb=document.querySelector('#curveTable tbody'); if(!tb)return;
+  tb.innerHTML=Object.entries(CURVES).map(([k,c])=>{
+    const v=Math.max(...Array.from({length:81},(_,i)=>curveValue(i/80,k)));
+    const last=k==='flip'?'往返':k==='spin'?'缓入缓出':c.pow?`t^${c.pow}`:(Math.max(0,v-1)*100).toFixed(1)+'%';
+    const rp=k==='spin'||c.pow?'—':c.r.toFixed(2), dp=k==='spin'||c.pow?'—':c.z.toFixed(2);
+    return `<tr data-k="${k}"><td>${c.name.split(' · ')[0]}</td><td>${rp}</td><td>${dp}</td><td>${last}</td></tr>`;
+  }).join('');
+}
+
+function state(f){
+  const S={phase:'',blur:0,homeOpacity:1,detailOpacity:0,zoom:1,flyP:0,flyOpacity:0,
+           discX:0,spin:0,sleeve:1,flip:0,moon:0,detailFade:1,flipGlow:0,pull:0};
+  for(const p of PHASES) if(f>=p.a&&f<=p.b) S.phase=p.name;
+  const rest={detailOpacity:1,detailFade:1,homeOpacity:0,blur:18,flyP:1};
+
+  if(f<=8){
+    // 首页静止（默认值）
+  } else if(f<=16){
+    // 一条主 spring 驱动封面缩放与位移；背景模糊先起、详情背景次之、文字最后错峰淡入
+    const t=seg(f,9,16), p=spring(t,'open');
+    Object.assign(S,{blur:18*smooth(sub(t,0,.92)),homeOpacity:1-smooth(sub(t,0,.72)),
+      detailOpacity:smooth(sub(t,.50,1)),detailFade:smooth(sub(t,.58,1)),flyP:p});
+  } else if(f<=43){
+    Object.assign(S,rest);
+  } else if(f<=51){
+    const t=seg(f,44,51), p=spring(t,'pull');
+    Object.assign(S,rest,{discX:56*p,sleeve:1-.15*p,moon:clamp(p,0,1),pull:p});
+  } else if(f<=91){
+    Object.assign(S,rest,{discX:56,sleeve:.85,moon:1,pull:1});
+  } else if(f<=96){
+    const t=seg(f,92,96), p=spring(t,'retract');
+    Object.assign(S,rest,{discX:56*(1-p),sleeve:.85+.15*p,moon:1-clamp(p,0,1),pull:1-p});
+  } else if(f<=115){
+    Object.assign(S,rest);
+  } else if(f<=119){
+    // 平滑单峰：峰值落在 f118，起止导数为 0，不再用离散查表硬切
+    const t=clamp(seg(f,115,119.5),0,1);
+    const v=86*Math.sin(Math.PI*Math.pow(t,1.3));
+    Object.assign(S,rest,{flip:v,flipGlow:Math.abs(v)/86});
+  } else if(f<=165){
+    Object.assign(S,rest);
+  } else if(f<=175){
+    const t=seg(f,166,175), p=spring(t,'close');
+    const fl=Math.sin(Math.PI*clamp(seg(f,166,170.5),0,1))*(1-smooth(sub(t,0,.55)));
+    Object.assign(S,{detailOpacity:1-smooth(sub(t,.08,.62)),detailFade:1-smooth(sub(t,0,.55)),
+      homeOpacity:smooth(sub(t,.18,.82)),blur:18*(1-smooth(sub(t,.12,.72))),
+      flyP:1-p,flip:86*fl,flipGlow:Math.abs(fl)});
+  } else {
+    Object.assign(S,{phase:PHASES[10].name,blur:0,homeOpacity:1,detailOpacity:0,detailFade:0});
+  }
+  S.spin=spinAt(f);
+  // 缩放倍数与可见性都由延展进度派生，保证与起点尺寸无关（点哪张都能精确落到 306pt）
+  S.zoom=1+(FLY_END.s/flyStart.w-1)*S.flyP;
+  S.flyOpacity=(S.flyP<=0.002||S.flyP>=0.994)?0:1;
+  return S;
+}
+
+let frame=1, playing=true, acc=0, lastTs=0, manualDisc=0;
+function render(){
+  const f=Math.round(frame), S=state(f);
+  const home=document.getElementById('home'), detail=document.getElementById('detail');
+  // 只糊「内容层」（网格）。顶部圆按钮、mini player、tab bar 是浮在内容之上的控件，
+  // 在 iOS 里由系统保持清晰 —— 它们只跟着 homeOpacity 淡出，不参与模糊。
+  document.getElementById('grid').style.filter=`blur(${S.blur.toFixed(2)}px)`;
+  home.style.opacity=S.homeOpacity;
+  home.style.visibility=S.homeOpacity>.001?'visible':'hidden';
+  home.style.pointerEvents=S.detailOpacity>.5?'none':'auto';
+  detail.style.opacity=S.detailOpacity;
+  detail.style.visibility=S.detailOpacity>.001?'visible':'hidden';
+  detail.style.pointerEvents=S.detailOpacity>.5?'auto':'none';
+  const fly=document.getElementById('flying');
+  fly.style.opacity=S.flyOpacity;
+  // 起点在左上角、transform-origin 也在左上角：位移量 = 目标 - 起点，缩放 = 306 / 起点边长
+  const tx=FLY_END.x-flyStart.x, ty=FLY_END.y-flyStart.y;
+  const sc=FLY_END.s/flyStart.w;
+  fly.style.transform=`translate(${(tx*S.flyP).toFixed(2)}px,${(ty*S.flyP).toFixed(2)}px) `+
+                      `scale(${(1+(sc-1)*S.flyP).toFixed(4)})`;
+  fly.style.borderRadius=`${(4-2*S.flyP).toFixed(2)}px`;
+  fly.style.boxShadow=`0 ${(10*S.flyP).toFixed(1)}px ${(30*S.flyP).toFixed(1)}px rgba(0,0,0,${(.25*S.flyP).toFixed(3)})`;
+  const art=document.getElementById('artwork');
+  art.style.transform=`perspective(900px) rotateY(${S.flip}deg)`;
+  // 详情页封套等背景与文字跟上之后再显形，否则放大途中会有一块 306pt 的淡影
+  art.style.opacity=clamp((S.detailOpacity-0.55)/0.45,0,1);
+  // 位移与旋转解耦：discWrap 只负责滑出，disc 只负责自转，镜面高光保持固定方向
+  const dw=document.getElementById('discWrap');
+  dw.style.transform=`translateX(${S.discX}px)`;
+  dw.style.boxShadow=`0 ${(12+8*S.pull).toFixed(1)}px ${(26+12*S.pull).toFixed(1)}px rgba(0,0,0,${(.35+.12*S.pull).toFixed(3)})`;
+  document.getElementById('disc').style.transform=`rotate(${S.spin}deg)`;
+  const spec=document.querySelector('.specular');
+  if(spec) spec.style.transform=`rotate(${(S.spin*0.055).toFixed(2)}deg)`;
+  const pull=(1-S.sleeve)/0.15;
+  const st=`translateX(${(-54*pull).toFixed(2)}px) scale(${S.sleeve})`;
+  const sleeve=document.getElementById('sleeve');
+  sleeve.style.transform=st;
+  sleeve.style.filter=`brightness(${(1-.16*S.flipGlow).toFixed(3)})`;
+  document.getElementById('planetLayer').style.transform=st;
+  const moon=document.getElementById('moon');
+  moon.style.opacity=S.moon;
+  moon.style.background=`linear-gradient(${(90+S.spin*0.42).toFixed(1)}deg,#f0ebe0 0 50%,#0a0a0c 50% 100%)`;
+  // 详情内容分层淡入（标题 → 曲目 → 发行信息 → 波形条），比整体淡入更接近系统转场
+  document.querySelectorAll('.detail > *:not(.artwork):not(.tabbar)').forEach(el=>{
+    const d=el.classList.contains('dhead')?0:el.classList.contains('dtable')?.09:
+            el.classList.contains('release')?.17:.24;
+    el.style.opacity=clamp((S.detailFade-d)/(1-d),0,1);
+  });
+  // params
+  const set=(id,v)=>document.getElementById(id).textContent=v;
+  set('kFrame',`${String(f).padStart(3,'0')} / 185`);
+  set('kTime',`${(f/FPS).toFixed(3)} s`);
+  set('kPhase',S.phase);
+  set('kBlur',S.blur.toFixed(1)+' px');
+  set('kZoom',S.zoom.toFixed(2)+' ×');
+  set('kDisc',S.discX.toFixed(0)+' px');
+  set('kSpin',(S.spin%360).toFixed(1)+'°');
+  set('kSleeve',S.sleeve.toFixed(2)+' ×');
+  set('kFlip',S.flip.toFixed(0)+'°');
+  set('kOpacity',S.detailOpacity.toFixed(2));
+  const co=curveOf(f);
+  set('kCurve',co?(co.k==='spin'?'角速度 45°/s':co.k==='flip'?'单峰往返':CURVES[co.k].pow?`t^${CURVES[co.k].pow}`:`spring ${CURVES[co.k].r.toFixed(2)} / ${CURVES[co.k].z.toFixed(2)}`):'静止');
+  document.getElementById('scrub').value=f;
+  const pi=PHASES.findIndex(p=>f>=p.a&&f<=p.b);
+  document.querySelectorAll('.phase').forEach((el,i)=>el.classList.toggle('on',i===pi));
+  const rf=REFS.reduce((a,b)=>Math.abs(b-f)<Math.abs(a-f)?b:a,REFS[0]);
+  document.getElementById('refImg').src=`assets/ref/f${String(rf).padStart(3,'0')}.png`;
+  document.getElementById('refCap').textContent=`原片 f${String(rf).padStart(3,'0')} · ${(rf/FPS).toFixed(2)}s`;
+  const done=Math.round(112*(.13+(f/TOTAL)*.06));
+  document.querySelectorAll('.wave i').forEach((el,i)=>{
+    el.classList.toggle('done',i<done);
+    el.classList.toggle('head',i===done);
+  });
+  const wave=document.getElementById('wave');
+  if(wave) wave.style.transform=`scaleY(${(1+.045*Math.sin(f*.34)).toFixed(3)})`;
+  drawCurve(f);
+}
+function syncPlay(){document.getElementById('btnPlay').textContent=playing?'暂停':'播放';}
+function loop(ts){
+  if(!lastTs) lastTs=ts;
+  const dt=ts-lastTs; lastTs=ts;
+  if(playing){
+    acc+=dt;
+    const step=1000/FPS;
+    while(acc>=step){ frame+=1; acc-=step; if(frame>TOTAL) frame=1; }
+    render();
+  }
+  requestAnimationFrame(loop);
+}
+document.getElementById('btnPlay').onclick=()=>{playing=!playing;syncPlay();};
+document.getElementById('btnReplay').onclick=()=>{frame=1;acc=0;playing=true;syncPlay();render();};
+document.getElementById('btnHome').onclick=()=>{frame=1;playing=false;syncPlay();render();};
+document.getElementById('btnClose').onclick=()=>{frame=166;playing=true;syncPlay();render();};
+document.getElementById('scrub').oninput=e=>{frame=+e.target.value;playing=false;syncPlay();render();};
+document.getElementById('artwork').onclick=()=>{
+  const f=Math.round(frame);
+  frame=(f>=44&&f<=91)?92:44; playing=false; syncPlay(); render();
+};
+buildTabs();buildGrid();buildWave();buildPhases();buildCurveTable();applyFlyStart();syncPlay();render();
+document.getElementById('btnLogo').onclick=()=>{frame=1;playing=false;syncPlay();render();};
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
