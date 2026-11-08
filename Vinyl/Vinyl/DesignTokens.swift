@@ -253,8 +253,8 @@ struct GlassCircleButton: View {
 
     @ViewBuilder
     private var label: some View {
-        // Glyph only. The glass style supplies the circular control's own padding.
-        // A 36/44pt frame here is added on top of that padding and inflates the button.
+        // Regular GlassButtonStyle adds 9pt around its label on this SDK.
+        // Give both glyphs the same slot, accounting for that native padding.
         Group {
             if let assetImage {
                 Image(assetImage)
@@ -266,6 +266,7 @@ struct GlassCircleButton: View {
                     .font(.system(size: iconSize, weight: .medium))
             }
         }
+        .frame(width: size - 18, height: size - 18)
         .contentShape(.circle)
     }
 
@@ -276,7 +277,7 @@ struct GlassCircleButton: View {
             Button(action: action) { label }
                 .buttonStyle(.glass)              // ← 苹果系统控件库
                 .buttonBorderShape(.circle)       // ← 让系统把玻璃底裁成正圆
-                .controlSize(.large)
+                .controlSize(.regular)
                 .frame(width: size, height: size)
                 .tint(DS.ink)
                 .accessibilityLabel(a11y)
