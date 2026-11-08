@@ -110,7 +110,7 @@ struct LibraryView: View {
     private var header: some View {
         HStack {
             // Assets logo mark inside system glass circle (not SF Symbol opticaldisc).
-            GlassCircleButton(assetImage: "logo", iconSize: 20, accessibilityText: "Vinyl") { }
+            GlassCircleButton(assetImage: "logo", iconSize: 18, accessibilityText: "Vinyl") { }
             Spacer(minLength: 0)
             GlassCircleButton(systemImage: "cube", accessibilityText: "新建") { }
         }

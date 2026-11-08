@@ -63,7 +63,7 @@ struct AlbumDetailView: View {
 
                 trackTable
                     .padding(.horizontal, 21)
-                    .padding(.top, 32)
+                    .padding(.top, 40)
                     .opacity(stage(0.09))
 
                 releaseCard
