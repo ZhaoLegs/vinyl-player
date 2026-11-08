@@ -131,10 +131,11 @@ struct NativeScrollEdgeEffectExample: View {
 }
 
 /// UIKit 侧是同一套能力：每个边一个 UIScrollEdgeEffect 对象。
+@available(iOS 26.0, *)
 enum ScrollEdgeEffectUIKit {
     static func configure(_ scrollView: UIScrollView) {
         scrollView.bottomEdgeEffect.style = .soft        // .automatic / .hard / .soft
-        scrollView.topEdgeEffect.isHidden = true
+        scrollView.topEdgeEffect.style = .soft
     }
 }
 

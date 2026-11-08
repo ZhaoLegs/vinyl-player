@@ -66,10 +66,11 @@ struct VinylDiscView: View {
 /// 封套中心圆孔后的「星球」：静止为蓝色星空，抽出唱片后变为黑白半月（原片 f52–f91）。
 struct PlanetView: View {
     let moon: CGFloat
+    var isBack = false
 
     var body: some View {
         ZStack {
-            Image("planet")
+            Image(isBack ? "planet_back" : "planet")
                 .resizable()
             Circle()
                 .fill(LinearGradient(stops: [
@@ -87,12 +88,16 @@ struct PlanetView: View {
 
 /// 封套 + 唱片的完整组合动效。自身尺寸固定为 306×306，位置由父视图决定。
 /// 层次（从下到上）：唱片 → 圆孔星球 → 挖孔封套。
-struct SleeveArtwork: View {
+struct SleeveArtwork: View, Animatable {
     /// 封套图：默认原片挖孔素材；点其它专辑时传入该封面，用同一比例的遮罩挖孔
     var coverName: String = "sleeve_cutout"
-    let pull: CGFloat
-    let flip: Double
+    var pull: CGFloat
+    var flip: Double
     let spin: Angle
+    var animatableData: AnimatablePair<CGFloat, Double> {
+        get { AnimatablePair(pull, flip) }
+        set { pull = newValue.first; flip = newValue.second }
+    }
 
     private var discInset: CGFloat { (DS.sleeve - DS.disc) / 2 }
 
@@ -104,9 +109,9 @@ struct SleeveArtwork: View {
 
             // 封套缩小 + 左移，制造景深（对应原片 f44–f51）
             ZStack(alignment: .topLeading) {
-                PlanetView(moon: pull)
+                PlanetView(moon: pull, isBack: flip >= 90)
                     .frame(width: DS.planet, height: DS.planet)
-                    .offset(x: 108.3, y: 113.7)
+                    .offset(x: 103, y: 103)
 
                 Image(coverName)
                     .resizable()
@@ -116,20 +121,21 @@ struct SleeveArtwork: View {
                         Rectangle()
                             .overlay {
                                 Circle()
-                                    .frame(width: DS.sleeve * CGFloat(0.2806),
-                                           height: DS.sleeve * CGFloat(0.2806))
+                                    .frame(width: DS.planet,
+                                           height: DS.planet)
                                     .blendMode(.destinationOut)
                             }
                             .compositingGroup()
                     }
-                    .shadow(color: .black.opacity(0.26), radius: 22, y: 12)
+                    .shadow(color: .black.opacity(0.12), radius: 8, y: 5)
             }
             .scaleEffect(1 - DS.pullScale * pull, anchor: .center)   // 以中心缩放，封套中线不动 → 唱片始终上下居中
             .offset(x: -DS.sleevePull * pull)
         }
         .frame(width: DS.sleeve, height: DS.sleeve, alignment: .topLeading)
         // 原片 f116–f119 的绕 Y 轴 3D 翻转；转到侧面时受光变暗
-        .brightness(-0.16 * min(abs(flip) / 86.0, 1.0))
-        .rotation3DEffect(.degrees(flip), axis: (x: 0, y: 1, z: 0), perspective: 0.55)
+        .brightness(-0.16 * abs(sin(flip * .pi / 180)))
+        .rotation3DEffect(.degrees(flip > 90 ? flip - 180 : flip),
+                          axis: (x: 0, y: 1, z: 0), perspective: 0.55)
     }
 }

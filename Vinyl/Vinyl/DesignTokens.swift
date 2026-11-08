@@ -22,15 +22,15 @@ enum DS {
     static let vinyl      = Color(hex: 0x111113)
 
     // 尺寸：以 iPhone 393pt 宽为基准，与原片 480px 屏幕按 0.819 换算
-    static let sleeve: CGFloat     = 306
-    static let sleeveTop: CGFloat  = 130
+    static let sleeve: CGFloat     = 314
+    static let sleeveTop: CGFloat  = 126
     // 唱片直径 = 封套的 0.88（原片 f052 实测 329px / 373px）。
     // 抽出后封套缩到 0.85，两张盘上下边缘几乎齐平，圆心始终在同一条水平中线上。
-    static let disc: CGFloat       = 269
-    static let discPull: CGFloat   = 56
-    static let sleevePull: CGFloat = 54
+    static let disc: CGFloat       = 276
+    static let discPull: CGFloat   = 62
+    static let sleevePull: CGFloat = 58
     static let pullScale: CGFloat  = 0.15
-    static let planet: CGFloat     = 86
+    static let planet: CGFloat     = 108
     static let corner: CGFloat     = 5
     static let capsule: CGFloat    = 28
 
@@ -39,7 +39,7 @@ enum DS {
     }
 }
 
-// MARK: - 动效曲线（与浏览器原型逐帧 1:1 对齐）
+// MARK: - 原生动效（时长按原片校正，曲线仍需真机核对）
 //
 // 关键原则：一个阶段 = 一条主 spring 曲线，所有属性共享同一进度，
 // 只按 delay 做错峰；绝不让 blur / zoom / opacity 各跑一条不同的曲线
@@ -54,21 +54,19 @@ enum Motion {
         let response: Double       // 秒
         let damping: Double        // dampingFraction，<1 有过冲
         let duration: Double       // 该阶段在 30fps 下的实际秒数
-        var isPowerCurve: Bool = false   // 打开段：原片实测为加速幂函数，非 spring
+        var isOpeningCurve: Bool = false
     }
 
-    // 帧窗口 → spring 参数（与 preview/index.html 的 CURVES 完全一致）
-    // duration 由帧数 / 30 得出，仅用于浏览器原型把 spring 归一化到帧窗口。
-    // 打开：原片逐帧实测是「缓慢加速 → 近似线性」（72→104→129→156→191→229→266→306pt），
-    // 不是前快后慢的过冲 spring。用 .easeIn 表示同一条加速曲线。
-    static let open    = Spring(response: 1.35, damping: 0, duration: 8.0 / 30, isPowerCurve: true)
-    static let pull    = Spring(response: 0.18, damping: 0.62, duration: 8.0 / 30)   // f044–051，过冲 8.3%
-    static let retract = Spring(response: 0.14, damping: 0.90, duration: 5.0 / 30)   // f092–096，几乎无过冲
-    static let flip    = Spring(response: 0.10, damping: 0.92, duration: 4.0 / 30)   // f116–119
-    static let close   = Spring(response: 0.22, damping: 0.72, duration: 10.0 / 30)  // f166–175，过冲 3.8%
+    // Video-observed stage durations. Native timing curves approximate the
+    // browser's measured keyframe path; they are not the same interpolation.
+    static let open    = Spring(response: 0, damping: 0, duration: 20.0 / 30, isOpeningCurve: true)
+    static let pull    = Spring(response: 0.46, damping: 0.88, duration: 14.0 / 30)
+    static let retract = Spring(response: 0.22, damping: 0.92, duration: 5.0 / 30)
+    static let flip    = Spring(response: 0.36, damping: 0.92, duration: 11.0 / 30)
+    static let close   = Spring(response: 0.66, damping: 1, duration: 20.0 / 30)
 
     static func animation(_ s: Spring) -> Animation {
-        if s.isPowerCurve { return .easeIn(duration: s.duration) }
+        if s.isOpeningCurve { return .timingCurve(0.35, 0, 0.42, 1, duration: s.duration) }
         return .spring(response: s.response, dampingFraction: s.damping)
     }
 
