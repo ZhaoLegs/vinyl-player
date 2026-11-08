@@ -87,9 +87,24 @@ def smoke(app, output):
         measurements = json.loads(layout.read_text())
         indexed = {item["id"]: item for item in measurements}
         assert abs(indexed["header-left"]["width"] - 44) < 1
+        assert indexed["playback-control"]["font"] == 16
+        assert indexed["mini-title"]["font"] == 13
+        assert indexed["mini-disc"]["radius"] == 13.5
         assert abs(indexed["cover-2"]["x"] - indexed["cover-1"]["x"]
                    - indexed["cover-1"]["width"] - 18) < 1
         shutil.copy2(layout, output / "layout-review.json")
+        run("xcrun", "simctl", "terminate", udid, "com.zhaolegs.Vinyl")
+        run("xcrun", "simctl", "launch", udid, "com.zhaolegs.Vinyl",
+            "--layout-check", "--review-check", "--review-detail")
+        time.sleep(8)
+        run("xcrun", "simctl", "io", udid, "screenshot", str(output / "detail-inspector.png"))
+        detail = {item["id"]: item for item in json.loads(layout.read_text())}
+        for index in range(4):
+            assert detail[f"track-symbol-{index}"]["font"] == 16
+            assert detail[f"track-title-{index}"]["font"] == 15
+        assert detail["release-art"]["width"] == 58 and detail["release-art"]["radius"] == 2
+        assert detail["detail-player"]["x"] == detail["header-left"]["x"] == 16
+        shutil.copy2(layout, output / "detail-layout-review.json")
         run("xcrun", "simctl", "terminate", udid, "com.zhaolegs.Vinyl")
         print("Checking real local audio pause, seek and progress", flush=True)
         playback_report = container / "Documents/playback-check.json"

@@ -84,6 +84,15 @@ struct LibraryView: View {
                 await runDemo()
             }
             .task {
+                if ProcessInfo.processInfo.arguments.contains("--review-detail") {
+                    try? await Task.sleep(for: .seconds(1))
+                    origin = cellFrames[AlbumData.featuredIndex] ?? .zero
+                    open()
+                    autoplay = false
+                    demoToken += 1
+                }
+            }
+            .task {
                 guard ProcessInfo.processInfo.arguments.contains("--playback-check") else { return }
                 try? await Task.sleep(for: .seconds(2))
                 origin = cellFrames[AlbumData.featuredIndex] ?? .zero

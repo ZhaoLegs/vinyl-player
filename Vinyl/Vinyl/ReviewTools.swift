@@ -33,8 +33,8 @@ struct ReviewMeasurement: Identifiable, Equatable {
 extension View {
     func reviewElement(_ id: String, _ title: String, font: CGFloat? = nil,
                        radius: CGFloat? = nil, note: String = "") -> some View {
-        anchorPreference(key: ReviewPreference.self, value: .bounds) {
-            [id: ReviewAnchor(title: title, font: font, radius: radius, note: note, bounds: $0)]
+        transformAnchorPreference(key: ReviewPreference.self, value: .bounds) { value, anchor in
+            value[id] = ReviewAnchor(title: title, font: font, radius: radius, note: note, bounds: anchor)
         }
     }
     func reviewHost() -> some View { modifier(ReviewHost()) }
@@ -53,6 +53,7 @@ private struct ReviewHost: ViewModifier {
     @State private var elements: [ReviewMeasurement] = []
     @State private var containerWidth: CGFloat = 0
     @State private var tabFrame: CGRect?
+    @State private var detent: PresentationDetent = .medium
 
     func body(content: Content) -> some View {
         content
@@ -90,11 +91,12 @@ private struct ReviewHost: ViewModifier {
             .sheet(isPresented: $showing) {
                 ReviewPanel(elements: elements, width: containerWidth)
                     .environmentObject(settings)
-                    .presentationDetents([.medium, .large])
+                    .presentationDetents([.medium, .large], selection: $detent)
             }
             .task {
                 if ProcessInfo.processInfo.arguments.contains("--review-check") {
                     try? await Task.sleep(for: .seconds(2))
+                    detent = .large
                     showing = true
                 }
             }
@@ -107,11 +109,15 @@ private struct ReviewHost: ViewModifier {
         }.filter { $0.frame.intersects(CGRect(origin: .zero, size: proxy.size)) }
         if let tabFrame {
             let origin = proxy.frame(in: .global).origin
-            result.append(ReviewMeasurement(id: "native-tabs", title: "系统底部导航",
+            result.append(ReviewMeasurement(id: "native-tabs", title: "系统导航容器",
                 frame: tabFrame.offsetBy(dx: -origin.x, dy: -origin.y), font: nil, radius: nil,
-                note: "UIKit 实际布局边界；玻璃描边可能内缩"))
+                note: "UIKit 容器边界，包含安全区域；非内部玻璃胶囊轮廓"))
         }
-        return result.sorted { $0.id < $1.id }
+        return result.sorted {
+            if $0.frame.minY != $1.frame.minY { return $0.frame.minY < $1.frame.minY }
+            if $0.frame.minX != $1.frame.minX { return $0.frame.minX < $1.frame.minX }
+            return $0.id < $1.id
+        }
     }
 
     private func update(_ measured: [ReviewMeasurement], width: CGFloat) {
@@ -158,6 +164,7 @@ private struct ReviewPanel: View {
     let width: CGFloat
     @State private var first = ""
     @State private var second = ""
+    @State private var query = ""
 
     var body: some View {
         NavigationStack {
@@ -185,7 +192,7 @@ private struct ReviewPanel: View {
                     }
                 }
                 Section("字号、图片尺寸与圆角") {
-                    ForEach(elements) { item in
+                    ForEach(elements.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }) { item in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.title).font(.subheadline.weight(.semibold))
                             Text("\(pt(item.frame.width)) × \(pt(item.frame.height)) · 左 \(pt(item.frame.minX)) · 右 \(pt(width - item.frame.maxX))")
@@ -198,6 +205,7 @@ private struct ReviewPanel: View {
             }
             .navigationTitle("布局验收")
             .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, prompt: "搜索标题、图标、图片")
             .toolbar { Button("完成") { dismiss() } }
         }
     }
