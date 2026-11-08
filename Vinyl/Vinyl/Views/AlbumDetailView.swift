@@ -21,6 +21,7 @@ struct AlbumDetailView: View {
     let contentAlpha: Double
     let zoom: CGFloat
     let isPresented: Bool
+    var closing: Bool = false
     let motionStart: Date
     let onClose: () -> Void
     let onToggleArtwork: () -> Void
@@ -51,7 +52,7 @@ struct AlbumDetailView: View {
                         .onTapGesture(perform: onToggleArtwork)
                 }
                 .frame(width: DS.sleeve, height: DS.sleeve)
-                .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom))
+                .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom, closing: closing))
                 .background(
                     GeometryReader { geo in
                         Color.clear.preference(key: SleeveFrameKey.self,
@@ -116,7 +117,7 @@ struct AlbumDetailView: View {
         HStack(spacing: 0) {
             // 苹果系统控件库：GlassButtonStyle（.buttonStyle(.glass)），
             // 形状 / 材质 / 按压高光 / 无障碍全部由系统渲染，工程内不自绘圆。
-            GlassCircleButton(systemImage: "xmark", size: 36, iconSize: 15,
+            GlassCircleButton(systemImage: "xmark", iconSize: 17,
                               accessibilityText: "关闭", action: onClose)
 
             Spacer(minLength: 0)
@@ -133,7 +134,7 @@ struct AlbumDetailView: View {
             Spacer(minLength: 0)
 
             // 右上角同样是系统玻璃圆按钮（Button + .buttonStyle(.glass) + .buttonBorderShape(.circle)）
-            GlassCircleButton(systemImage: "cube", size: 36, iconSize: 15,
+            GlassCircleButton(systemImage: "cube", iconSize: 17,
                               accessibilityText: "新建") { }
         }
         .padding(.horizontal, 20)

@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import platform
+import pty
 import re
+import select
 import signal
 import subprocess
 import tempfile
@@ -89,6 +91,34 @@ def wait_for_demo(marker, timeout, recorder=None):
         time.sleep(.2)
 
 
+def wait_until_recording_started(master_fd, log_path, movie, proc, timeout=45):
+    """simctl block-buffers 'Recording started' when stdout is a pipe. A pty keeps it line-buffered."""
+    deadline = time.monotonic() + timeout
+    captured = ""
+    with log_path.open("w") as log:
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                raise RuntimeError("simctl recorder exited before start; see recorder.log")
+            ready, _, _ = select.select([master_fd], [], [], 0.2)
+            if ready:
+                try:
+                    chunk = os.read(master_fd, 4096)
+                except OSError:
+                    chunk = b""
+                if chunk:
+                    text = chunk.decode("utf-8", "replace")
+                    log.write(text)
+                    log.flush()
+                    captured += text
+                    if "Recording started" in captured:
+                        return
+            if movie.exists() and movie.stat().st_size > 0:
+                log.write("\nmov file is growing; treating the recorder as started\n")
+                log.flush()
+                return
+    raise RuntimeError("simctl recorder failed to start; see recorder.log")
+
+
 def record(output):
     output.mkdir(parents=True, exist_ok=True)
     if platform.system() != "Darwin":
@@ -133,27 +163,30 @@ def record(output):
             run("xcrun", "simctl", "terminate", udid, BUNDLE)
             marker.unlink()
             print("Starting warmed native recording", flush=True)
-            with (output / "recorder.log").open("w") as log:
-                recorder = subprocess.Popen(
-                    ["xcrun", "simctl", "io", udid, "recordVideo", "--codec=h264",
-                     str(output / "vinyl-native-ios27.mov")],
-                    stdout=log, stderr=subprocess.STDOUT)
-                # Wait for the recorder's readiness message, not an arbitrary startup delay.
-                deadline = time.monotonic() + 15
-                while "Recording started" not in (output / "recorder.log").read_text():
-                    if recorder.poll() is not None or time.monotonic() > deadline:
-                        raise RuntimeError("simctl recorder failed to start; see recorder.log")
-                    time.sleep(.1)
+            movie = output / "vinyl-native-ios27.mov"
+            master, slave = pty.openpty()
+            recorder = subprocess.Popen(
+                ["xcrun", "simctl", "io", udid, "recordVideo", "--codec=h264", str(movie)],
+                stdout=slave, stderr=slave, stdin=subprocess.DEVNULL)
+            os.close(slave)
+            try:
+                wait_until_recording_started(master, output / "recorder.log", movie, recorder)
                 run("xcrun", "simctl", "launch", udid, BUNDLE, "--record-demo")
                 wait_for_demo(marker, timeout=120, recorder=recorder)
                 # Include the settled home screen after the animation-completion marker.
                 time.sleep(1)
-                run("xcrun", "simctl", "io", udid, "screenshot", str(output / "home-final.png"))
+                try:
+                    run("xcrun", "simctl", "io", udid, "screenshot", str(output / "home-final.png"),
+                        timeout=20)
+                except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
+                    print(f"Final screenshot skipped: {error}", flush=True)
                 recorder.send_signal(signal.SIGINT)
-                recorder.wait(timeout=20)
-                if recorder.returncode != 0:
+                recorder.wait(timeout=30)
+                if recorder.returncode not in (0, -2, 130, -signal.SIGINT):
                     raise RuntimeError(f"simctl recording failed: {recorder.returncode}")
                 recorder = None
+            finally:
+                os.close(master)
             movie = output / "vinyl-native-ios27.mov"
             if not movie.exists() or movie.stat().st_size < 10_000:
                 raise RuntimeError("Native recording is missing or too small")
@@ -162,9 +195,12 @@ def record(output):
             print(f"Native simulator recording: {movie}", flush=True)
     finally:
         if udid and not (output / "demo-complete.txt").exists():
-            subprocess.run(["xcrun", "simctl", "io", udid, "screenshot",
-                            str(output / "failure-screen.png")], capture_output=True,
-                           timeout=30)
+            try:
+                subprocess.run(["xcrun", "simctl", "io", udid, "screenshot",
+                                str(output / "failure-screen.png")], capture_output=True,
+                               timeout=15)
+            except (subprocess.TimeoutExpired, OSError) as error:
+                print(f"Failure screenshot skipped: {error}", flush=True)
         if recorder is not None and recorder.poll() is None:
             recorder.send_signal(signal.SIGINT)
             try:

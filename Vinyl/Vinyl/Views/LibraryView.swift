@@ -54,6 +54,7 @@ struct LibraryView: View {
                     contentAlpha: contentAlpha,
                     zoom: zoom,
                     isPresented: presented,
+                    closing: closing,
                     motionStart: motionStart,
                     onClose: { close() },
                     onToggleArtwork: { toggleArtwork() }
@@ -110,9 +111,9 @@ struct LibraryView: View {
     private var header: some View {
         HStack {
             // Assets logo mark inside system glass circle (not SF Symbol opticaldisc).
-            GlassCircleButton(assetImage: "logo", iconSize: 18, accessibilityText: "Vinyl") { }
+            GlassCircleButton(assetImage: "logo", iconSize: 17, accessibilityText: "Vinyl") { }
             Spacer(minLength: 0)
-            GlassCircleButton(systemImage: "cube", accessibilityText: "新建") { }
+            GlassCircleButton(systemImage: "cube", iconSize: 17, accessibilityText: "新建") { }
         }
         .padding(.horizontal, 27)
         .padding(.top, 6)
@@ -222,7 +223,8 @@ struct LibraryView: View {
             zoom = 1
             blurRadius = 18
         }
-        withAnimation(.easeOut(duration: Motion.open.duration).delay(0.08)) {
+        // Detail copy fades in after the cover has started moving (reference frames 9–16).
+        withAnimation(.easeInOut(duration: 7.0 / 30).delay(4.0 / 30)) {
             contentAlpha = 1
         }
         demoToken += 1
@@ -239,13 +241,15 @@ struct LibraryView: View {
         ) {
             zoom = 0
             blurRadius = 0
-            contentAlpha = 0
         } completion: {
             presented = false
             closing = false
             pull = 0
             flip = 0
             recordingMarker("complete")
+        }
+        withAnimation(.easeInOut(duration: 6.0 / 30).delay(2.0 / 30)) {
+            contentAlpha = 0
         }
     }
 
@@ -271,7 +275,7 @@ struct LibraryView: View {
 
         guard await pause(766_666_667) else { return }
         // The source turns to side B, with readable artwork and a different label.
-        withAnimation(.timingCurve(0.32, 0, 0.25, 1, duration: max(Motion.flip.duration, 8.0 / 30))) { flip = 180 }
+        withAnimation(Motion.animation(Motion.flip)) { flip = 180 }
 
         guard await pause(1_700_000_000) else { return }
         close()
@@ -310,24 +314,34 @@ private struct CoverFlight: AnimatableModifier {
     }
 
     func body(content: Content) -> some View {
-        let p = min(1, max(0, progress))
-        let handoff = min(1, max(0, (p - 0.88) / 0.12))
-        let turn = closing ? sin((1 - p) * .pi) * 86 : 0
+        let linear = min(1, max(0, progress))
+        let along = closing ? (1 - linear) : linear
+        let sourceFrame = Double(closing ? (165 + along * 20) : (5 + along * 22))
+        let sample = Motion.sample(closing ? Motion.closePath : Motion.openPath, frame: sourceFrame)
+        let span = Motion.referenceSleeveSize - Motion.referenceCellSize
+        let amount = CGFloat((sample.size - Motion.referenceCellSize) / span)
+        let clamped = min(1, max(0, amount))
+        let refStraightX = Motion.referenceCell.x + (Motion.referenceSleeve.x - Motion.referenceCell.x) * clamped
+        let refStraightY = Motion.referenceCell.y + (Motion.referenceSleeve.y - Motion.referenceCell.y) * clamped
+        let nativeX = start.minX + (end.minX - start.minX) * clamped
+        let nativeY = start.minY + (end.minY - start.minY) * clamped
+        let width = start.width + (end.width - start.width) * amount
+        let turn = closing ? Motion.sampleYaw(frame: sourceFrame) : 0
+        let visible = closing ? 1.0 : (1 - min(1, max(0, (linear - 0.88) / 0.12)))
         content
-            .frame(width: start.width + (end.width - start.width) * p,
-                   height: start.height + (end.height - start.height) * p)
-            .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - p) + 2 * p))
+            .frame(width: width, height: width)
+            .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - clamped) + 2 * clamped))
             .rotation3DEffect(.degrees(turn), axis: (x: 0, y: 1, z: 0), perspective: 0.55)
-            .shadow(color: .black.opacity(0.25), radius: 20 * p, y: 8 * p)
-            // Linear grid→sleeve path (no lateral sin arc — that drifted vs original zoom).
-            .offset(x: start.minX + (end.minX - start.minX) * p,
-                    y: start.minY + (end.minY - start.minY) * p)
-            .opacity(Double(1 - handoff))
+            .shadow(color: .black.opacity(0.25), radius: 20 * clamped, y: 8 * clamped)
+            .offset(x: nativeX + (sample.x - refStraightX),
+                    y: nativeY + (sample.y - refStraightY))
+            .opacity(visible)
     }
 }
 
 struct ArtworkHandoff: AnimatableModifier {
     var progress: CGFloat
+    var closing: Bool = false
 
     var animatableData: CGFloat {
         get { progress }
@@ -335,6 +349,7 @@ struct ArtworkHandoff: AnimatableModifier {
     }
 
     func body(content: Content) -> some View {
-        content.opacity(Double(min(1, max(0, (progress - 0.88) / 0.12))))
+        let shown = closing ? 0 : min(1, max(0, (progress - 0.88) / 0.12))
+        content.opacity(Double(shown))
     }
 }

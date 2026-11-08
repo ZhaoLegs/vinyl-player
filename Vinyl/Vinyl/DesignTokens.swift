@@ -54,23 +54,108 @@ enum Motion {
         let response: Double       // 秒
         let damping: Double        // dampingFraction，<1 有过冲
         let duration: Double       // 该阶段在 30fps 下的实际秒数
-        var isOpeningCurve: Bool = false
+        var followsMeasuredPath: Bool = false
     }
 
-    // Video-observed stage durations. Native timing curves approximate the
-    // browser's measured keyframe path; they are not the same interpolation.
-    // Durations match preview/index.html CURVES + 逐帧分析 (30fps).
-    static let open    = Spring(response: 0, damping: 0, duration: 8.0 / 30, isOpeningCurve: true)
-    static let pull    = Spring(response: 0.28, damping: 0.82, duration: 8.0 / 30)
-    static let retract = Spring(response: 0.22, damping: 0.92, duration: 5.0 / 30)
-    static let flip    = Spring(response: 0.10, damping: 0.92, duration: 4.0 / 30)
-    static let close   = Spring(response: 0.34, damping: 0.86, duration: 10.0 / 30)
+    /// Stage windows measured from the attached reference (30fps, frame 1 at t=0).
+    /// Open is source frames 5→27, pull 41→55, retract 91→97, flip 114→125, close 165→185.
+    /// These replace the earlier 8/30 and 10/30 guesses. Not a claim of pixel-perfect playback.
+    static let open    = Spring(response: 0, damping: 0, duration: 22.0 / 30, followsMeasuredPath: true)
+    static let pull    = Spring(response: 0.28, damping: 0.82, duration: 14.0 / 30)
+    static let retract = Spring(response: 0.22, damping: 0.92, duration: 6.0 / 30)
+    static let flip    = Spring(response: 0.10, damping: 0.92, duration: 11.0 / 30)
+    static let close   = Spring(response: 0.34, damping: 0.86, duration: 20.0 / 30, followsMeasuredPath: true)
 
     static func animation(_ s: Spring) -> Animation {
-        // openingEase in preview: cubic-bezier(0.4, 0, 0.2, 1)
-        if s.isOpeningCurve { return .timingCurve(0.4, 0, 0.2, 1, duration: s.duration) }
-        return .spring(response: s.response, dampingFraction: s.damping)
+        // Open/close progress is linear time so CoverFlight can follow OPEN_PATH / CLOSE_PATH.
+        if s.followsMeasuredPath { return .linear(duration: s.duration) }
+        return .timingCurve(0.42, 0.0, 0.2, 1.0, duration: s.duration)
     }
+
+    struct SleeveKey {
+        var frame: Double
+        var x: Double
+        var y: Double
+        var size: Double
+    }
+
+    // preview/index.html OPEN_PATH / CLOSE_PATH, measured from the reference video.
+    static let openPath: [SleeveKey] = [
+        .init(frame: 5, x: 20.3, y: 391.3, size: 73.7),
+        .init(frame: 6, x: 23.1, y: 388.3, size: 75.2),
+        .init(frame: 7, x: 33, y: 376.6, size: 79.8),
+        .init(frame: 8, x: 48.9, y: 354.5, size: 89.6),
+        .init(frame: 9, x: 63.5, y: 326.9, size: 104.7),
+        .init(frame: 10, x: 73.3, y: 299.1, size: 122.1),
+        .init(frame: 11, x: 78.4, y: 273.5, size: 141),
+        .init(frame: 12, x: 79.6, y: 249.6, size: 160.9),
+        .init(frame: 13, x: 77.8, y: 228.3, size: 182),
+        .init(frame: 14, x: 73.5, y: 208.9, size: 204.2),
+        .init(frame: 15, x: 67.8, y: 191.2, size: 226.7),
+        .init(frame: 16, x: 61.7, y: 175.5, size: 247.8),
+        .init(frame: 17, x: 55.5, y: 161, size: 267.4),
+        .init(frame: 18, x: 50.2, y: 148.4, size: 283.7),
+        .init(frame: 19, x: 45.4, y: 138.1, size: 297.1),
+        .init(frame: 20, x: 42.3, y: 130.9, size: 306.5),
+        .init(frame: 21, x: 40.2, y: 126.4, size: 312.5),
+        .init(frame: 22, x: 39.3, y: 124.6, size: 315.4),
+        .init(frame: 23, x: 39.4, y: 124.7, size: 315.6),
+        .init(frame: 24, x: 39.9, y: 125.6, size: 314.8),
+        .init(frame: 25, x: 40.1, y: 126.1, size: 314.4),
+        .init(frame: 27, x: 39.5, y: 126, size: 314)
+    ]
+
+    static let closePath: [SleeveKey] = [
+        .init(frame: 165, x: 39.5, y: 126, size: 314),
+        .init(frame: 166, x: 47, y: 135, size: 300),
+        .init(frame: 167, x: 67, y: 155, size: 267),
+        .init(frame: 168, x: 82, y: 191, size: 220),
+        .init(frame: 169, x: 88, y: 232, size: 180),
+        .init(frame: 170, x: 92, y: 270, size: 151),
+        .init(frame: 171, x: 79, y: 296, size: 128),
+        .init(frame: 172, x: 67.4, y: 317.3, size: 111),
+        .init(frame: 173, x: 59.5, y: 334.2, size: 101),
+        .init(frame: 175, x: 48.6, y: 354.9, size: 88.8),
+        .init(frame: 179, x: 31.9, y: 378.2, size: 78.9),
+        .init(frame: 185, x: 20.3, y: 391.3, size: 73.7)
+    ]
+
+    static let closeYaw: [(frame: Double, degrees: Double)] = [
+        (165, 0), (166, -18), (167, -43), (168, -71), (169, -94),
+        (170, -122), (171, -144), (172, -162), (173, -178), (178, -180), (185, -180)
+    ]
+
+    static func sample(_ keys: [SleeveKey], frame: Double) -> SleeveKey {
+        if frame <= keys[0].frame { return keys[0] }
+        if frame >= keys[keys.count - 1].frame { return keys[keys.count - 1] }
+        var index = 0
+        while index < keys.count - 1 && frame >= keys[index + 1].frame { index += 1 }
+        let a = keys[index]
+        let b = keys[index + 1]
+        let t = (frame - a.frame) / (b.frame - a.frame)
+        return SleeveKey(frame: frame,
+                         x: a.x + (b.x - a.x) * t,
+                         y: a.y + (b.y - a.y) * t,
+                         size: a.size + (b.size - a.size) * t)
+    }
+
+    static func sampleYaw(frame: Double) -> Double {
+        let keys = closeYaw
+        if frame <= keys[0].frame { return keys[0].degrees }
+        if frame >= keys[keys.count - 1].frame { return keys[keys.count - 1].degrees }
+        var index = 0
+        while index < keys.count - 1 && frame >= keys[index + 1].frame { index += 1 }
+        let a = keys[index]
+        let b = keys[index + 1]
+        let t = (frame - a.frame) / (b.frame - a.frame)
+        return a.degrees + (b.degrees - a.degrees) * t
+    }
+
+    /// Reference cell and settled sleeve, used only to recover the measured arc.
+    static let referenceCell = CGPoint(x: 20.3, y: 391.3)
+    static let referenceSleeve = CGPoint(x: 39.5, y: 126)
+    static let referenceCellSize = 73.7
+    static let referenceSleeveSize = 314.0
 
     /// 唱片角速度：起步缓入 → 45°/s 匀速 → 收尾缓出，累计角度 C¹ 连续。
     static let spinPeak = 45.0            // 度/秒
@@ -165,6 +250,8 @@ struct GlassCircleButton: View {
 
     @ViewBuilder
     private var label: some View {
+        // Glyph only. The glass style supplies the circular control's own padding.
+        // A 36/44pt frame here is added on top of that padding and inflates the button.
         Group {
             if let assetImage {
                 Image(assetImage)
@@ -173,10 +260,9 @@ struct GlassCircleButton: View {
                     .frame(width: iconSize, height: iconSize)
             } else if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.system(size: iconSize, weight: .regular))
+                    .font(.system(size: iconSize, weight: .medium))
             }
         }
-        .frame(width: size, height: size)
         .contentShape(.circle)
     }
 
@@ -238,7 +324,6 @@ struct SystemImageButton: View {
             .scaledToFit()
             .frame(width: iconSize, height: iconSize)
             .opacity(opacity)
-            .frame(width: size, height: size)
             .contentShape(.circle)
     }
 }
