@@ -108,6 +108,15 @@ struct ContentView: View {
                 .tint(DS.ink)
             }
         }
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("--record-ui") else { return }
+            do {
+                for tab in [AppTab.profile, .search, .library] {
+                    try await Task.sleep(for: .seconds(3))
+                    selection = tab
+                }
+            } catch { return }
+        }
     }
 
     @ViewBuilder

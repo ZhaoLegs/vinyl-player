@@ -7,9 +7,32 @@ import json
 from pathlib import Path
 import subprocess
 import shutil
+import signal
 import time
 
-from record_native import choose_device, choose_runtime, select_xcode, text, run
+from record_native import choose_device, choose_runtime, select_xcode, text, run, wait_for_demo
+
+
+def capture(udid, output, name, launch_args, completion):
+    movie = output / f"{name}.mov"
+    with (output / f"{name}-recorder.log").open("w") as log:
+        recorder = subprocess.Popen(
+            ["xcrun", "simctl", "io", udid, "recordVideo", "--codec=h264", str(movie)],
+            stdout=log, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + 30
+            while "Recording started" not in (output / f"{name}-recorder.log").read_text():
+                if recorder.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError("Recorder did not become ready")
+                time.sleep(.1)
+            run("xcrun", "simctl", "launch", udid, "com.zhaolegs.Vinyl", *launch_args)
+            completion(recorder)
+        finally:
+            if recorder.poll() is None:
+                recorder.send_signal(signal.SIGINT)
+                recorder.wait(timeout=30)
+        if recorder.returncode != 0 or movie.stat().st_size < 10_000:
+            raise RuntimeError(f"Invalid recording: {name}")
 
 
 def smoke(app, output):
@@ -28,6 +51,8 @@ def smoke(app, output):
         run("xcrun", "simctl", "bootstatus", udid, "-b", timeout=480)
         print("Installing app", flush=True)
         run("xcrun", "simctl", "ui", udid, "appearance", "light")
+        run("xcrun", "simctl", "status_bar", udid, "override",
+            "--time", "9:41", "--batteryState", "charged", "--batteryLevel", "100")
         run("xcrun", "simctl", "install", udid, str(app))
         print("Launching default connection screen", flush=True)
         with (output / "console.log").open("w") as log:
@@ -38,10 +63,31 @@ def smoke(app, output):
         run("xcrun", "simctl", "io", udid, "screenshot", str(output / "apple-music-connect.png"))
         # terminate fails if the application crashed or never stayed running.
         run("xcrun", "simctl", "terminate", udid, "com.zhaolegs.Vinyl")
+        print("Recording Apple Music onboarding and tab navigation", flush=True)
+        capture(udid, output, "apple-music-interface", ["--record-ui"],
+                lambda recorder: time.sleep(13))
+        run("xcrun", "simctl", "terminate", udid, "com.zhaolegs.Vinyl")
+        container = Path(text("xcrun", "simctl", "get_app_container", udid,
+                              "com.zhaolegs.Vinyl", "data"))
+        marker = container / "Documents/vinyl-recording-state.txt"
+        marker.unlink(missing_ok=True)
+        print("Warming built-in vinyl animation demo", flush=True)
+        run("xcrun", "simctl", "launch", udid, "com.zhaolegs.Vinyl", "--record-demo")
+        wait_for_demo(marker, timeout=180)
+        run("xcrun", "simctl", "terminate", udid, "com.zhaolegs.Vinyl")
+        marker.unlink()
+        print("Recording built-in vinyl animation demo", flush=True)
+        def demo_complete(recorder):
+            wait_for_demo(marker, timeout=120, recorder=recorder)
+            time.sleep(1)
+        capture(udid, output, "vinyl-animation-demo", ["--record-demo"], demo_complete)
+        run("xcrun", "simctl", "terminate", udid, "com.zhaolegs.Vinyl")
         (output / "smoke.json").write_text(json.dumps({
             "xcode": xcode, "runtime": runtime["version"], "device": device["name"],
             "result": "launched without demo flags; remained alive",
             "limits": "No account authorization or real playback tested",
+            "commit": text("git", "rev-parse", "HEAD"),
+            "capture": "Native SwiftUI app; simctl io recordVideo",
         }, indent=2))
     finally:
         with (output / "system.log").open("w") as log:
