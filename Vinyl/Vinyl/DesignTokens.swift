@@ -36,7 +36,9 @@ enum DS {
     // Screenshot proportions: circular controls ≈44pt, screen inset ≈16pt.
     static let circleButton: CGFloat = 44
     static let controlInset: CGFloat = 16
+    static let headerTopSpacing: CGFloat = 0
     static let playerNavigationSpacing: CGFloat = 18
+    static let trackSymbolSpacing: CGFloat = 8
     static let playbackIcon: CGFloat = 16
 
     static func coverName(_ index: Int) -> String {

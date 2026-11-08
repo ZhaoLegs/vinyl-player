@@ -56,7 +56,7 @@ struct MiniPlayer: View {
         }
         .padding(.trailing, 2)
         .glassCapsule(height: 44)
-        .reviewElement("home-player", "首页歌曲信息条", radius: 22, note: "底部布局留白 18pt")
+        .reviewElement("home-player", "首页歌曲信息条", radius: 22, note: "safeAreaInset 预留空间 · 导航上方留白 18pt")
     }
 }
 
@@ -89,9 +89,6 @@ struct WaveformBar: View {
                         context.fill(Path(roundedRect: rect, cornerRadius: 0.75),
                                      with: .color(Double(i) / Double(count) < progress ? DS.ink : DS.tertiary))
                     }
-                    let cursor = CGRect(x: min(size.width - 2, max(0, CGFloat(progress) * size.width)),
-                                        y: 0, width: 2, height: size.height)
-                    context.fill(Path(roundedRect: cursor, cornerRadius: 1), with: .color(DS.ink))
                 }
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0)
@@ -110,8 +107,8 @@ struct WaveformBar: View {
             }
             .frame(height: 26)
             .reviewElement("wave-track", "播放时间轨道", note: levels.isEmpty
-                           ? "112 根时间刻度 · 游标 2pt · 数据来自播放时钟，非频谱"
-                           : "112 个真实音频 RMS 分段 · 游标 2pt")
+                           ? "112 根时间刻度 · 已播放部分变黑 · 非频谱"
+                           : "112 个真实音频 RMS 分段 · 已播放部分变黑")
         }
         .padding(.leading, 2)
         .padding(.trailing, 14)

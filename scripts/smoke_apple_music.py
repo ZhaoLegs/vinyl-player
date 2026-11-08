@@ -87,6 +87,9 @@ def smoke(app, output):
         measurements = json.loads(layout.read_text())
         indexed = {item["id"]: item for item in measurements}
         assert abs(indexed["header-left"]["width"] - 44) < 1
+        assert abs(indexed["header-left"]["y"]) < 1
+        player = indexed["home-player"]
+        assert indexed["native-tabs"]["y"] - player["y"] - player["height"] >= 12, indexed
         assert indexed["playback-control"]["font"] == 16
         assert indexed["mini-title"]["font"] == 13
         assert indexed["mini-disc"]["radius"] == 13.5
@@ -102,6 +105,10 @@ def smoke(app, output):
         for index in range(4):
             assert detail[f"track-symbol-{index}"]["font"] == 16
             assert detail[f"track-title-{index}"]["font"] == 15
+            symbol = detail[f"track-symbol-{index}"]
+            assert abs(detail[f"track-title-{index}"]["x"] - symbol["x"] - symbol["width"] - 8) < 1
+        assert abs(detail["header-left"]["y"] - indexed["header-left"]["y"]) < 1
+        assert "游标" not in detail["wave-track"]["note"]
         assert detail["release-art"]["width"] == 58 and detail["release-art"]["radius"] == 2
         assert detail["detail-player"]["x"] == detail["header-left"]["x"] == 16
         shutil.copy2(layout, output / "detail-layout-review.json")

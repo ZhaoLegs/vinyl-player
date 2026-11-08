@@ -95,7 +95,8 @@ private struct ReviewHost: ViewModifier {
             }
             .task {
                 if ProcessInfo.processInfo.arguments.contains("--review-check") {
-                    try? await Task.sleep(for: .seconds(2))
+                    try? await Task.sleep(for: .seconds(
+                        ProcessInfo.processInfo.arguments.contains("--review-detail") ? 4 : 2))
                     detent = .large
                     showing = true
                 }

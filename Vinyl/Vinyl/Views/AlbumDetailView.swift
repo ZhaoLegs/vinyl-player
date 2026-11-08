@@ -37,8 +37,8 @@ struct AlbumDetailView: View {
 
             VStack(spacing: 0) {
                 header
-                    .frame(height: 52)
-                    .padding(.top, 0)
+                    .frame(height: DS.circleButton)
+                    .padding(.top, DS.headerTopSpacing)
                     .opacity(stage(0))
 
                 // 唱片角速度：0 → smoothstep 缓入 → 45°/s 匀速 → smoothstep 缓出 → 0。
@@ -154,14 +154,14 @@ struct AlbumDetailView: View {
             HStack(spacing: 0) {
                 Text("Side").frame(width: 38, alignment: .leading)
                 Text("BPM").frame(width: 46, alignment: .leading)
-                Text("").frame(width: 18)
+                Text("").frame(width: 18 + DS.trackSymbolSpacing)
                 Text("Tracklist")
                 Spacer(minLength: 0)
             }
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(DS.inkSoft)
             .padding(.bottom, 20)
-            .reviewElement("table-heading", "曲目表标题", font: 11, note: "Side 38pt · BPM 46pt · 图标列 18pt")
+            .reviewElement("table-heading", "曲目表标题", font: 11, note: "Side 38pt · BPM 46pt · 图标列 18pt · 文字净距 8pt")
 
             ForEach(Array(AlbumData.tracks.enumerated()), id: \.offset) { index, track in
                 let active = index == playback.selectedTrack
@@ -182,6 +182,7 @@ struct AlbumDetailView: View {
                                        font: DS.playbackIcon, note: "play.fill / pause.fill · semibold")
                     Text(track.title)
                         .reviewElement("track-title-\(index)", "曲目 \(index + 1) 标题", font: 15)
+                        .padding(.leading, DS.trackSymbolSpacing)
                     Spacer(minLength: 0)
                 }
                 .font(.system(size: 15, weight: .regular))

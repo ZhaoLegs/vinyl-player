@@ -145,7 +145,7 @@ struct LibraryView: View {
                 .reviewElement("header-right", "右侧圆按钮", font: 17, radius: 22)
         }
         .padding(.horizontal, DS.controlInset)
-        .padding(.top, 6)
+        .padding(.top, DS.headerTopSpacing)
     }
 
     /// Both bars belong to the scroll view, so the system can soften both edges.
@@ -159,9 +159,9 @@ struct LibraryView: View {
                     header
                         .padding(.bottom, 6)
                 }
-                // safeAreaBar 会把 mini player 贴到底部安全区，并**自动把滚动边缘效果延伸到它**，
-                // 所以不需要再手写 LinearGradient mask。
-                .safeAreaBar(edge: .bottom, spacing: 0) {
+                // Reserve real content space above the native tab bar. A bottom
+                // safeAreaBar participates in toolbar overlap, swallowing the gap.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
                     MiniPlayer()
                         .padding(.horizontal, DS.controlInset)
                         .padding(.bottom, DS.playerNavigationSpacing)
