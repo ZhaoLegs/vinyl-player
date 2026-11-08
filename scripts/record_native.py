@@ -19,7 +19,12 @@ BUNDLE = "com.zhaolegs.Vinyl"
 
 
 def run(*args, **kwargs):
-    return subprocess.run(args, check=True, text=True, **kwargs)
+    try:
+        return subprocess.run(args, check=True, text=True, **kwargs)
+    except subprocess.CalledProcessError as error:
+        if error.stderr:
+            print(error.stderr, flush=True)
+        raise
 
 
 def text(*args):
@@ -32,6 +37,12 @@ def choose_runtime(runtimes):
                  and r["version"].split(".")[0] == "27"]
     if not available:
         raise RuntimeError("No available iOS 27 simulator runtime. Install it in Xcode.")
+    # Some newer runtimes support only one device (for example iPhone Duo).
+    # Prefer a runtime supporting the target phone over an incompatible newer one.
+    preferred = [r for r in available if any(
+        d["name"] == "iPhone 17 Pro" for d in r.get("supportedDeviceTypes", []))]
+    if preferred:
+        available = preferred
     return max(available, key=lambda r: tuple(map(int, r["version"].split("."))))
 
 
@@ -68,8 +79,9 @@ def record(output):
     xcode = select_xcode()
     runtimes = json.loads(text("xcrun", "simctl", "list", "runtimes", "--json"))["runtimes"]
     runtime = choose_runtime(runtimes)
-    device = choose_device(json.loads(text("xcrun", "simctl", "list", "devicetypes",
-                                         "--json"))["devicetypes"])
+    types = json.loads(text("xcrun", "simctl", "list", "devicetypes", "--json"))["devicetypes"]
+    supported = {d["identifier"] for d in runtime.get("supportedDeviceTypes", [])}
+    device = choose_device([d for d in types if not supported or d["identifier"] in supported])
     metadata = {"xcode": xcode, "runtime": runtime, "deviceType": device,
                 "commit": text("git", "-C", str(ROOT), "rev-parse", "HEAD"),
                 "capture": "simctl io recordVideo; native SwiftUI app"}
