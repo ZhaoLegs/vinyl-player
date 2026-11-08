@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 上报被点击封面在 "library" 坐标空间中的 frame，作为 zoom 转场起点。
 struct CoverFrameKey: PreferenceKey {
@@ -76,6 +77,13 @@ struct LibraryView: View {
             .task {
                 guard recordingRequested && !recordingStarted else { return }
                 recordingStarted = true
+                let requiredImages = (1...AlbumData.coverCount).map(DS.coverName)
+                    + ["planet", "planet_back", "small_art", "sleeve_cutout"]
+                let missing = requiredImages.filter { UIImage(named: $0) == nil }
+                guard missing.isEmpty else {
+                    recordingMarker("failed: missing images: " + missing.joined(separator: ", "))
+                    return
+                }
                 // Give the scene time to report actual cover and sleeve geometry.
                 do { try await Task.sleep(nanoseconds: 1_500_000_000) }
                 catch { return }

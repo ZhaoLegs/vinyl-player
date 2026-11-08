@@ -102,6 +102,7 @@ def record(output):
                     "-scheme", "Vinyl", "-configuration", "Release",
                     "-sdk", "iphonesimulator", "-destination", f"id={udid}",
                     "-derivedDataPath", derived, "CODE_SIGNING_ALLOWED=NO",
+                    "ONLY_ACTIVE_ARCH=YES",
                     "build", stdout=log, stderr=subprocess.STDOUT, timeout=900)
             app = Path(derived) / "Build/Products/Release-iphonesimulator/Vinyl.app"
             run("xcrun", "simctl", "install", udid, str(app))
@@ -126,7 +127,7 @@ def record(output):
                     phase = marker.read_text().strip() if marker.exists() else ""
                     if phase == "complete":
                         break
-                    if phase == "failed" or time.monotonic() > deadline:
+                    if phase.startswith("failed") or time.monotonic() > deadline:
                         raise RuntimeError(f"Native demo did not complete (phase={phase!r})")
                     time.sleep(.2)
                 # Include the settled home screen after the animation-completion marker.
