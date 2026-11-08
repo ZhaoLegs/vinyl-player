@@ -11,3 +11,16 @@
 Apple Music 页面使用 MusicKit 的真实播放位置、时长与状态驱动同一轨道，支持拖动及 VoiceOver 每次调整 5 秒。MusicKit 不提供解码后的 PCM，因此其轨道采用等高时间刻度，不将它称为真实音频频谱。
 
 原生验收脚本检查 AVAudioPlayer 开始推进、暂停漂移小于 0.05 秒、跳转误差小于 0.1 秒、继续播放，并输出 `playback-check.json`。布局检查输出实际测量 `layout-review.json`，核对按钮 44pt 以及相邻封面 18pt 间距。真实 Apple Music 授权与播放仍需要签名设备、账号与订阅验收。
+
+## 原生验收结果
+
+源码 `7414d978e61be8fd439dca9f655a0b8c8240891a` 已通过 [Xcode 构建、原生运行与验收](https://github.com/ZhaoLegs/vinyl-player/actions/runs/42504329475)。实际环境为 Xcode 27.1 / iOS 27.2 / iPhone 17 Pro 模拟器。
+
+播放时间推进至 2.98 秒，暂停漂移为 0 秒；跳转至 14.4 秒后继续推进至 16.40 秒。音频实际时长 24 秒，波形包含 112 个 RMS 分段。完整结果见 [播放检查数据](playback-check.json)。
+
+已核对嵌套元素标注不会被父容器覆盖：播放按钮 16pt、迷你标题 13pt、曲目标题 15pt；发行图片宽 58pt、圆角 2pt，详情播放条与左圆按钮均为 16pt 左边距。见 [首页测量](layout-review.json)、[详情测量](detail-layout-review.json)。
+
+- [验收面板截图](vinyl-layout-inspector.png)：可查看尺寸、字号、圆角，搜索元素、选择两项测净距。
+- [实际详情截图](vinyl-playback-detail.png)：SF Symbols 图标及实际音频时间游标。
+- [首页封面阴影截图](vinyl-cover-shadows.png)。
+- [播放、暂停与跳转录屏](vinyl-playback-review.mp4)：原始模拟器录屏裁掉启动桌面，H.264 / 30fps / faststart；没有运动插帧，模拟器录像不包含音轨。使用内置验收音频，非原曲。

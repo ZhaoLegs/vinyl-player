@@ -1,0 +1,10 @@
+{
+  "resumedPosition" : 16.399138321995466,
+  "duration" : 24,
+  "pausedDrift" : 0,
+  "source" : "AVAudioPlayer.currentTime",
+  "envelopeBins" : 112,
+  "seekTarget" : 14.399999999999999,
+  "result" : "complete",
+  "advanced" : 2.9805895691609976
+}

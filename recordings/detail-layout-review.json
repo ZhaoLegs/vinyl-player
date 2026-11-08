@@ -1,0 +1,338 @@
+[
+  {
+    "font" : 17,
+    "height" : 44,
+    "id" : "header-left",
+    "note" : "",
+    "radius" : 22,
+    "title" : "关闭圆按钮",
+    "width" : 44,
+    "x" : 16,
+    "y" : 4
+  },
+  {
+    "font" : 17,
+    "height" : 44,
+    "id" : "header-right",
+    "note" : "",
+    "radius" : 22,
+    "title" : "右侧圆按钮",
+    "width" : 44,
+    "x" : 342,
+    "y" : 4
+  },
+  {
+    "font" : 14,
+    "height" : 17,
+    "id" : "detail-title",
+    "note" : "",
+    "title" : "歌曲详情标题",
+    "width" : 83.666666666666657,
+    "x" : 159.33333333333331,
+    "y" : 10.333333333333329
+  },
+  {
+    "font" : 11,
+    "height" : 13.333333333333329,
+    "id" : "detail-artist",
+    "note" : "",
+    "title" : "歌曲详情艺人",
+    "width" : 36,
+    "x" : 183,
+    "y" : 28.333333333333329
+  },
+  {
+    "height" : 306,
+    "id" : "detail-artwork",
+    "note" : "306pt 画布 · 抽出唱片 260pt",
+    "radius" : 0,
+    "title" : "封套画面",
+    "width" : 306,
+    "x" : 48,
+    "y" : 72
+  },
+  {
+    "font" : 11,
+    "height" : 34,
+    "id" : "table-heading",
+    "note" : "Side 38pt · BPM 46pt · 图标列 18pt",
+    "title" : "曲目表标题",
+    "width" : 360,
+    "x" : 21,
+    "y" : 418
+  },
+  {
+    "height" : 36,
+    "id" : "track-row-0",
+    "note" : "整行可点击",
+    "title" : "曲目 1 行",
+    "width" : 360,
+    "x" : 21,
+    "y" : 452
+  },
+  {
+    "font" : 15,
+    "height" : 18,
+    "id" : "track-side-0",
+    "note" : "",
+    "title" : "曲目 1 Side",
+    "width" : 38,
+    "x" : 21,
+    "y" : 461
+  },
+  {
+    "font" : 15,
+    "height" : 18,
+    "id" : "track-bpm-0",
+    "note" : "",
+    "title" : "曲目 1 BPM",
+    "width" : 46,
+    "x" : 59,
+    "y" : 461
+  },
+  {
+    "font" : 15,
+    "height" : 18,
+    "id" : "track-title-0",
+    "note" : "",
+    "title" : "曲目 1 标题",
+    "width" : 147.33333333333331,
+    "x" : 123,
+    "y" : 461
+  },
+  {
+    "font" : 16,
+    "height" : 16.666666666666629,
+    "id" : "track-symbol-0",
+    "note" : "play.fill \/ pause.fill · semibold",
+    "title" : "曲目 1 SF 图标",
+    "width" : 18,
+    "x" : 105,
+    "y" : 461.66666666666663
+  },
+  {
+    "height" : 36,
+    "id" : "track-row-1",
+    "note" : "整行可点击",
+    "title" : "曲目 2 行",
+    "width" : 360,
+    "x" : 21,
+    "y" : 488
+  },
+  {
+    "font" : 15,
+    "height" : 18,
+    "id" : "track-bpm-1",
+    "note" : "",
+    "title" : "曲目 2 BPM",
+    "width" : 46,
+    "x" : 59,
+    "y" : 497
+  },
+  {
+    "font" : 15,
+    "height" : 18,
+    "id" : "track-title-1",
+    "note" : "",
+    "title" : "曲目 2 标题",
+    "width" : 157.66666666666663,
+    "x" : 123,
+    "y" : 497
+  },
+  {
+    "font" : 16,
+    "height" : 16.666666666666629,
+    "id" : "track-symbol-1",
+    "note" : "play.fill \/ pause.fill · semibold",
+    "title" : "曲目 2 SF 图标",
+    "width" : 18,
+    "x" : 105,
+    "y" : 497.66666666666663
+  },
+  {
+    "font" : 15,
+    "height" : 14,
+    "id" : "track-side-1",
+    "note" : "",
+    "title" : "曲目 2 Side",
+    "width" : 38,
+    "x" : 21,
+    "y" : 499
+  },
+  {
+    "height" : 36,
+    "id" : "track-row-2",
+    "note" : "整行可点击",
+    "title" : "曲目 3 行",
+    "width" : 360,
+    "x" : 21,
+    "y" : 524
+  },
+  {
+    "font" : 15,
+    "height" : 18,
+    "id" : "track-side-2",
+    "note" : "",
+    "title" : "曲目 3 Side",
+    "width" : 38,
+    "x" : 21,
+    "y" : 533
+  },
+  {
+    "font" : 15,
+    "height" : 18,
+    "id" : "track-bpm-2",
+    "note" : "",
+    "title" : "曲目 3 BPM",
+    "width" : 46,
+    "x" : 59,
+    "y" : 533
+  },
+  {
+    "font" : 15,
+    "height" : 18,
+    "id" : "track-title-2",
+    "note" : "",
+    "title" : "曲目 3 标题",
+    "width" : 177.66666666666663,
+    "x" : 123,
+    "y" : 533
+  },
+  {
+    "font" : 16,
+    "height" : 16.666666666666629,
+    "id" : "track-symbol-2",
+    "note" : "play.fill \/ pause.fill · semibold",
+    "title" : "曲目 3 SF 图标",
+    "width" : 18,
+    "x" : 105,
+    "y" : 533.66666666666663
+  },
+  {
+    "height" : 36,
+    "id" : "track-row-3",
+    "note" : "整行可点击",
+    "title" : "曲目 4 行",
+    "width" : 360,
+    "x" : 21,
+    "y" : 560
+  },
+  {
+    "font" : 15,
+    "height" : 18,
+    "id" : "track-bpm-3",
+    "note" : "",
+    "title" : "曲目 4 BPM",
+    "width" : 46,
+    "x" : 59,
+    "y" : 569
+  },
+  {
+    "font" : 15,
+    "height" : 18,
+    "id" : "track-title-3",
+    "note" : "",
+    "title" : "曲目 4 标题",
+    "width" : 109.66666666666666,
+    "x" : 123,
+    "y" : 569
+  },
+  {
+    "font" : 16,
+    "height" : 16.666666666666629,
+    "id" : "track-symbol-3",
+    "note" : "play.fill \/ pause.fill · semibold",
+    "title" : "曲目 4 SF 图标",
+    "width" : 18,
+    "x" : 105,
+    "y" : 569.66666666666663
+  },
+  {
+    "font" : 15,
+    "height" : 14,
+    "id" : "track-side-3",
+    "note" : "",
+    "title" : "曲目 4 Side",
+    "width" : 38,
+    "x" : 21,
+    "y" : 571
+  },
+  {
+    "height" : 58,
+    "id" : "release-art",
+    "note" : "",
+    "radius" : 2,
+    "title" : "发行信息图片",
+    "width" : 58,
+    "x" : 21,
+    "y" : 634
+  },
+  {
+    "font" : 17,
+    "height" : 20.333333333333371,
+    "id" : "release-artist",
+    "note" : "",
+    "title" : "发行艺人",
+    "width" : 56,
+    "x" : 91,
+    "y" : 637
+  },
+  {
+    "font" : 13,
+    "height" : 15.666666666666629,
+    "id" : "release-label",
+    "note" : "",
+    "title" : "发行厂牌",
+    "width" : 64,
+    "x" : 91,
+    "y" : 659.33333333333326
+  },
+  {
+    "font" : 10,
+    "height" : 12,
+    "id" : "release-catalog",
+    "note" : "",
+    "title" : "发行编号",
+    "width" : 47.666666666666657,
+    "x" : 91,
+    "y" : 677
+  },
+  {
+    "height" : 44,
+    "id" : "detail-player",
+    "note" : "左右边距 16pt",
+    "radius" : 22,
+    "title" : "详情播放条",
+    "width" : 370,
+    "x" : 16,
+    "y" : 724
+  },
+  {
+    "font" : 16,
+    "height" : 44,
+    "id" : "playback-control",
+    "note" : "SF Symbols · semibold · 44pt 点击范围",
+    "title" : "播放 \/ 暂停按钮",
+    "width" : 44,
+    "x" : 18,
+    "y" : 724
+  },
+  {
+    "height" : 83,
+    "id" : "native-tabs",
+    "note" : "UIKit 容器边界，包含安全区域；非内部玻璃胶囊轮廓",
+    "title" : "系统导航容器",
+    "width" : 402,
+    "x" : 0,
+    "y" : 729
+  },
+  {
+    "height" : 26,
+    "id" : "wave-track",
+    "note" : "112 个真实音频 RMS 分段 · 游标 2pt",
+    "title" : "播放时间轨道",
+    "width" : 304,
+    "x" : 68,
+    "y" : 733
+  }
+]
