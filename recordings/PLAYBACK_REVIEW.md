@@ -6,7 +6,9 @@
 
 曲目表的文字「Ⅱ / ▶」改为 `pause.fill` / `play.fill` SF Symbols，统一 16pt、semibold。整行可点击。底部播放/暂停按钮使用相同字号与图标，有 44pt 点击范围。Apple Music 大播放器主按钮为 30pt。
 
-内置演示现在能播放项目原创的 24 秒验收音频。所有演示曲目使用同一段音频，界面明确标注「非原曲」。播放状态、游标与拖动位置取自 AVAudioPlayer 的实际时钟；暂停后停止推进。波形高度是该 WAV 的真实 RMS 分段，不使用随机音量动画。
+内置演示现在能播放项目原创的 24 秒验收音频。所有演示曲目使用同一段音频，界面明确标注「非原曲」。播放状态、波形变黑进度与拖动位置取自 AVAudioPlayer 的实际时钟；暂停后停止推进。波形高度是该 WAV 的真实 RMS 分段，不使用随机音量动画。已播放的竖条逐段变黑，没有额外的竖线游标。
+
+首页播放条使用 `safeAreaInset` 在系统导航上方预留空间，18pt 留白之外再预留 18pt 给系统悬浮导航向上延伸的部分。第一轮原生测量确认仅设置 18pt 内边距时实际净距只有 1pt，已补偿该占用。首页与详情页顶部圆按钮均为 44pt，左右 16pt，顶部紧接系统安全区。曲目播放图标列宽 18pt，图标列与标题之间增加 8pt 净距；表头保持相同对齐。
 
 Apple Music 页面使用 MusicKit 的真实播放位置、时长与状态驱动同一轨道，支持拖动及 VoiceOver 每次调整 5 秒。MusicKit 不提供解码后的 PCM，因此其轨道采用等高时间刻度，不将它称为真实音频频谱。
 
@@ -14,13 +16,15 @@ Apple Music 页面使用 MusicKit 的真实播放位置、时长与状态驱动�
 
 ## 原生验收结果
 
-源码 `7414d978e61be8fd439dca9f655a0b8c8240891a` 已通过 [Xcode 构建、原生运行与验收](https://github.com/ZhaoLegs/vinyl-player/actions/runs/42504329475)。实际环境为 Xcode 27.1 / iOS 27.2 / iPhone 17 Pro 模拟器。
+源码 `1467073233750cb29f6e7ab9e6a3986fb05ee981` 已通过 [Xcode 构建、原生运行与验收](https://github.com/ZhaoLegs/vinyl-player/actions/runs/42507583274)。实际环境为 Xcode 27.1 / iOS 27.2 / iPhone 17 Pro 模拟器。
 
-播放时间推进至 2.98 秒，暂停漂移为 0 秒；跳转至 14.4 秒后继续推进至 16.40 秒。音频实际时长 24 秒，波形包含 112 个 RMS 分段。完整结果见 [播放检查数据](playback-check.json)。
+播放时间推进至 3.00 秒，暂停漂移为 0 秒；跳转至 14.4 秒后继续推进至 16.41 秒。音频实际时长 24 秒，波形包含 112 个 RMS 分段。完整结果见 [播放检查数据](playback-check.json)。
+
+本轮首页播放条底边为 710pt，系统导航容器上边为 729pt，实际净距 19pt；截图中两条玻璃胶囊已清楚分开。首页和详情顶部圆按钮均从内容安全区的 0pt 开始，屏幕左右 16pt。详情曲目图标列右边为 123pt，标题从 131pt 开始，实际净距 8pt。波形没有独立游标，黑色分段随真实播放推进。
 
 已核对嵌套元素标注不会被父容器覆盖：播放按钮 16pt、迷你标题 13pt、曲目标题 15pt；发行图片宽 58pt、圆角 2pt，详情播放条与左圆按钮均为 16pt 左边距。见 [首页测量](layout-review.json)、[详情测量](detail-layout-review.json)。
 
 - [验收面板截图](vinyl-layout-inspector.png)：可查看尺寸、字号、圆角，搜索元素、选择两项测净距。
-- [实际详情截图](vinyl-playback-detail.png)：SF Symbols 图标及实际音频时间游标。
+- [实际详情截图](vinyl-playback-detail.png)：SF Symbols 图标及音频波形。
 - [首页封面阴影截图](vinyl-cover-shadows.png)。
-- [播放、暂停与跳转录屏](vinyl-playback-review.mp4)：原始模拟器录屏裁掉启动桌面，H.264 / 30fps / faststart；没有运动插帧，模拟器录像不包含音轨。使用内置验收音频，非原曲。
+- [播放、暂停与跳转录屏](vinyl-playback-review.mp4)：本轮原始模拟器录屏裁掉前 5.2 秒启动桌面与白屏，保留 11.70 秒。H.264 / 30fps / faststart；没有运动插帧，模拟器录像不包含音轨。使用内置验收音频，非原曲。
