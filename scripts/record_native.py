@@ -72,6 +72,23 @@ def select_xcode():
     raise RuntimeError("Xcode 27 is required. No matching installation found.")
 
 
+def wait_for_demo(marker, timeout, recorder=None):
+    deadline = time.monotonic() + timeout
+    previous = None
+    while True:
+        if recorder is not None and recorder.poll() is not None:
+            raise RuntimeError("simctl recorder exited during the demo")
+        phase = marker.read_text().strip() if marker.exists() else ""
+        if phase != previous:
+            print(f"Native demo phase: {phase!r}", flush=True)
+            previous = phase
+        if phase == "complete":
+            return
+        if phase.startswith("failed") or time.monotonic() > deadline:
+            raise RuntimeError(f"Native demo did not complete (phase={phase!r})")
+        time.sleep(.2)
+
+
 def record(output):
     output.mkdir(parents=True, exist_ok=True)
     if platform.system() != "Darwin":
@@ -108,6 +125,14 @@ def record(output):
             run("xcrun", "simctl", "install", udid, str(app))
             container = Path(text("xcrun", "simctl", "get_app_container", udid, BUNDLE, "data"))
             marker = container / "Documents/vinyl-recording-state.txt"
+            # A fresh CI simulator can spend tens of seconds compiling rendering
+            # pipelines. Exercise the complete UI before the recorded launch.
+            print("Warming native rendering pipelines", flush=True)
+            run("xcrun", "simctl", "launch", udid, BUNDLE, "--record-demo")
+            wait_for_demo(marker, timeout=180)
+            run("xcrun", "simctl", "terminate", udid, BUNDLE)
+            marker.unlink()
+            print("Starting warmed native recording", flush=True)
             with (output / "recorder.log").open("w") as log:
                 recorder = subprocess.Popen(
                     ["xcrun", "simctl", "io", udid, "recordVideo", "--codec=h264",
@@ -120,16 +145,7 @@ def record(output):
                         raise RuntimeError("simctl recorder failed to start; see recorder.log")
                     time.sleep(.1)
                 run("xcrun", "simctl", "launch", udid, BUNDLE, "--record-demo")
-                deadline = time.monotonic() + 30
-                while True:
-                    if recorder.poll() is not None:
-                        raise RuntimeError("simctl recorder exited during the demo")
-                    phase = marker.read_text().strip() if marker.exists() else ""
-                    if phase == "complete":
-                        break
-                    if phase.startswith("failed") or time.monotonic() > deadline:
-                        raise RuntimeError(f"Native demo did not complete (phase={phase!r})")
-                    time.sleep(.2)
+                wait_for_demo(marker, timeout=120, recorder=recorder)
                 # Include the settled home screen after the animation-completion marker.
                 time.sleep(1)
                 run("xcrun", "simctl", "io", udid, "screenshot", str(output / "home-final.png"))
@@ -145,6 +161,10 @@ def record(output):
                 "App reported animation completion. Inspect the MOV to verify visual quality.\n")
             print(f"Native simulator recording: {movie}", flush=True)
     finally:
+        if udid and not (output / "demo-complete.txt").exists():
+            subprocess.run(["xcrun", "simctl", "io", udid, "screenshot",
+                            str(output / "failure-screen.png")], capture_output=True,
+                           timeout=30)
         if recorder is not None and recorder.poll() is None:
             recorder.send_signal(signal.SIGINT)
             try:
