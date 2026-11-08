@@ -1,0 +1,9 @@
+{
+  "xcode": "Xcode 27.1\nBuild version 27A9275",
+  "runtime": "27.2",
+  "device": "iPhone 17 Pro",
+  "result": "launched without demo flags; remained alive",
+  "limits": "No account authorization or real playback tested",
+  "commit": "d043998c3eea09636a0a9f408db23cc8757f91b1",
+  "capture": "Native SwiftUI app; simctl io recordVideo"
+}

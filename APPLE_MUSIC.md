@@ -28,7 +28,9 @@
 
 ## 验证范围
 
-第一版 `c349e82` 已通过 [Xcode 27.1 Release 构建](https://github.com/ZhaoLegs/vinyl-player/actions/runs/42487587553)，并在构建产物中核对到权限描述。后续提交另有构建与默认启动检查，最终结果以该分支 Actions 为准。
+`834da95` 已通过 [Xcode 27.1 Release 构建与默认启动检查](https://github.com/ZhaoLegs/vinyl-player/actions/runs/42490775142)。检查核对了构建产物中的音乐权限描述及后台音频模式，应用在无账号状态下正常显示连接页并持续运行。后续原生界面录屏与内置动效演示以该分支 Actions 为准。
+
+`d043998` 的 [原生录制任务](https://github.com/ZhaoLegs/vinyl-player/actions/runs/42498896983) 已成功：Xcode 27.1（27A9275）、iOS 27.2、iPhone 17 Pro 模拟器，采用 `simctl io recordVideo`。视频见 [录制说明](recordings/APPLE_MUSIC_RECORDING.md)。
 
 模拟器启动检查只验证无账号状态下的连接页，不代表真实授权、资料库读取或播放已联调通过。旧录屏展示的是内置素材动效，也不代表 MusicKit 真实播放。
 
