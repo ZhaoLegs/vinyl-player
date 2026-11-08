@@ -253,7 +253,7 @@ struct GlassCircleButton: View {
 
     @ViewBuilder
     private var label: some View {
-        // Regular GlassButtonStyle adds 9pt around its label on this SDK.
+        // Native screenshot confirms 7pt per side for regular circular glass.
         // Give both glyphs the same slot, accounting for that native padding.
         Group {
             if let assetImage {
@@ -266,7 +266,7 @@ struct GlassCircleButton: View {
                     .font(.system(size: iconSize, weight: .medium))
             }
         }
-        .frame(width: size - 18, height: size - 18)
+        .frame(width: size - 14, height: size - 14)
         .contentShape(.circle)
     }
 
