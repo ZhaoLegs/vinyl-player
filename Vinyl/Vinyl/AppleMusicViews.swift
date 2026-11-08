@@ -104,6 +104,9 @@ struct MusicLibraryView: View {
             .background { AuroraBackground() }
             .safeAreaInset(edge: .bottom) { MusicMiniPlayer() }
             .sheet(item: $selected) { MusicCollectionView(collection: $0) }
+            .onChange(of: music.authorized) { _, authorized in
+                if !authorized { selected = nil }
+            }
         }
     }
 
@@ -184,6 +187,13 @@ struct MusicSearchView: View {
             .safeAreaInset(edge: .bottom) { MusicMiniPlayer() }
             .sheet(item: $selected) { MusicCollectionView(collection: $0) }
             .task(id: "\(music.authorized)-\(query)") { await search() }
+            .onChange(of: music.authorized) { _, authorized in
+                if !authorized {
+                    selected = nil
+                    albums = []
+                    songs = []
+                }
+            }
         }
     }
 
@@ -289,6 +299,9 @@ struct MusicCollectionView: View {
             .toolbar { Button("完成") { dismiss() } }
             .safeAreaInset(edge: .top) { MusicErrorBanner() }
             .safeAreaInset(edge: .bottom) { MusicMiniPlayer(expands: false) }
+            .onChange(of: music.authorized) { _, authorized in
+                if !authorized { songs = []; dismiss() }
+            }
             .task(id: attempt) {
                 loading = true
                 failure = nil

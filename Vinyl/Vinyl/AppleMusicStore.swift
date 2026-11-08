@@ -56,6 +56,7 @@ final class AppleMusicStore: ObservableObject {
         guard UserDefaults.standard.bool(forKey: connectionKey) else { return }
         authorization = MusicAuthorization.currentStatus
         guard authorized else {
+            showingPlayer = false
             albums = []
             playlists = []
             libraryLoaded = false

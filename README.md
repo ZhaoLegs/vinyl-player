@@ -1,5 +1,7 @@
 # Vinyl · 原视频对照修订版
 
+`feat/apple-music` 分支新增 Apple Music 授权、真实专辑/歌单、曲库搜索及播放控制。正常启动使用真实音乐入口，内置素材演示在“我的”中单独打开。配置、验证范围和未完成功能见 [Apple Music 接入说明](APPLE_MUSIC.md)；真实账号播放仍需开发者服务配置及签名真机验证。
+
 已读取用户提供的完整 [参考视频](https://github.com/ZhaoLegs/vinyl-player/releases/download/reference-assets/vinyl-reference.mp4)，提取全部 185 帧，并对打开、抽出、翻面、关闭逐帧核对。原片为 1600×1200、30fps、6.167 秒。
 
 ## 本轮修订
