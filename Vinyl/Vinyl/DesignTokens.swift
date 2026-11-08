@@ -37,6 +37,7 @@ enum DS {
     static let circleButton: CGFloat = 44
     static let controlInset: CGFloat = 16
     static let playerNavigationSpacing: CGFloat = 18
+    static let playbackIcon: CGFloat = 16
 
     static func coverName(_ index: Int) -> String {
         String(format: "cover_%02d", index)

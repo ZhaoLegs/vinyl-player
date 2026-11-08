@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct VinylApp: App {
     @StateObject private var music = AppleMusicStore()
+    @StateObject private var review = ReviewSettings()
     @Environment(\.scenePhase) private var scenePhase
     private var recordingDemo: Bool {
         ProcessInfo.processInfo.arguments.contains("--record-demo")
@@ -17,6 +18,7 @@ struct VinylApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .reviewHost()
                 .task(id: scenePhase) {
                     guard scenePhase == .active, !recordingDemo else { return }
                     await music.refreshAccess()
@@ -27,6 +29,7 @@ struct VinylApp: App {
                 }
                 .safeAreaInset(edge: .top) { MusicErrorBanner() }
                 .environmentObject(music)
+                .environmentObject(review)
         }
     }
 }

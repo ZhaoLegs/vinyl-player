@@ -10,6 +10,7 @@ struct CoverFrameKey: PreferenceKey {
 }
 
 struct LibraryView: View {
+    @StateObject private var playback = DemoPlaybackStore()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var presented = false
     @State private var closing = false
@@ -41,6 +42,7 @@ struct LibraryView: View {
                 homeContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .opacity(Double(1 - 0.72 * zoom))
+                    .reviewVisible(!presented)
 
                 AlbumDetailView(
                     coverName: DS.coverName(selectedIndex),
@@ -50,7 +52,6 @@ struct LibraryView: View {
                           : "Various Artists",
                     pull: pull,
                     flip: flip,
-                    waveProgress: 0.18,
                     contentAlpha: contentAlpha,
                     zoom: zoom,
                     isPresented: presented,
@@ -61,6 +62,7 @@ struct LibraryView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(contentAlpha > 0.5)
+                .reviewVisible(presented)
 
                 // Keep the view alive while SwiftUI interpolates the target state.
                 // Testing `zoom < 1` here removes it as soon as open() sets zoom = 1.
@@ -69,11 +71,26 @@ struct LibraryView: View {
                     .accessibilityHidden(true)
             }
             .coordinateSpace(name: "library")
+            .environmentObject(playback)
+            .task {
+                playback.load()
+                await playback.observe()
+            }
+            .onDisappear { playback.stop() }
             .onPreferenceChange(CoverFrameKey.self) { cellFrames = $0 }
             .onPreferenceChange(SleeveFrameKey.self) { sleeveFrame = $0 }
             .toolbar(presented ? .hidden : .visible, for: .tabBar)
             .task(id: demoToken) {
                 await runDemo()
+            }
+            .task {
+                guard ProcessInfo.processInfo.arguments.contains("--playback-check") else { return }
+                try? await Task.sleep(for: .seconds(2))
+                origin = cellFrames[AlbumData.featuredIndex] ?? .zero
+                open()
+                autoplay = false
+                demoToken += 1
+                await playback.acceptanceCheck()
             }
             .task {
                 guard recordingRequested && !recordingStarted else { return }
@@ -96,6 +113,7 @@ struct LibraryView: View {
                 origin = measuredOrigin
                 selectedIndex = AlbumData.featuredIndex
                 recordingMarker("started")
+                playback.playOrToggle(track: 0)
                 open()
             }
         }
@@ -112,8 +130,10 @@ struct LibraryView: View {
         HStack {
             // Assets logo mark inside system glass circle (not SF Symbol opticaldisc).
             GlassCircleButton(assetImage: "logo", iconSize: 17, accessibilityText: "Vinyl") { }
+                .reviewElement("header-left", "左侧圆按钮", font: 17, radius: 22)
             Spacer(minLength: 0)
             GlassCircleButton(systemImage: "cube", iconSize: 17, accessibilityText: "新建") { }
+                .reviewElement("header-right", "右侧圆按钮", font: 17, radius: 22)
         }
         .padding(.horizontal, DS.controlInset)
         .padding(.top, 6)
@@ -182,6 +202,9 @@ struct LibraryView: View {
                 .resizable()
                 .aspectRatio(1, contentMode: .fill)
                 .clipShape(RoundedRectangle(cornerRadius: DS.corner))
+                .coverShadow()
+                .reviewElement("cover-\(index)", "专辑封面 \(index)", radius: DS.corner,
+                               note: "阴影：黑色 12% / 模糊 4pt / 下移 3pt")
                 .background {
                     GeometryReader { geo in
                         Color.clear.preference(key: CoverFrameKey.self,

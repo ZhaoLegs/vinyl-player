@@ -5,7 +5,6 @@ struct Track: Identifiable {
     let side: String
     let bpm: Int
     let title: String
-    var isPlaying: Bool = false
 }
 
 enum AlbumData {
@@ -20,7 +19,7 @@ enum AlbumData {
     static let release = "SK_Eleven"
 
     static let tracks: [Track] = [
-        Track(side: "A", bpm: 140, title: "Deluka - Mind Games", isPlaying: true),
+        Track(side: "A", bpm: 140, title: "Deluka - Mind Games"),
         Track(side: "",  bpm: 140, title: "Deluka - Braunschweig"),
         Track(side: "B", bpm: 140, title: "Deluka - Everybody Talkin"),
         Track(side: "",  bpm: 139, title: "Deluka - Bunker")

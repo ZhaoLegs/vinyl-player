@@ -76,6 +76,38 @@ def smoke(app, output):
         run("xcrun", "simctl", "io", udid, "screenshot", str(output / "vinyl-home-layout.png"))
         run("xcrun", "simctl", "terminate", udid, "com.zhaolegs.Vinyl")
         marker.unlink(missing_ok=True)
+        print("Checking layout inspector", flush=True)
+        run("xcrun", "simctl", "launch", udid, "com.zhaolegs.Vinyl",
+            "--layout-check", "--review-check")
+        time.sleep(8)
+        run("xcrun", "simctl", "io", udid, "screenshot", str(output / "layout-inspector.png"))
+        layout = container / "Documents/layout-review.json"
+        if not layout.exists():
+            raise RuntimeError("Layout inspector did not produce measurements")
+        measurements = json.loads(layout.read_text())
+        indexed = {item["id"]: item for item in measurements}
+        assert abs(indexed["header-left"]["width"] - 44) < 1
+        assert abs(indexed["cover-2"]["x"] - indexed["cover-1"]["x"]
+                   - indexed["cover-1"]["width"] - 18) < 1
+        shutil.copy2(layout, output / "layout-review.json")
+        run("xcrun", "simctl", "terminate", udid, "com.zhaolegs.Vinyl")
+        print("Checking real local audio pause, seek and progress", flush=True)
+        playback_report = container / "Documents/playback-check.json"
+        playback_report.unlink(missing_ok=True)
+        def checked_playback(recorder):
+            deadline = time.monotonic() + 90
+            while not playback_report.exists():
+                if recorder.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError("Playback acceptance timed out")
+                time.sleep(.2)
+            report = json.loads(playback_report.read_text())
+            if report["result"] != "complete":
+                raise RuntimeError(f"Playback acceptance failed: {report}")
+            shutil.copy2(playback_report, output / "playback-check.json")
+            run("xcrun", "simctl", "io", udid, "screenshot", str(output / "playback-detail.png"))
+            time.sleep(1)
+        capture(udid, output, "playback-acceptance", ["--layout-check", "--playback-check"], checked_playback)
+        run("xcrun", "simctl", "terminate", udid, "com.zhaolegs.Vinyl")
         print("Warming built-in vinyl animation demo", flush=True)
         run("xcrun", "simctl", "launch", udid, "com.zhaolegs.Vinyl", "--record-demo")
         wait_for_demo(marker, timeout=180)

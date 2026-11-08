@@ -73,7 +73,7 @@ struct MusicLibraryView: View {
                             ContentUnavailableView("资料库暂无内容", systemImage: "square.stack",
                                                    description: Text("在 Apple Music 中收藏专辑或歌单，或前往搜索发现音乐。"))
                         } else {
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 16)], spacing: 20) {
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 18), count: 4), spacing: 20) {
                                 if showsPlaylists {
                                     ForEach(music.playlists) { playlist in
                                         collectionButton(.playlist(playlist))
@@ -115,7 +115,13 @@ struct MusicLibraryView: View {
             selected = collection
         } label: {
             VStack(alignment: .leading, spacing: 5) {
-                MusicArtwork(artwork: collection.artwork, size: 100)
+                GeometryReader { proxy in
+                    MusicArtwork(artwork: collection.artwork, size: proxy.size.width)
+                }
+                .aspectRatio(1, contentMode: .fit)
+                .coverShadow()
+                .reviewElement("music-cover-\(collection.id)", "资料库封面 \(collection.title)", radius: 6,
+                               note: "四列 · 水平间距 18pt · 阴影 12% / 4pt / 下移 3pt")
                 Text(collection.title).font(.caption.weight(.semibold)).lineLimit(2)
                 Text(collection.artist).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
@@ -238,7 +244,8 @@ struct MusicSongRow: View {
                 }
                 Spacer()
                 if music.currentSongID == song.id {
-                    Image(systemName: music.isPlaying ? "speaker.wave.2.fill" : "pause.fill")
+                    PlaybackSymbol(isPlaying: music.isPlaying)
+                        .reviewElement("music-track-\(song.id)", "当前曲目 SF 图标", font: DS.playbackIcon)
                 }
                 if song.playParameters == nil {
                     Text("不可播放").font(.caption).foregroundStyle(.secondary)
@@ -317,6 +324,7 @@ struct MusicCollectionView: View {
                 }
             }
         }
+        .reviewHost()
     }
 }
 
@@ -337,16 +345,16 @@ struct MusicMiniPlayer: View {
                         Spacer(minLength: 0)
                     }
                 }.buttonStyle(.plain).disabled(!expands)
-                Button(music.isPlaying ? "暂停" : "播放",
-                       systemImage: music.isPlaying ? "pause.fill" : "play.fill") {
+                SystemPlaybackButton(isPlaying: music.isPlaying, disabled: music.isPreparing) {
                     Task { await music.togglePlayback() }
-                }.labelStyle(.iconOnly).disabled(music.isPreparing)
+                }
                 Button("下一首", systemImage: "forward.end.fill") {
                     Task { await music.skip(next: true) }
                 }.labelStyle(.iconOnly).disabled(music.isPreparing)
             }
             .padding(.horizontal, 14)
             .glassCapsule(height: 56)
+            .reviewElement("home-player", "Apple Music 歌曲信息条", radius: 28)
             .padding(.horizontal, DS.controlInset)
             .padding(.top, 6)
             .padding(.bottom, expands ? DS.playerNavigationSpacing : 10)
@@ -358,8 +366,6 @@ struct MusicPlayerView: View {
     @EnvironmentObject private var music: AppleMusicStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var scrubbing = false
-    @State private var scrubValue = 0.0
     @State private var rotation = 0.0
 
     var body: some View {
@@ -383,27 +389,21 @@ struct MusicPlayerView: View {
                         Text(music.currentArtist).foregroundStyle(.secondary)
                     }
                     VStack {
-                        Slider(value: Binding(get: {
-                            scrubbing ? scrubValue : min(music.position, max(1, music.duration))
-                        }, set: { scrubValue = $0 }),
-                               in: 0...max(1, music.duration),
-                               onEditingChanged: { editing in
-                            if editing { scrubValue = music.position }
-                            scrubbing = editing
-                            if !editing { music.seek(to: scrubValue) }
-                        })
-                        .disabled(music.duration <= 0)
-                        .accessibilityLabel("播放进度")
+                        WaveformBar(position: music.position, duration: music.duration,
+                                    isPlaying: music.isPlaying,
+                                    toggle: { Task { await music.togglePlayback() } },
+                                    seek: { music.seek(to: $0) })
                         HStack {
-                            Text(musicTime(scrubbing ? scrubValue : music.position))
+                            Text(musicTime(music.position))
                             Spacer()
                             Text(musicTime(music.duration))
                         }.font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                     HStack(spacing: 42) {
                         Button("上一首", systemImage: "backward.end.fill") { Task { await music.skip(next: false) } }
-                        Button(music.isPlaying ? "暂停" : "播放",
-                               systemImage: music.isPlaying ? "pause.fill" : "play.fill") {
+                        SystemPlaybackButton(isPlaying: music.isPlaying, size: 30,
+                                             disabled: music.isPreparing || !music.hasCurrentTrack,
+                                             reviewID: "primary-playback-control") {
                             Task { await music.togglePlayback() }
                         }
                         Button("下一首", systemImage: "forward.end.fill") { Task { await music.skip(next: true) } }
@@ -430,6 +430,7 @@ struct MusicPlayerView: View {
                 }
             }
         }
+        .reviewHost()
     }
 }
 
@@ -454,13 +455,13 @@ struct MusicAccountView: View {
                 Section {
                     Button("查看黑胶动效演示") { showsDemo = true }
                 } footer: {
-                    Text("演示使用内置素材，不会播放音乐。")
+                    Text("演示可播放内置验收音频，非曲目列表中的原曲。")
                 }
             }
             .navigationTitle("我的")
             .safeAreaInset(edge: .bottom) { MusicMiniPlayer() }
             .fullScreenCover(isPresented: $showsDemo) {
-                LibraryView().overlay(alignment: .topTrailing) {
+                LibraryView().reviewHost().overlay(alignment: .topTrailing) {
                     Button("退出演示") { showsDemo = false }
                         .buttonStyle(.borderedProminent).padding()
                 }

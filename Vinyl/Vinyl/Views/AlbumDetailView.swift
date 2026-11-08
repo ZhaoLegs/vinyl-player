@@ -11,13 +11,13 @@ struct SleeveFrameKey: PreferenceKey {
 }
 
 struct AlbumDetailView: View {
+    @EnvironmentObject private var playback: DemoPlaybackStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var coverName: String = "sleeve_cutout"
     var title: String = AlbumData.title
     var artist: String = AlbumData.artist
     let pull: CGFloat
     let flip: Double
-    let waveProgress: Double
     let contentAlpha: Double
     let zoom: CGFloat
     let isPresented: Bool
@@ -52,6 +52,7 @@ struct AlbumDetailView: View {
                         .onTapGesture(perform: onToggleArtwork)
                 }
                 .frame(width: DS.sleeve, height: DS.sleeve)
+                .reviewElement("detail-artwork", "封套画面", radius: 0, note: "306pt 画布 · 抽出唱片 260pt")
                 .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom, closing: closing))
                 .background(
                     GeometryReader { geo in
@@ -74,7 +75,9 @@ struct AlbumDetailView: View {
 
                 Spacer(minLength: 8)
 
-                WaveformBar(progress: waveProgress)
+                WaveformBar(position: playback.position, duration: playback.duration,
+                            isPlaying: playback.isPlaying, levels: playback.levels,
+                            toggle: { playback.toggle() }, seek: { playback.seek(to: $0) })
                     .padding(.horizontal, DS.controlInset)
                     .padding(.bottom, 10)
                     .opacity(stage(0.24))
@@ -119,6 +122,7 @@ struct AlbumDetailView: View {
             // 形状 / 材质 / 按压高光 / 无障碍全部由系统渲染，工程内不自绘圆。
             GlassCircleButton(systemImage: "xmark", iconSize: 17,
                               accessibilityText: "关闭", action: onClose)
+                .reviewElement("header-left", "关闭圆按钮", font: 17, radius: 22)
 
             Spacer(minLength: 0)
 
@@ -126,9 +130,11 @@ struct AlbumDetailView: View {
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(DS.ink)
+                    .reviewElement("detail-title", "歌曲详情标题", font: 14)
                 Text(artist)
                     .font(.system(size: 11))
                     .foregroundStyle(DS.secondary)
+                    .reviewElement("detail-artist", "歌曲详情艺人", font: 11)
             }
 
             Spacer(minLength: 0)
@@ -136,6 +142,7 @@ struct AlbumDetailView: View {
             // 右上角同样是系统玻璃圆按钮（Button + .buttonStyle(.glass) + .buttonBorderShape(.circle)）
             GlassCircleButton(systemImage: "cube", iconSize: 17,
                               accessibilityText: "新建") { }
+                .reviewElement("header-right", "右侧圆按钮", font: 17, radius: 22)
         }
         .padding(.horizontal, DS.controlInset)
     }
@@ -154,26 +161,41 @@ struct AlbumDetailView: View {
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(DS.inkSoft)
             .padding(.bottom, 20)
+            .reviewElement("table-heading", "曲目表标题", font: 11, note: "Side 38pt · BPM 46pt · 图标列 18pt")
 
-            ForEach(AlbumData.tracks) { track in
+            ForEach(Array(AlbumData.tracks.enumerated()), id: \.offset) { index, track in
+                let active = index == playback.selectedTrack
+                Button { playback.playOrToggle(track: index) } label: {
                 HStack(spacing: 0) {
                     Text(track.side)
                         .frame(width: 38, alignment: .leading)
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(DS.ink)
+                        .reviewElement("track-side-\(index)", "曲目 \(index + 1) Side", font: 15)
                     Text("\(track.bpm)")
                         .frame(width: 46, alignment: .leading)
-                    Text(track.isPlaying ? "Ⅱ" : "▶")
+                        .reviewElement("track-bpm-\(index)", "曲目 \(index + 1) BPM", font: 15)
+                    PlaybackSymbol(isPlaying: active && playback.isPlaying)
                         .frame(width: 18, alignment: .leading)
-                        .font(.system(size: 10))
-                        .foregroundStyle(track.isPlaying ? DS.ink : DS.tertiary)
+                        .opacity(active ? 1 : 0.4)
+                        .reviewElement("track-symbol-\(index)", "曲目 \(index + 1) SF 图标",
+                                       font: DS.playbackIcon, note: "play.fill / pause.fill · semibold")
                     Text(track.title)
+                        .reviewElement("track-title-\(index)", "曲目 \(index + 1) 标题", font: 15)
                     Spacer(minLength: 0)
                 }
                 .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(track.isPlaying ? DS.ink : DS.secondary)
+                .foregroundStyle(active ? DS.ink : DS.secondary)
                 .frame(height: 36)
+                .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(active && playback.isPlaying ? "暂停" : "播放验收音频")，\(track.title)")
+                .reviewElement("track-row-\(index)", "曲目 \(index + 1) 行", note: "整行可点击")
             }
+            Text(playback.failure ?? "内置验收音频 · 非上述原曲")
+                .font(.system(size: 10)).foregroundStyle(DS.secondary)
+                .padding(.top, 4)
         }
     }
 
@@ -185,17 +207,21 @@ struct AlbumDetailView: View {
                 .resizable()
                 .frame(width: 58, height: 58)
                 .clipShape(RoundedRectangle(cornerRadius: 2))
+                .reviewElement("release-art", "发行信息图片", radius: 2)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(AlbumData.artist)
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(DS.ink)
+                    .reviewElement("release-artist", "发行艺人", font: 17)
                 Text(AlbumData.release)
                     .font(.system(size: 13))
                     .foregroundStyle(DS.secondary)
+                    .reviewElement("release-label", "发行厂牌", font: 13)
                 Text(AlbumData.catalog)
                     .font(.system(size: 10))
                     .foregroundStyle(DS.tertiary)
+                    .reviewElement("release-catalog", "发行编号", font: 10)
             }
             Spacer(minLength: 0)
         }

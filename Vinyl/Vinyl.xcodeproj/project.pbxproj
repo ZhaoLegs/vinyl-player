@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AB2000000000000000000001 /* ReviewTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000000000000000000002; };
+		AB2000000000000000000003 /* DemoPlaybackStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000000000000000000004; };
+		AB2000000000000000000005 /* acceptance-audio.wav in Resources */ = {isa = PBXBuildFile; fileRef = AB2000000000000000000006; };
 		AB1000000000000000000001 /* AppleMusicStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000002 /* AppleMusicStore.swift */; };
 		AB1000000000000000000003 /* AppleMusicViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000004 /* AppleMusicViews.swift */; };
 		ACF7C653C98B10BA2A31F6BD /* VinylApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 812F7662D71E6595B75EDD1C /* VinylApp.swift */; };
@@ -56,6 +59,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AB2000000000000000000002 /* ReviewTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewTools.swift; sourceTree = "<group>"; };
+		AB2000000000000000000004 /* DemoPlaybackStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoPlaybackStore.swift; sourceTree = "<group>"; };
+		AB2000000000000000000006 /* acceptance-audio.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = Resources/acceptance-audio.wav; sourceTree = "<group>"; };
 		AB1000000000000000000002 /* AppleMusicStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicStore.swift; sourceTree = "<group>"; };
 		AB1000000000000000000004 /* AppleMusicViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicViews.swift; sourceTree = "<group>"; };
 		812F7662D71E6595B75EDD1C /* VinylApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VinylApp.swift; sourceTree = "<group>"; };
@@ -177,6 +183,9 @@
 			isa = PBXGroup;
 			children = (
 				AB1000000000000000000002 /* AppleMusicStore.swift */,
+				AB2000000000000000000002 /* ReviewTools.swift */,
+				AB2000000000000000000004 /* DemoPlaybackStore.swift */,
+				AB2000000000000000000006 /* acceptance-audio.wav */,
 				AB1000000000000000000004 /* AppleMusicViews.swift */,
 				812F7662D71E6595B75EDD1C /* VinylApp.swift */,
 				2D87CBA14F66CAE3997FA5C5 /* ContentView.swift */,
@@ -263,6 +272,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				931A6168C2C53F997C7560AC /* cover_01.png in Resources */,
+				AB2000000000000000000005 /* acceptance-audio.wav in Resources */,
 				6FBAC860EBA20DFF0D8787DC /* cover_02.png in Resources */,
 				B42D2ED8E70CA2C710F05F3A /* cover_03.png in Resources */,
 				F5A041238559BAB6BE491C47 /* cover_04.png in Resources */,
@@ -308,6 +318,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				AB1000000000000000000001 /* AppleMusicStore.swift in Sources */,
+				AB2000000000000000000001 /* ReviewTools.swift in Sources */,
+				AB2000000000000000000003 /* DemoPlaybackStore.swift in Sources */,
 				AB1000000000000000000003 /* AppleMusicViews.swift in Sources */,
 				ACF7C653C98B10BA2A31F6BD /* VinylApp.swift in Sources */,
 				D185CB9900DE34E2206A20F3 /* ContentView.swift in Sources */,
