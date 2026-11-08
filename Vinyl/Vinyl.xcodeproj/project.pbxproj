@@ -380,6 +380,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Vinyl/Info.plist;
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "允许 Vinyl 读取你的音乐资料库并播放你选择的 Apple Music 歌曲。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -409,6 +410,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Vinyl/Info.plist;
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "允许 Vinyl 读取你的音乐资料库并播放你选择的 Apple Music 歌曲。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

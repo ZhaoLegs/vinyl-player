@@ -26,14 +26,7 @@ struct VinylApp: App {
                 .sheet(isPresented: $music.showingPlayer) {
                     MusicPlayerView().environmentObject(music)
                 }
-                .alert("Apple Music", isPresented: Binding(
-                    get: { music.errorMessage != nil },
-                    set: { if !$0 { music.errorMessage = nil } }
-                )) {
-                    Button("好") { music.errorMessage = nil }
-                } message: {
-                    Text(music.errorMessage ?? "")
-                }
+                .safeAreaInset(edge: .top) { MusicErrorBanner() }
         }
     }
 }

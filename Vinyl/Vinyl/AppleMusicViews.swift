@@ -43,7 +43,7 @@ struct MusicAccessView: View {
             } else if music.authorization != .restricted {
                 Button("连接 Apple Music") { Task { await music.connect() } }
                     .buttonStyle(.borderedProminent)
-                    .disabled(music.isLoading)
+                    .disabled(music.isConnecting)
             }
         }
     }
@@ -287,6 +287,7 @@ struct MusicCollectionView: View {
             .navigationTitle("Apple Music")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("完成") { dismiss() } }
+            .safeAreaInset(edge: .top) { MusicErrorBanner() }
             .safeAreaInset(edge: .bottom) { MusicMiniPlayer(expands: false) }
             .task(id: attempt) {
                 loading = true
@@ -404,6 +405,7 @@ struct MusicPlayerView: View {
             .navigationTitle("正在播放")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("完成") { dismiss() } }
+            .safeAreaInset(edge: .top) { MusicErrorBanner() }
             .task(id: music.isPlaying && !reduceMotion) {
                 guard music.isPlaying, !reduceMotion else { return }
                 while !Task.isCancelled {
@@ -455,4 +457,21 @@ struct MusicAccountView: View {
 private func musicTime(_ seconds: TimeInterval) -> String {
     let value = seconds.isFinite ? Int(max(0, seconds)) : 0
     return String(format: "%d:%02d", value / 60, value % 60)
+}
+
+/// Inline errors stay visible above presented collection/player content.
+struct MusicErrorBanner: View {
+    @EnvironmentObject private var music: AppleMusicStore
+    var body: some View {
+        if let message = music.errorMessage {
+            HStack(alignment: .top) {
+                Text(message).font(.callout)
+                Spacer(minLength: 8)
+                Button("关闭提示", systemImage: "xmark") { music.errorMessage = nil }
+                    .labelStyle(.iconOnly)
+            }
+            .padding()
+            .background(.regularMaterial)
+        }
+    }
 }

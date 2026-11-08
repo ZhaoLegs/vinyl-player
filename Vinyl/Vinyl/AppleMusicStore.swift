@@ -9,6 +9,7 @@ final class AppleMusicStore: ObservableObject {
     @Published private(set) var albums: [Album] = []
     @Published private(set) var playlists: [Playlist] = []
     @Published private(set) var isLoading = false
+    @Published private(set) var isConnecting = false
     @Published private(set) var hasMoreAlbums = false
     @Published private(set) var hasMorePlaylists = false
     @Published private(set) var canPlayCatalog = false
@@ -31,7 +32,9 @@ final class AppleMusicStore: ObservableObject {
     var hasCurrentTrack: Bool { !currentTitle.isEmpty }
 
     func connect() async {
-        guard !isLoading else { return }
+        guard !isConnecting else { return }
+        isConnecting = true
+        defer { isConnecting = false }
         authorization = await MusicAuthorization.request()
         await refreshAccess()
     }
@@ -174,6 +177,16 @@ final class AppleMusicStore: ObservableObject {
     }
 
     private func syncPlayback() {
+        guard authorized else {
+            currentTitle = ""
+            currentArtist = ""
+            currentArtwork = nil
+            currentSongID = nil
+            position = 0
+            duration = 0
+            isPlaying = false
+            return
+        }
         let entry = player.queue.currentEntry
         currentTitle = entry?.title ?? ""
         currentArtist = entry?.subtitle ?? ""
