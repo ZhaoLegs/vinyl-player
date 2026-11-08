@@ -11,6 +11,7 @@ struct SleeveFrameKey: PreferenceKey {
 }
 
 struct AlbumDetailView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var coverName: String = "sleeve_cutout"
     var title: String = AlbumData.title
     var artist: String = AlbumData.artist
@@ -18,6 +19,9 @@ struct AlbumDetailView: View {
     let flip: Double
     let waveProgress: Double
     let contentAlpha: Double
+    let zoom: CGFloat
+    let isPresented: Bool
+    var closing: Bool = false
     let motionStart: Date
     let onClose: () -> Void
     let onToggleArtwork: () -> Void
@@ -29,41 +33,43 @@ struct AlbumDetailView: View {
             Rectangle()
                 .fill(.ultraThinMaterial)
                 .opacity(0.35 * contentAlpha)
+                .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 header
                     .frame(height: 52)
-                    .padding(.top, 10)
+                    .padding(.top, 0)
                     .opacity(stage(0))
 
                 // 唱片角速度：0 → smoothstep 缓入 → 45°/s 匀速 → smoothstep 缓出 → 0。
                 // 累计角度由角速度解析积分得到，C¹ 连续，不再「突然开始 / 突然停住」。
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                TimelineView(.animation(paused: !isPresented || reduceMotion)) { timeline in
                     let elapsed = timeline.date.timeIntervalSince(motionStart)
-                    let spin = Angle.degrees(spinDegrees(elapsed))
+                    let spin = Angle.degrees(reduceMotion ? 0 : spinDegrees(elapsed))
                     SleeveArtwork(coverName: coverName, pull: pull, flip: flip, spin: spin)
                         .frame(width: DS.sleeve, height: DS.sleeve)
                         .contentShape(Rectangle())
                         .onTapGesture(perform: onToggleArtwork)
                 }
                 .frame(width: DS.sleeve, height: DS.sleeve)
-                .padding(.top, 22)
-                .opacity(stage(0.04))
+                .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom, closing: closing))
                 .background(
                     GeometryReader { geo in
                         Color.clear.preference(key: SleeveFrameKey.self,
                                                value: geo.frame(in: .named("library")))
                     }
                 )
+                // Breathing room under sleeve → track table (preview dtable gap ≈ 30pt).
+                .padding(.top, 20)
 
                 trackTable
-                    .padding(.horizontal, 28)
-                    .padding(.top, 26)
+                    .padding(.horizontal, 21)
+                    .padding(.top, 40)
                     .opacity(stage(0.09))
 
                 releaseCard
-                    .padding(.horizontal, 28)
-                    .padding(.top, 28)
+                    .padding(.horizontal, 21)
+                    .padding(.top, 22)
                     .opacity(stage(0.17))
 
                 Spacer(minLength: 8)
@@ -86,7 +92,7 @@ struct AlbumDetailView: View {
     /// 缓入段 ∫peak·smoothstep = peak·ramp·S(u)；匀速段 peak·Δt；
     /// 缓出段 ∫peak·(1-smoothstep) = peak·ramp·(u - S(u))。
     private func spinDegrees(_ t: TimeInterval) -> Double {
-        let start = 0.9, end = 2.5, ramp = 0.17, peak = Motion.spinPeak
+        let start = 1.2, end = 3.067, ramp = 0.17, peak = Motion.spinPeak
         guard t > start else { return 0 }
         let S = { (u: Double) -> Double in u * u * u - 0.5 * u * u * u * u }
 
@@ -111,7 +117,8 @@ struct AlbumDetailView: View {
         HStack(spacing: 0) {
             // 苹果系统控件库：GlassButtonStyle（.buttonStyle(.glass)），
             // 形状 / 材质 / 按压高光 / 无障碍全部由系统渲染，工程内不自绘圆。
-            SystemIconButton(title: "关闭", systemName: "xmark", action: onClose)
+            GlassCircleButton(systemImage: "xmark", iconSize: 17,
+                              accessibilityText: "关闭", action: onClose)
 
             Spacer(minLength: 0)
 
@@ -127,7 +134,8 @@ struct AlbumDetailView: View {
             Spacer(minLength: 0)
 
             // 右上角同样是系统玻璃圆按钮（Button + .buttonStyle(.glass) + .buttonBorderShape(.circle)）
-            GlassCircleButton(systemImage: "cube", accessibilityText: "新建") { }
+            GlassCircleButton(systemImage: "cube", iconSize: 17,
+                              accessibilityText: "新建") { }
         }
         .padding(.horizontal, 20)
     }
@@ -143,15 +151,15 @@ struct AlbumDetailView: View {
                 Text("Tracklist")
                 Spacer(minLength: 0)
             }
-            .font(.system(size: 10, weight: .bold))
+            .font(.system(size: 11, weight: .medium))
             .foregroundStyle(DS.inkSoft)
-            .padding(.bottom, 12)
+            .padding(.bottom, 20)
 
             ForEach(AlbumData.tracks) { track in
                 HStack(spacing: 0) {
                     Text(track.side)
                         .frame(width: 38, alignment: .leading)
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(DS.ink)
                     Text("\(track.bpm)")
                         .frame(width: 46, alignment: .leading)
@@ -162,9 +170,9 @@ struct AlbumDetailView: View {
                     Text(track.title)
                     Spacer(minLength: 0)
                 }
-                .font(.system(size: 12.5, weight: track.isPlaying ? .semibold : .regular))
+                .font(.system(size: 15, weight: .regular))
                 .foregroundStyle(track.isPlaying ? DS.ink : DS.secondary)
-                .frame(height: 33)
+                .frame(height: 36)
             }
         }
     }
@@ -175,15 +183,15 @@ struct AlbumDetailView: View {
         HStack(spacing: 12) {
             Image("small_art")
                 .resizable()
-                .frame(width: 60, height: 60)
+                .frame(width: 58, height: 58)
                 .clipShape(RoundedRectangle(cornerRadius: 2))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(AlbumData.artist)
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(DS.ink)
                 Text(AlbumData.release)
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
                     .foregroundStyle(DS.secondary)
                 Text(AlbumData.catalog)
                     .font(.system(size: 10))

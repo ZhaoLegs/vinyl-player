@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 上报被点击封面在 "library" 坐标空间中的 frame，作为 zoom 转场起点。
 struct CoverFrameKey: PreferenceKey {
@@ -9,7 +10,10 @@ struct CoverFrameKey: PreferenceKey {
 }
 
 struct LibraryView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var presented = false
+    @State private var closing = false
+    @State private var autoplay = false
     @State private var zoom: CGFloat = 0
     @State private var contentAlpha: Double = 0
     @State private var blurRadius: CGFloat = 0
@@ -22,21 +26,21 @@ struct LibraryView: View {
     @State private var flip: Double = 0
     @State private var demoToken = 0
     @State private var motionStart: Date = .distantPast
+    @State private var recordingStarted = false
+    private var recordingRequested: Bool {
+        ProcessInfo.processInfo.arguments.contains("--record-demo")
+    }
 
     // 网格几何按原片实测：4 列、列宽 72pt、间距 17pt、左右 27pt
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 17), count: 4)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 18), count: 4)
 
     var body: some View {
         GeometryReader { _ in
             ZStack(alignment: .topLeading) {
+                AuroraBackground()
                 homeContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .blur(radius: blurRadius)
                     .opacity(Double(1 - 0.72 * zoom))
-
-                if presented && zoom < 0.995 {
-                    flyingCover
-                }
 
                 AlbumDetailView(
                     coverName: DS.coverName(selectedIndex),
@@ -48,18 +52,51 @@ struct LibraryView: View {
                     flip: flip,
                     waveProgress: 0.18,
                     contentAlpha: contentAlpha,
+                    zoom: zoom,
+                    isPresented: presented,
+                    closing: closing,
                     motionStart: motionStart,
                     onClose: { close() },
                     onToggleArtwork: { toggleArtwork() }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(contentAlpha > 0.5)
+
+                // Keep the view alive while SwiftUI interpolates the target state.
+                // Testing `zoom < 1` here removes it as soon as open() sets zoom = 1.
+                flyingCover
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
             .coordinateSpace(name: "library")
             .onPreferenceChange(CoverFrameKey.self) { cellFrames = $0 }
             .onPreferenceChange(SleeveFrameKey.self) { sleeveFrame = $0 }
+            .toolbar(presented ? .hidden : .visible, for: .tabBar)
             .task(id: demoToken) {
                 await runDemo()
+            }
+            .task {
+                guard recordingRequested && !recordingStarted else { return }
+                recordingStarted = true
+                let requiredImages = (1...AlbumData.coverCount).map(DS.coverName)
+                    + ["planet", "planet_back", "small_art", "sleeve_cutout"]
+                let missing = requiredImages.filter { UIImage(named: $0) == nil }
+                guard missing.isEmpty else {
+                    recordingMarker("failed: missing images: " + missing.joined(separator: ", "))
+                    return
+                }
+                // Give the scene time to report actual cover and sleeve geometry.
+                do { try await Task.sleep(nanoseconds: 1_500_000_000) }
+                catch { return }
+                guard let measuredOrigin = cellFrames[AlbumData.featuredIndex],
+                      sleeveFrame != .zero, !reduceMotion else {
+                    recordingMarker("failed")
+                    return
+                }
+                origin = measuredOrigin
+                selectedIndex = AlbumData.featuredIndex
+                recordingMarker("started")
+                open()
             }
         }
     }
@@ -67,33 +104,35 @@ struct LibraryView: View {
     // MARK: - 首页
 
     private var homeContent: some View {
-        VStack(spacing: 0) {
-            header
-            libraryScroller
-        }
+        libraryScroller
     }
 
     /// 左右上角：一个圆形玻璃底 + 一个 SF Symbol，全部由系统按钮样式绘制
     private var header: some View {
         HStack {
-            GlassCircleButton(systemImage: "opticaldisc", accessibilityText: "Vinyl") { }
+            // Assets logo mark inside system glass circle (not SF Symbol opticaldisc).
+            GlassCircleButton(assetImage: "logo", iconSize: 17, accessibilityText: "Vinyl") { }
             Spacer(minLength: 0)
-            GlassCircleButton(systemImage: "cube", accessibilityText: "新建") { }
+            GlassCircleButton(systemImage: "cube", iconSize: 17, accessibilityText: "新建") { }
         }
         .padding(.horizontal, 27)
         .padding(.top, 6)
     }
 
-    /// 底部「渐变高斯模糊」——iOS 26 起是系统能力，不是自绘遮罩。
+    /// Both bars belong to the scroll view, so the system can soften both edges.
     @ViewBuilder
     private var libraryScroller: some View {
         if #available(iOS 26.0, *) {
             gridScroll
                 // 原生 scroll edge effect：.soft = 渐进模糊，随内容接近边缘逐渐增强
-                .scrollEdgeEffectStyle(.soft, for: .bottom)
+                .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+                .safeAreaBar(edge: .top, spacing: 0) {
+                    header
+                        .padding(.bottom, 6)
+                }
                 // safeAreaBar 会把 mini player 贴到底部安全区，并**自动把滚动边缘效果延伸到它**，
                 // 所以不需要再手写 LinearGradient mask。
-                .safeAreaBar(edge: .bottom) {
+                .safeAreaBar(edge: .bottom, spacing: 0) {
                     MiniPlayer()
                         .padding(.horizontal, 16)
                         .padding(.bottom, 6)
@@ -102,6 +141,7 @@ struct LibraryView: View {
             // iOS 17–25 没有该 API：退回渐变遮罩（纯外观降级）。
             // 需要真模糊时接 VariableBlur / Variablur，见 README「底部渐变模糊」一节。
             VStack(spacing: 0) {
+                header
                 gridScroll
                     .mask(
                         LinearGradient(stops: [
@@ -119,15 +159,16 @@ struct LibraryView: View {
 
     private var gridScroll: some View {
         ScrollView(showsIndicators: false) {
-            LazyVGrid(columns: columns, spacing: 17) {
+            LazyVGrid(columns: columns, spacing: 18) {
                 ForEach(1...AlbumData.coverCount, id: \.self) { index in
                     coverCell(index)
                 }
             }
-            .padding(.horizontal, 27)
+            .padding(.horizontal, 20.5)
             .padding(.top, 12)
             .padding(.bottom, 8)
         }
+        .blur(radius: blurRadius)
     }
 
     private func coverCell(_ index: Int) -> some View {
@@ -160,17 +201,10 @@ struct LibraryView: View {
         let end = sleeveFrame == .zero
             ? CGRect(x: 43.5, y: 130, width: DS.sleeve, height: DS.sleeve)
             : sleeveFrame
-        let width = start.width + (end.width - start.width) * zoom
-        let x = start.minX + (end.minX - start.minX) * zoom
-        let y = start.minY + (end.minY - start.minY) * zoom
-
         return Image(DS.coverName(selectedIndex))
             .resizable()
-            .frame(width: width, height: width)
-            .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - zoom) + 2 * zoom))
-            .shadow(color: .black.opacity(0.25), radius: 20 * zoom, y: 8 * zoom)
-            .offset(x: x, y: y)
-            .opacity(Double(zoom > 0.9 ? (1 - zoom) * 10 : 1))
+            .modifier(CoverFlight(progress: zoom, start: start, end: end, closing: closing))
+            .opacity(presented && !reduceMotion ? 1 : 0)
     }
 
     // MARK: - 动效时序（对应原片 185 帧 / 30fps）
@@ -178,61 +212,144 @@ struct LibraryView: View {
     private func open() {
         guard !presented else { return }
         presented = true
+        closing = false
+        autoplay = true
+        pull = 0
+        flip = 0
         motionStart = Date()
         // 一条主 spring 驱动封面缩放与背景模糊（同一进度，不再各跑一条曲线）；
         // 详情文字用带 delay 的从曲线错峰淡入，形成「先放大 → 再显内容」的节奏。
-        withAnimation(Motion.animation(Motion.open)) {
+        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open)) {
             zoom = 1
             blurRadius = 18
         }
-        withAnimation(.easeOut(duration: 0.19).delay(0.08)) {
+        // Detail copy fades in after the cover has started moving (reference frames 9–16).
+        withAnimation(.easeInOut(duration: 7.0 / 30).delay(4.0 / 30)) {
             contentAlpha = 1
         }
         demoToken += 1
     }
 
     private func close() {
-        withAnimation(Motion.animation(Motion.close)) {
+        guard presented && !closing else { return }
+        closing = true
+        autoplay = false
+        demoToken += 1
+        withAnimation(
+            reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.close),
+            completionCriteria: .removed
+        ) {
             zoom = 0
             blurRadius = 0
-            contentAlpha = 0
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+        } completion: {
             presented = false
+            closing = false
             pull = 0
             flip = 0
+            recordingMarker("complete")
+        }
+        withAnimation(.easeInOut(duration: 6.0 / 30).delay(2.0 / 30)) {
+            contentAlpha = 0
         }
     }
 
     private func toggleArtwork() {
+        guard presented && !closing else { return }
+        autoplay = false
+        demoToken += 1
         let pulling = pull < 0.5
-        withAnimation(Motion.animation(pulling ? Motion.pull : Motion.retract)) {
+        withAnimation(reduceMotion ? nil : Motion.animation(pulling ? Motion.pull : Motion.retract)) {
             pull = pulling ? 1 : 0
         }
     }
 
-    /// f17–f43 静止 → f44–f51 抽出 → f52–f91 旋转 → f92–f96 收回
-    /// → f97–f115 静止 → f116–f119 3D 翻转 → f120–f165 静止 → f166 关闭
+    /// Source f5 is the opening trigger. Offsets below are relative to that trigger.
     @MainActor
     private func runDemo() async {
-        guard presented else { return }
-        try? await Task.sleep(nanoseconds: 900_000_000)
-        guard presented else { return }
+        guard presented && !closing && autoplay && !reduceMotion else { return }
+        guard await pause(1_200_000_000) else { return }
         withAnimation(Motion.animation(Motion.pull)) { pull = 1 }
 
-        try? await Task.sleep(nanoseconds: 1_600_000_000)
-        guard presented else { return }
+        guard await pause(1_666_666_667) else { return }
         withAnimation(Motion.animation(Motion.retract)) { pull = 0 }
 
-        try? await Task.sleep(nanoseconds: 700_000_000)
-        guard presented else { return }
-        // 翻转也走 spring，避免 easeInOut 在 4 帧内硬起硬停
-        withAnimation(Motion.animation(Motion.flip)) { flip = 86 }
-        try? await Task.sleep(nanoseconds: 70_000_000)
-        withAnimation(Motion.animation(Motion.flip)) { flip = 0 }
+        guard await pause(766_666_667) else { return }
+        // The source turns to side B, with readable artwork and a different label.
+        withAnimation(Motion.animation(Motion.flip)) { flip = 180 }
 
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
-        guard presented else { return }
+        guard await pause(1_700_000_000) else { return }
         close()
+    }
+
+    @MainActor
+    private func pause(_ nanoseconds: UInt64) async -> Bool {
+        do {
+            try await Task.sleep(nanoseconds: nanoseconds)
+            return !Task.isCancelled && presented && !closing && autoplay
+        } catch {
+            return false
+        }
+    }
+
+    /// Only the explicit simulator recording launch writes these completion markers.
+    private func recordingMarker(_ phase: String) {
+        guard recordingRequested else { return }
+        guard let folder = FileManager.default.urls(for: .documentDirectory,
+                                                     in: .userDomainMask).first else { return }
+        try? phase.write(to: folder.appendingPathComponent("vinyl-recording-state.txt"),
+                         atomically: true, encoding: .utf8)
+    }
+}
+
+/// Derive geometry and handoff opacity from the *interpolated* presentation value.
+private struct CoverFlight: AnimatableModifier {
+    var progress: CGFloat
+    let start: CGRect
+    let end: CGRect
+    var closing: Bool = false
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let linear = min(1, max(0, progress))
+        let along = closing ? (1 - linear) : linear
+        let sourceFrame = Double(closing ? (165 + along * 20) : (5 + along * 22))
+        let sample = Motion.sample(closing ? Motion.closePath : Motion.openPath, frame: sourceFrame)
+        let span = Motion.referenceSleeveSize - Motion.referenceCellSize
+        let amount = CGFloat((sample.size - Motion.referenceCellSize) / span)
+        let clamped = min(1, max(0, amount))
+        let refStraightX = Motion.referenceCell.x + (Motion.referenceSleeve.x - Motion.referenceCell.x) * clamped
+        let refStraightY = Motion.referenceCell.y + (Motion.referenceSleeve.y - Motion.referenceCell.y) * clamped
+        let nativeX = start.minX + (end.minX - start.minX) * clamped
+        let nativeY = start.minY + (end.minY - start.minY) * clamped
+        let width = start.width + (end.width - start.width) * amount
+        let turn = closing ? Motion.sampleYaw(frame: sourceFrame) : 0
+        let visible = closing ? 1.0 : (1 - min(1, max(0, (linear - 0.88) / 0.12)))
+        content
+            .frame(width: width, height: width)
+            .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - clamped) + 2 * clamped))
+            .rotation3DEffect(.degrees(turn), axis: (x: 0, y: 1, z: 0), perspective: 0.55)
+            .shadow(color: .black.opacity(0.25), radius: 20 * clamped, y: 8 * clamped)
+            .offset(x: nativeX + (sample.x - refStraightX),
+                    y: nativeY + (sample.y - refStraightY))
+            .opacity(visible)
+    }
+}
+
+struct ArtworkHandoff: AnimatableModifier {
+    var progress: CGFloat
+    var closing: Bool = false
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let shown = closing ? 0 : min(1, max(0, (progress - 0.88) / 0.12))
+        content.opacity(Double(shown))
     }
 }

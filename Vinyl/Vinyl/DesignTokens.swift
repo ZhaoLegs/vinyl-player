@@ -23,12 +23,12 @@ enum DS {
 
     // 尺寸：以 iPhone 393pt 宽为基准，与原片 480px 屏幕按 0.819 换算
     static let sleeve: CGFloat     = 306
-    static let sleeveTop: CGFloat  = 130
-    // 唱片直径 = 封套的 0.88（原片 f052 实测 329px / 373px）。
-    // 抽出后封套缩到 0.85，两张盘上下边缘几乎齐平，圆心始终在同一条水平中线上。
-    static let disc: CGFloat       = 269
+    static let sleeveTop: CGFloat  = 126
+    // 抽出后封套缩到 (1 - pullScale)=0.85 → 260.1pt；唱片直径取 260，
+    // 上下与缩放后的封套齐平（不再纵向溢出），圆心始终在同一条水平中线上。
+    static let disc: CGFloat       = 260
     static let discPull: CGFloat   = 56
-    static let sleevePull: CGFloat = 54
+    static let sleevePull: CGFloat = 58
     static let pullScale: CGFloat  = 0.15
     static let planet: CGFloat     = 86
     static let corner: CGFloat     = 5
@@ -39,7 +39,7 @@ enum DS {
     }
 }
 
-// MARK: - 动效曲线（与浏览器原型逐帧 1:1 对齐）
+// MARK: - 原生动效（时长按原片校正，曲线仍需真机核对）
 //
 // 关键原则：一个阶段 = 一条主 spring 曲线，所有属性共享同一进度，
 // 只按 delay 做错峰；绝不让 blur / zoom / opacity 各跑一条不同的曲线
@@ -54,23 +54,108 @@ enum Motion {
         let response: Double       // 秒
         let damping: Double        // dampingFraction，<1 有过冲
         let duration: Double       // 该阶段在 30fps 下的实际秒数
-        var isPowerCurve: Bool = false   // 打开段：原片实测为加速幂函数，非 spring
+        var followsMeasuredPath: Bool = false
     }
 
-    // 帧窗口 → spring 参数（与 preview/index.html 的 CURVES 完全一致）
-    // duration 由帧数 / 30 得出，仅用于浏览器原型把 spring 归一化到帧窗口。
-    // 打开：原片逐帧实测是「缓慢加速 → 近似线性」（72→104→129→156→191→229→266→306pt），
-    // 不是前快后慢的过冲 spring。用 .easeIn 表示同一条加速曲线。
-    static let open    = Spring(response: 1.35, damping: 0, duration: 8.0 / 30, isPowerCurve: true)
-    static let pull    = Spring(response: 0.18, damping: 0.62, duration: 8.0 / 30)   // f044–051，过冲 8.3%
-    static let retract = Spring(response: 0.14, damping: 0.90, duration: 5.0 / 30)   // f092–096，几乎无过冲
-    static let flip    = Spring(response: 0.10, damping: 0.92, duration: 4.0 / 30)   // f116–119
-    static let close   = Spring(response: 0.22, damping: 0.72, duration: 10.0 / 30)  // f166–175，过冲 3.8%
+    /// Stage windows measured from the attached reference (30fps, frame 1 at t=0).
+    /// Open is source frames 5→27, pull 41→55, retract 91→97, flip 114→125, close 165→185.
+    /// These replace the earlier 8/30 and 10/30 guesses. Not a claim of pixel-perfect playback.
+    static let open    = Spring(response: 0, damping: 0, duration: 22.0 / 30, followsMeasuredPath: true)
+    static let pull    = Spring(response: 0.28, damping: 0.82, duration: 14.0 / 30)
+    static let retract = Spring(response: 0.22, damping: 0.92, duration: 6.0 / 30)
+    static let flip    = Spring(response: 0.10, damping: 0.92, duration: 11.0 / 30)
+    static let close   = Spring(response: 0.34, damping: 0.86, duration: 20.0 / 30, followsMeasuredPath: true)
 
     static func animation(_ s: Spring) -> Animation {
-        if s.isPowerCurve { return .easeIn(duration: s.duration) }
-        return .spring(response: s.response, dampingFraction: s.damping)
+        // Open/close progress is linear time so CoverFlight can follow OPEN_PATH / CLOSE_PATH.
+        if s.followsMeasuredPath { return .linear(duration: s.duration) }
+        return .timingCurve(0.42, 0.0, 0.2, 1.0, duration: s.duration)
     }
+
+    struct SleeveKey {
+        var frame: Double
+        var x: Double
+        var y: Double
+        var size: Double
+    }
+
+    // preview/index.html OPEN_PATH / CLOSE_PATH, measured from the reference video.
+    static let openPath: [SleeveKey] = [
+        .init(frame: 5, x: 20.3, y: 391.3, size: 73.7),
+        .init(frame: 6, x: 23.1, y: 388.3, size: 75.2),
+        .init(frame: 7, x: 33, y: 376.6, size: 79.8),
+        .init(frame: 8, x: 48.9, y: 354.5, size: 89.6),
+        .init(frame: 9, x: 63.5, y: 326.9, size: 104.7),
+        .init(frame: 10, x: 73.3, y: 299.1, size: 122.1),
+        .init(frame: 11, x: 78.4, y: 273.5, size: 141),
+        .init(frame: 12, x: 79.6, y: 249.6, size: 160.9),
+        .init(frame: 13, x: 77.8, y: 228.3, size: 182),
+        .init(frame: 14, x: 73.5, y: 208.9, size: 204.2),
+        .init(frame: 15, x: 67.8, y: 191.2, size: 226.7),
+        .init(frame: 16, x: 61.7, y: 175.5, size: 247.8),
+        .init(frame: 17, x: 55.5, y: 161, size: 267.4),
+        .init(frame: 18, x: 50.2, y: 148.4, size: 283.7),
+        .init(frame: 19, x: 45.4, y: 138.1, size: 297.1),
+        .init(frame: 20, x: 42.3, y: 130.9, size: 306.5),
+        .init(frame: 21, x: 40.2, y: 126.4, size: 312.5),
+        .init(frame: 22, x: 39.3, y: 124.6, size: 315.4),
+        .init(frame: 23, x: 39.4, y: 124.7, size: 315.6),
+        .init(frame: 24, x: 39.9, y: 125.6, size: 314.8),
+        .init(frame: 25, x: 40.1, y: 126.1, size: 314.4),
+        .init(frame: 27, x: 39.5, y: 126, size: 314)
+    ]
+
+    static let closePath: [SleeveKey] = [
+        .init(frame: 165, x: 39.5, y: 126, size: 314),
+        .init(frame: 166, x: 47, y: 135, size: 300),
+        .init(frame: 167, x: 67, y: 155, size: 267),
+        .init(frame: 168, x: 82, y: 191, size: 220),
+        .init(frame: 169, x: 88, y: 232, size: 180),
+        .init(frame: 170, x: 92, y: 270, size: 151),
+        .init(frame: 171, x: 79, y: 296, size: 128),
+        .init(frame: 172, x: 67.4, y: 317.3, size: 111),
+        .init(frame: 173, x: 59.5, y: 334.2, size: 101),
+        .init(frame: 175, x: 48.6, y: 354.9, size: 88.8),
+        .init(frame: 179, x: 31.9, y: 378.2, size: 78.9),
+        .init(frame: 185, x: 20.3, y: 391.3, size: 73.7)
+    ]
+
+    static let closeYaw: [(frame: Double, degrees: Double)] = [
+        (165, 0), (166, -18), (167, -43), (168, -71), (169, -94),
+        (170, -122), (171, -144), (172, -162), (173, -178), (178, -180), (185, -180)
+    ]
+
+    static func sample(_ keys: [SleeveKey], frame: Double) -> SleeveKey {
+        if frame <= keys[0].frame { return keys[0] }
+        if frame >= keys[keys.count - 1].frame { return keys[keys.count - 1] }
+        var index = 0
+        while index < keys.count - 1 && frame >= keys[index + 1].frame { index += 1 }
+        let a = keys[index]
+        let b = keys[index + 1]
+        let t = (frame - a.frame) / (b.frame - a.frame)
+        return SleeveKey(frame: frame,
+                         x: a.x + (b.x - a.x) * t,
+                         y: a.y + (b.y - a.y) * t,
+                         size: a.size + (b.size - a.size) * t)
+    }
+
+    static func sampleYaw(frame: Double) -> Double {
+        let keys = closeYaw
+        if frame <= keys[0].frame { return keys[0].degrees }
+        if frame >= keys[keys.count - 1].frame { return keys[keys.count - 1].degrees }
+        var index = 0
+        while index < keys.count - 1 && frame >= keys[index + 1].frame { index += 1 }
+        let a = keys[index]
+        let b = keys[index + 1]
+        let t = (frame - a.frame) / (b.frame - a.frame)
+        return a.degrees + (b.degrees - a.degrees) * t
+    }
+
+    /// Reference cell and settled sleeve, used only to recover the measured arc.
+    static let referenceCell = CGPoint(x: 20.3, y: 391.3)
+    static let referenceSleeve = CGPoint(x: 39.5, y: 126)
+    static let referenceCellSize = 73.7
+    static let referenceSleeveSize = 314.0
 
     /// 唱片角速度：起步缓入 → 45°/s 匀速 → 收尾缓出，累计角度 C¹ 连续。
     static let spinPeak = 45.0            // 度/秒
@@ -155,36 +240,49 @@ struct SystemIconButton: View {
 /// 圆底和外圈高光全部由系统绘制；label 里只有一个 SF Symbol。
 /// （iOS 17–25 回退到 `.ultraThinMaterial` + 描边，仅为外观降级，逻辑不变。）
 struct GlassCircleButton: View {
-    let systemImage: String
-    var size: CGFloat = 44
-    var iconSize: CGFloat = 20
+    var systemImage: String? = nil
+    var assetImage: String? = nil
+    /// Apple toolbar / glass circular control visual size (~36pt).
+    var size: CGFloat = 36
+    var iconSize: CGFloat = 15
     var accessibilityText: String = ""
     let action: () -> Void
 
     @ViewBuilder
-    var body: some View {
-        if #available(iOS 26.0, *) {
-            Button(action: action) {
+    private var label: some View {
+        // Glyph only. The glass style supplies the circular control's own padding.
+        // A 36/44pt frame here is added on top of that padding and inflates the button.
+        Group {
+            if let assetImage {
+                Image(assetImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: iconSize, height: iconSize)
+            } else if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.system(size: iconSize, weight: .regular))
-                    .frame(width: size, height: size)
-                    .contentShape(.circle)
+                    .font(.system(size: iconSize, weight: .medium))
             }
-            .buttonStyle(.glass)              // ← 苹果系统控件库
-            .buttonBorderShape(.circle)       // ← 让系统把玻璃底裁成正圆
-            .tint(DS.ink)
-            .accessibilityLabel(accessibilityText.isEmpty ? systemImage : accessibilityText)
+        }
+        .contentShape(.circle)
+    }
+
+    @ViewBuilder
+    var body: some View {
+        let a11y = accessibilityText.isEmpty ? (assetImage ?? systemImage ?? "button") : accessibilityText
+        if #available(iOS 26.0, *) {
+            Button(action: action) { label }
+                .buttonStyle(.glass)              // ← 苹果系统控件库
+                .buttonBorderShape(.circle)       // ← 让系统把玻璃底裁成正圆
+                .tint(DS.ink)
+                .accessibilityLabel(a11y)
         } else {
             Button(action: action) {
-                Image(systemName: systemImage)
-                    .font(.system(size: iconSize, weight: .regular))
-                    .foregroundStyle(DS.ink)
-                    .frame(width: size, height: size)
+                label.foregroundStyle(DS.ink)
                     .background(.ultraThinMaterial, in: Circle())
                     .overlay(Circle().strokeBorder(.white.opacity(0.65), lineWidth: 0.8))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(accessibilityText.isEmpty ? systemImage : accessibilityText)
+            .accessibilityLabel(a11y)
         }
     }
 }
@@ -194,8 +292,8 @@ struct SystemImageButton: View {
     let title: String
     let imageName: String
     var size: CGFloat = 36
-    var iconSize: CGFloat = 26
-    var opacity: Double = 0.55
+    var iconSize: CGFloat = 18
+    var opacity: Double = 0.85
     let action: () -> Void
 
     @ViewBuilder
@@ -205,12 +303,18 @@ struct SystemImageButton: View {
                 label
             }
             .buttonStyle(.glass)                     // ← 苹果系统控件库
+            .buttonBorderShape(.circle)
+            .tint(DS.ink)
+            .accessibilityLabel(title)
         } else {
             Button(action: action) {
                 label
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.65), lineWidth: 0.8))
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
             .tint(DS.ink)
+            .accessibilityLabel(title)
         }
     }
 
@@ -220,7 +324,7 @@ struct SystemImageButton: View {
             .scaledToFit()
             .frame(width: iconSize, height: iconSize)
             .opacity(opacity)
-            .frame(width: size, height: size)
+            .contentShape(.circle)
     }
 }
 
@@ -296,17 +400,22 @@ enum TabBarAppearance {
             appearance.backgroundColor = UIColor.white.withAlphaComponent(0.55)
             appearance.shadowColor = .clear
 
+            // Icons only — hide any residual tab titles.
+            let hiddenTitle: [NSAttributedString.Key: Any] = [
+                .foregroundColor: UIColor.clear,
+                .font: UIFont.systemFont(ofSize: 0.01)
+            ]
+
             let normal = appearance.stackedLayoutAppearance.normal
             normal.iconColor = UIColor(red: 26.0 / 255, green: 26.0 / 255, blue: 28.0 / 255, alpha: 0.72)
-            normal.titleTextAttributes = [
-                .foregroundColor: UIColor(red: 139.0 / 255, green: 135.0 / 255, blue: 131.0 / 255, alpha: 1)
-            ]
+            normal.titleTextAttributes = hiddenTitle
 
             let selected = appearance.stackedLayoutAppearance.selected
             selected.iconColor = UIColor(red: 26.0 / 255, green: 26.0 / 255, blue: 28.0 / 255, alpha: 1)
-            selected.titleTextAttributes = [
-                .foregroundColor: UIColor(red: 26.0 / 255, green: 26.0 / 255, blue: 28.0 / 255, alpha: 1)
-            ]
+            selected.titleTextAttributes = hiddenTitle
+
+            UITabBarItem.appearance().setTitleTextAttributes(hiddenTitle, for: .normal)
+            UITabBarItem.appearance().setTitleTextAttributes(hiddenTitle, for: .selected)
 
             UITabBar.appearance().standardAppearance = appearance
             UITabBar.appearance().scrollEdgeAppearance = appearance

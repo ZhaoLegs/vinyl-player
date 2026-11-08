@@ -18,13 +18,19 @@ struct SystemPauseButton: View {
 struct MiniPlayer: View {
     var body: some View {
         HStack(spacing: 8) {
+            // 40pt slot is the capsule's leading circular cap. The 27pt disc is
+            // centered inside that cap, not inset by an extra leading pad.
             ZStack {
                 Circle()
-                    .fill(RadialGradient(colors: [Color(hex: 0x2B3B6B), Color(hex: 0x0D1020)],
-                                        center: .center, startRadius: 2, endRadius: 20))
-                Circle().fill(.white).frame(width: 4, height: 4)
+                    .fill(RadialGradient(colors: [Color(hex: 0x3A2E68), Color(hex: 0x12141C), Color(hex: 0x0B0C10)],
+                                        center: .center, startRadius: 1, endRadius: 16))
+                Circle()
+                    .fill(Color(hex: 0x6E5AA8))
+                    .frame(width: 10, height: 10)
+                Circle().fill(.white).frame(width: 3.5, height: 3.5)
             }
             .frame(width: 27, height: 27)
+            .frame(width: 40, height: 40)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("A1 · Mind Games")
@@ -38,7 +44,6 @@ struct MiniPlayer: View {
             Spacer(minLength: 0)
             SystemPauseButton(size: 13)
         }
-        .padding(.leading, 12)
         .padding(.trailing, 14)
         .glassCapsule(height: 40)
     }

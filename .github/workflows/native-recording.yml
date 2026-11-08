@@ -1,0 +1,35 @@
+name: Native iOS 27 recording
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/native-ios27-recording]
+    paths:
+      - 'Vinyl/**'
+      - 'scripts/record_native.py'
+      - '.github/workflows/native-recording.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-recording-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  record:
+    # Official preview image: actions/runner-images#14404.
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and record the native app
+        run: python3 scripts/record_native.py --output "$RUNNER_TEMP/vinyl-native"
+      - name: Upload recording and build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vinyl-native-ios27-${{ github.sha }}
+          path: ${{ runner.temp }}/vinyl-native/
+          if-no-files-found: error
+          retention-days: 14
