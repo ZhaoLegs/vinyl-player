@@ -33,6 +33,10 @@ enum DS {
     static let planet: CGFloat     = 86
     static let corner: CGFloat     = 5
     static let capsule: CGFloat    = 28
+    // Screenshot proportions: circular controls ≈44pt, screen inset ≈16pt.
+    static let circleButton: CGFloat = 44
+    static let controlInset: CGFloat = 16
+    static let playerNavigationSpacing: CGFloat = 18
 
     static func coverName(_ index: Int) -> String {
         String(format: "cover_%02d", index)
@@ -242,8 +246,7 @@ struct SystemIconButton: View {
 struct GlassCircleButton: View {
     var systemImage: String? = nil
     var assetImage: String? = nil
-    /// Apple toolbar / glass circular control visual size (~36pt).
-    var size: CGFloat = 36
+    var size: CGFloat = DS.circleButton
     var iconSize: CGFloat = 15
     var accessibilityText: String = ""
     let action: () -> Void
@@ -273,11 +276,14 @@ struct GlassCircleButton: View {
             Button(action: action) { label }
                 .buttonStyle(.glass)              // ← 苹果系统控件库
                 .buttonBorderShape(.circle)       // ← 让系统把玻璃底裁成正圆
+                .controlSize(.large)
+                .frame(width: size, height: size)
                 .tint(DS.ink)
                 .accessibilityLabel(a11y)
         } else {
             Button(action: action) {
                 label.foregroundStyle(DS.ink)
+                    .frame(width: size, height: size)
                     .background(.ultraThinMaterial, in: Circle())
                     .overlay(Circle().strokeBorder(.white.opacity(0.65), lineWidth: 0.8))
             }

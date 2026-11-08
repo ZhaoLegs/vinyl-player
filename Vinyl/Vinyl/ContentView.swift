@@ -121,7 +121,8 @@ struct ContentView: View {
 
     @ViewBuilder
     private var library: some View {
-        if ProcessInfo.processInfo.arguments.contains("--record-demo") {
+        if ProcessInfo.processInfo.arguments.contains("--record-demo")
+            || ProcessInfo.processInfo.arguments.contains("--layout-check") {
             LibraryView()
         } else {
             MusicLibraryView()

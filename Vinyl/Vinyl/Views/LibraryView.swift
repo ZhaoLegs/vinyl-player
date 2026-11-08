@@ -115,7 +115,7 @@ struct LibraryView: View {
             Spacer(minLength: 0)
             GlassCircleButton(systemImage: "cube", iconSize: 17, accessibilityText: "新建") { }
         }
-        .padding(.horizontal, 27)
+        .padding(.horizontal, DS.controlInset)
         .padding(.top, 6)
     }
 
@@ -134,8 +134,8 @@ struct LibraryView: View {
                 // 所以不需要再手写 LinearGradient mask。
                 .safeAreaBar(edge: .bottom, spacing: 0) {
                     MiniPlayer()
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 6)
+                        .padding(.horizontal, DS.controlInset)
+                        .padding(.bottom, DS.playerNavigationSpacing)
                 }
         } else {
             // iOS 17–25 没有该 API：退回渐变遮罩（纯外观降级）。
@@ -151,8 +151,8 @@ struct LibraryView: View {
                         ], startPoint: .top, endPoint: .bottom)
                     )
                 MiniPlayer()
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 10)
+                    .padding(.horizontal, DS.controlInset)
+                    .padding(.bottom, DS.playerNavigationSpacing)
             }
         }
     }

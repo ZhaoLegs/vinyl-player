@@ -75,7 +75,7 @@ struct AlbumDetailView: View {
                 Spacer(minLength: 8)
 
                 WaveformBar(progress: waveProgress)
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, DS.controlInset)
                     .padding(.bottom, 10)
                     .opacity(stage(0.24))
             }
@@ -137,7 +137,7 @@ struct AlbumDetailView: View {
             GlassCircleButton(systemImage: "cube", iconSize: 17,
                               accessibilityText: "新建") { }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, DS.controlInset)
     }
 
     // MARK: - 曲目表

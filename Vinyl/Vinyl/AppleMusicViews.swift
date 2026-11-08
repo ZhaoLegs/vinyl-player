@@ -347,8 +347,9 @@ struct MusicMiniPlayer: View {
             }
             .padding(.horizontal, 14)
             .glassCapsule(height: 56)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 6)
+            .padding(.horizontal, DS.controlInset)
+            .padding(.top, 6)
+            .padding(.bottom, expands ? DS.playerNavigationSpacing : 10)
         }
     }
 }
@@ -412,7 +413,8 @@ struct MusicPlayerView: View {
                     .disabled(music.isPreparing || !music.hasCurrentTrack)
                     if music.isPreparing { ProgressView("正在准备播放") }
                 }
-                .padding(28)
+                .padding(.horizontal, DS.controlInset)
+                .padding(.vertical, 28)
             }
             .background { AuroraBackground() }
             .navigationTitle("正在播放")

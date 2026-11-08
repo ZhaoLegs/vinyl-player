@@ -63,13 +63,15 @@ struct WaveformBar: View {
                     let head = i == Int(Double(count) * progress)
                     Capsule()
                         .fill(Double(i) < Double(count) * progress ? DS.ink : Color(hex: 0xB9B5B1))
-                        .frame(width: 1.5, height: head ? 24 : barHeight(i))
+                        .frame(height: head ? 24 : barHeight(i))
+                        .frame(maxWidth: .infinity)
                         .shadow(color: head ? .black.opacity(0.28) : .clear, radius: head ? 3 : 0)
                 }
             }
             .frame(height: 26)
         }
         .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity)
         .glassCapsule(height: 42)
     }
 

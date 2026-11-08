@@ -70,6 +70,11 @@ def smoke(app, output):
         container = Path(text("xcrun", "simctl", "get_app_container", udid,
                               "com.zhaolegs.Vinyl", "data"))
         marker = container / "Documents/vinyl-recording-state.txt"
+        print("Capturing settled home layout", flush=True)
+        run("xcrun", "simctl", "launch", udid, "com.zhaolegs.Vinyl", "--layout-check")
+        time.sleep(30)
+        run("xcrun", "simctl", "io", udid, "screenshot", str(output / "vinyl-home-layout.png"))
+        run("xcrun", "simctl", "terminate", udid, "com.zhaolegs.Vinyl")
         marker.unlink(missing_ok=True)
         print("Warming built-in vinyl animation demo", flush=True)
         run("xcrun", "simctl", "launch", udid, "com.zhaolegs.Vinyl", "--record-demo")
