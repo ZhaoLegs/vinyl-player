@@ -109,7 +109,8 @@ struct LibraryView: View {
     /// 左右上角：一个圆形玻璃底 + 一个 SF Symbol，全部由系统按钮样式绘制
     private var header: some View {
         HStack {
-            GlassCircleButton(systemImage: "opticaldisc", accessibilityText: "Vinyl") { }
+            // Assets logo mark inside system glass circle (not SF Symbol opticaldisc).
+            GlassCircleButton(assetImage: "logo", iconSize: 20, accessibilityText: "Vinyl") { }
             Spacer(minLength: 0)
             GlassCircleButton(systemImage: "cube", accessibilityText: "新建") { }
         }
@@ -221,7 +222,7 @@ struct LibraryView: View {
             zoom = 1
             blurRadius = 18
         }
-        withAnimation(.easeOut(duration: 0.23).delay(0.13)) {
+        withAnimation(.easeOut(duration: Motion.open.duration).delay(0.08)) {
             contentAlpha = 1
         }
         demoToken += 1
@@ -233,7 +234,7 @@ struct LibraryView: View {
         autoplay = false
         demoToken += 1
         withAnimation(
-            reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: Motion.close.duration),
+            reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.close),
             completionCriteria: .removed
         ) {
             zoom = 0
@@ -270,7 +271,7 @@ struct LibraryView: View {
 
         guard await pause(766_666_667) else { return }
         // The source turns to side B, with readable artwork and a different label.
-        withAnimation(.timingCurve(0.32, 0, 0.25, 1, duration: 11.0 / 30)) { flip = 180 }
+        withAnimation(.timingCurve(0.32, 0, 0.25, 1, duration: max(Motion.flip.duration, 8.0 / 30))) { flip = 180 }
 
         guard await pause(1_700_000_000) else { return }
         close()
@@ -318,7 +319,8 @@ private struct CoverFlight: AnimatableModifier {
             .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - p) + 2 * p))
             .rotation3DEffect(.degrees(turn), axis: (x: 0, y: 1, z: 0), perspective: 0.55)
             .shadow(color: .black.opacity(0.25), radius: 20 * p, y: 8 * p)
-            .offset(x: start.minX + (end.minX - start.minX) * p + sin(p * .pi) * 45,
+            // Linear grid→sleeve path (no lateral sin arc — that drifted vs original zoom).
+            .offset(x: start.minX + (end.minX - start.minX) * p,
                     y: start.minY + (end.minY - start.minY) * p)
             .opacity(Double(1 - handoff))
     }

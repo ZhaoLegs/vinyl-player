@@ -22,15 +22,15 @@ enum DS {
     static let vinyl      = Color(hex: 0x111113)
 
     // 尺寸：以 iPhone 393pt 宽为基准，与原片 480px 屏幕按 0.819 换算
-    static let sleeve: CGFloat     = 314
+    static let sleeve: CGFloat     = 306
     static let sleeveTop: CGFloat  = 126
-    // 唱片直径 = 封套的 0.88（原片 f052 实测 329px / 373px）。
-    // 抽出后封套缩到 0.85，两张盘上下边缘几乎齐平，圆心始终在同一条水平中线上。
-    static let disc: CGFloat       = 276
-    static let discPull: CGFloat   = 62
+    // 抽出后封套缩到 (1 - pullScale)=0.85 → 260.1pt；唱片直径取 260，
+    // 上下与缩放后的封套齐平（不再纵向溢出），圆心始终在同一条水平中线上。
+    static let disc: CGFloat       = 260
+    static let discPull: CGFloat   = 56
     static let sleevePull: CGFloat = 58
     static let pullScale: CGFloat  = 0.15
-    static let planet: CGFloat     = 108
+    static let planet: CGFloat     = 86
     static let corner: CGFloat     = 5
     static let capsule: CGFloat    = 28
 
@@ -59,14 +59,16 @@ enum Motion {
 
     // Video-observed stage durations. Native timing curves approximate the
     // browser's measured keyframe path; they are not the same interpolation.
-    static let open    = Spring(response: 0, damping: 0, duration: 20.0 / 30, isOpeningCurve: true)
-    static let pull    = Spring(response: 0.46, damping: 0.88, duration: 14.0 / 30)
+    // Durations match preview/index.html CURVES + 逐帧分析 (30fps).
+    static let open    = Spring(response: 0, damping: 0, duration: 8.0 / 30, isOpeningCurve: true)
+    static let pull    = Spring(response: 0.28, damping: 0.82, duration: 8.0 / 30)
     static let retract = Spring(response: 0.22, damping: 0.92, duration: 5.0 / 30)
-    static let flip    = Spring(response: 0.36, damping: 0.92, duration: 11.0 / 30)
-    static let close   = Spring(response: 0.66, damping: 1, duration: 20.0 / 30)
+    static let flip    = Spring(response: 0.10, damping: 0.92, duration: 4.0 / 30)
+    static let close   = Spring(response: 0.34, damping: 0.86, duration: 10.0 / 30)
 
     static func animation(_ s: Spring) -> Animation {
-        if s.isOpeningCurve { return .timingCurve(0.35, 0, 0.42, 1, duration: s.duration) }
+        // openingEase in preview: cubic-bezier(0.4, 0, 0.2, 1)
+        if s.isOpeningCurve { return .timingCurve(0.4, 0, 0.2, 1, duration: s.duration) }
         return .spring(response: s.response, dampingFraction: s.damping)
     }
 
@@ -153,36 +155,48 @@ struct SystemIconButton: View {
 /// 圆底和外圈高光全部由系统绘制；label 里只有一个 SF Symbol。
 /// （iOS 17–25 回退到 `.ultraThinMaterial` + 描边，仅为外观降级，逻辑不变。）
 struct GlassCircleButton: View {
-    let systemImage: String
-    var size: CGFloat = 44
-    var iconSize: CGFloat = 20
+    var systemImage: String? = nil
+    var assetImage: String? = nil
+    /// Apple toolbar / glass circular control visual size (~36pt).
+    var size: CGFloat = 36
+    var iconSize: CGFloat = 15
     var accessibilityText: String = ""
     let action: () -> Void
 
     @ViewBuilder
-    var body: some View {
-        if #available(iOS 26.0, *) {
-            Button(action: action) {
+    private var label: some View {
+        Group {
+            if let assetImage {
+                Image(assetImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: iconSize, height: iconSize)
+            } else if let systemImage {
                 Image(systemName: systemImage)
                     .font(.system(size: iconSize, weight: .regular))
-                    .frame(width: size, height: size)
-                    .contentShape(.circle)
             }
-            .buttonStyle(.glass)              // ← 苹果系统控件库
-            .buttonBorderShape(.circle)       // ← 让系统把玻璃底裁成正圆
-            .tint(DS.ink)
-            .accessibilityLabel(accessibilityText.isEmpty ? systemImage : accessibilityText)
+        }
+        .frame(width: size, height: size)
+        .contentShape(.circle)
+    }
+
+    @ViewBuilder
+    var body: some View {
+        let a11y = accessibilityText.isEmpty ? (assetImage ?? systemImage ?? "button") : accessibilityText
+        if #available(iOS 26.0, *) {
+            Button(action: action) { label }
+                .buttonStyle(.glass)              // ← 苹果系统控件库
+                .buttonBorderShape(.circle)       // ← 让系统把玻璃底裁成正圆
+                .tint(DS.ink)
+                .accessibilityLabel(a11y)
         } else {
             Button(action: action) {
-                Image(systemName: systemImage)
-                    .font(.system(size: iconSize, weight: .regular))
-                    .foregroundStyle(DS.ink)
-                    .frame(width: size, height: size)
+                label.foregroundStyle(DS.ink)
                     .background(.ultraThinMaterial, in: Circle())
                     .overlay(Circle().strokeBorder(.white.opacity(0.65), lineWidth: 0.8))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(accessibilityText.isEmpty ? systemImage : accessibilityText)
+            .accessibilityLabel(a11y)
         }
     }
 }
@@ -192,8 +206,8 @@ struct SystemImageButton: View {
     let title: String
     let imageName: String
     var size: CGFloat = 36
-    var iconSize: CGFloat = 26
-    var opacity: Double = 0.55
+    var iconSize: CGFloat = 18
+    var opacity: Double = 0.85
     let action: () -> Void
 
     @ViewBuilder
@@ -203,12 +217,18 @@ struct SystemImageButton: View {
                 label
             }
             .buttonStyle(.glass)                     // ← 苹果系统控件库
+            .buttonBorderShape(.circle)
+            .tint(DS.ink)
+            .accessibilityLabel(title)
         } else {
             Button(action: action) {
                 label
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.65), lineWidth: 0.8))
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
             .tint(DS.ink)
+            .accessibilityLabel(title)
         }
     }
 
@@ -219,6 +239,7 @@ struct SystemImageButton: View {
             .frame(width: iconSize, height: iconSize)
             .opacity(opacity)
             .frame(width: size, height: size)
+            .contentShape(.circle)
     }
 }
 
@@ -294,17 +315,22 @@ enum TabBarAppearance {
             appearance.backgroundColor = UIColor.white.withAlphaComponent(0.55)
             appearance.shadowColor = .clear
 
+            // Icons only — hide any residual tab titles.
+            let hiddenTitle: [NSAttributedString.Key: Any] = [
+                .foregroundColor: UIColor.clear,
+                .font: UIFont.systemFont(ofSize: 0.01)
+            ]
+
             let normal = appearance.stackedLayoutAppearance.normal
             normal.iconColor = UIColor(red: 26.0 / 255, green: 26.0 / 255, blue: 28.0 / 255, alpha: 0.72)
-            normal.titleTextAttributes = [
-                .foregroundColor: UIColor(red: 139.0 / 255, green: 135.0 / 255, blue: 131.0 / 255, alpha: 1)
-            ]
+            normal.titleTextAttributes = hiddenTitle
 
             let selected = appearance.stackedLayoutAppearance.selected
             selected.iconColor = UIColor(red: 26.0 / 255, green: 26.0 / 255, blue: 28.0 / 255, alpha: 1)
-            selected.titleTextAttributes = [
-                .foregroundColor: UIColor(red: 26.0 / 255, green: 26.0 / 255, blue: 28.0 / 255, alpha: 1)
-            ]
+            selected.titleTextAttributes = hiddenTitle
+
+            UITabBarItem.appearance().setTitleTextAttributes(hiddenTitle, for: .normal)
+            UITabBarItem.appearance().setTitleTextAttributes(hiddenTitle, for: .selected)
 
             UITabBar.appearance().standardAppearance = appearance
             UITabBar.appearance().scrollEdgeAppearance = appearance

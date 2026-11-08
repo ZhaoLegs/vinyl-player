@@ -58,11 +58,12 @@ struct AlbumDetailView: View {
                                                value: geo.frame(in: .named("library")))
                     }
                 )
+                // Breathing room under sleeve → track table (preview dtable gap ≈ 30pt).
                 .padding(.top, 20)
 
                 trackTable
                     .padding(.horizontal, 21)
-                    .padding(.top, 20)
+                    .padding(.top, 32)
                     .opacity(stage(0.09))
 
                 releaseCard
@@ -132,7 +133,8 @@ struct AlbumDetailView: View {
             Spacer(minLength: 0)
 
             // 右上角同样是系统玻璃圆按钮（Button + .buttonStyle(.glass) + .buttonBorderShape(.circle)）
-            GlassCircleButton(systemImage: "cube", accessibilityText: "新建") { }
+            GlassCircleButton(systemImage: "cube", size: 36, iconSize: 15,
+                              accessibilityText: "新建") { }
         }
         .padding(.horizontal, 20)
     }

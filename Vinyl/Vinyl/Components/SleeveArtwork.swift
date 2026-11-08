@@ -86,7 +86,7 @@ struct PlanetView: View {
     }
 }
 
-/// 封套 + 唱片的完整组合动效。自身尺寸固定为 306×306，位置由父视图决定。
+/// 封套 + 唱片的完整组合动效。自身尺寸固定为 sleeve×sleeve（306），位置由父视图决定。
 /// 层次（从下到上）：唱片 → 圆孔星球 → 挖孔封套。
 struct SleeveArtwork: View, Animatable {
     /// 封套图：默认原片挖孔素材；点其它专辑时传入该封面，用同一比例的遮罩挖孔
@@ -111,12 +111,13 @@ struct SleeveArtwork: View, Animatable {
             ZStack(alignment: .topLeading) {
                 PlanetView(moon: pull, isBack: flip >= 90)
                     .frame(width: DS.planet, height: DS.planet)
-                    .offset(x: 103, y: 103)
+                    .offset(x: (DS.sleeve - DS.planet) / 2,
+                            y: (DS.sleeve - DS.planet) / 2)
 
                 Image(coverName)
                     .resizable()
                     .frame(width: DS.sleeve, height: DS.sleeve)
-                    // 孔直径 = 306 × 28.06%，与原片 sleeve_cutout 实测一致
+                    // 孔直径 = sleeve × 28.06% ≈ 86pt，与原片 sleeve_cutout 实测一致
                     .mask {
                         Rectangle()
                             .overlay {

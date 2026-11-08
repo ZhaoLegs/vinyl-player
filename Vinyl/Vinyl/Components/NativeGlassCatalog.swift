@@ -51,11 +51,11 @@ struct NativeTabBar27Example: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            Tab("资料库", systemImage: "square.grid.2x2", value: 0) { Color.clear }
-            Tab("电台", systemImage: "dot.radiowaves.left.and.right", value: 1) { Color.clear }
-            Tab("我的", systemImage: "person.crop.circle", value: 2) { Color.clear }
+            Tab("", systemImage: "square.grid.2x2", value: 0) { Color.clear }
+            Tab("", systemImage: "dot.radiowaves.left.and.right", value: 1) { Color.clear }
+            Tab("", systemImage: "person.crop.circle", value: 2) { Color.clear }
             // 可选：加 role: .search，系统会把该 tab 摘出主 bar、作为独立玻璃圆片钉在尾端
-            Tab("搜索", systemImage: "magnifyingglass", value: 3) { Color.clear }
+            Tab("", systemImage: "magnifyingglass", value: 3) { Color.clear }
         }
         .tabViewStyle(.tabBarOnly)                                  // iOS 18：只要 tab bar
         .toolbarMinimizationBehavior(.onScrollDown, for: .tabBar)  // iOS 27：下滑收成小胶囊

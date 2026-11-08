@@ -95,8 +95,8 @@
   /* 左右上角：系统 Button + .buttonStyle(.glass) 的视觉等价 ——
      一个 44pt 圆形玻璃底，里面只有一个 20pt 单色图标，没有任何额外图形或文字。
      玻璃面 = 半透明 + 背景模糊 + 顶面镜面高光 + 内暗描边 + 外投影。 */
-  .logo,.cube{width:44px;height:44px;flex:none}
-  .logo svg,.cube svg{width:20px;height:20px;stroke:#1b1b1d;fill:none;
+  .logo,.cube{width:36px;height:36px;flex:none}
+  .logo svg,.cube svg{width:16px;height:16px;stroke:#1b1b1d;fill:none;
     stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;
     filter:drop-shadow(0 .5px 0 rgba(255,255,255,.9))}
   /* 网格几何按原片实测：左右 27pt、4 列、列宽 72pt、间距 17pt */
@@ -197,7 +197,7 @@
   .dtitle .b{font-size:11px;color:#8b8783;margin-top:1px}
   .artwork{position:absolute;left:43.5px;top:130px;width:306px;height:306px;cursor:pointer;transform-style:preserve-3d}
   .artwork .discWrap,.artwork .planetLayer,.artwork .sleeve{position:absolute;top:0;left:0;width:306px;height:306px}
-  .discWrap{left:18.5px!important;top:18.5px!important;width:269px!important;height:269px!important;z-index:1;border-radius:50%;
+  .discWrap{left:23px!important;top:23px!important;width:260px!important;height:260px!important;z-index:1;border-radius:50%;
     box-shadow:0 12px 26px rgba(0,0,0,.35);transform-origin:center center}
   .disc{position:absolute;inset:0;border-radius:50%;transform-origin:center center;overflow:hidden;
     background:
@@ -288,12 +288,13 @@
   .home-head{top:58px;left:16px;right:20px}
   .dhead{top:56px;left:17px;right:20px}
   .grid{padding:114.125px 20.5px 145px;grid-auto-rows:74.125px;gap:18px}
-  .artwork{left:39.5px;top:126px;width:314px;height:314px}
-  .artwork .sleeve,.artwork .planetLayer{width:314px;height:314px}
-  .discWrap{left:19px!important;top:19px!important;width:276px!important;height:276px!important}
-  .planet{left:103px;top:103px;width:108px;height:108px;box-shadow:none}
-  .sleeve.masked{-webkit-mask-image:radial-gradient(circle 54px at 50% 50%,transparent 53.8px,#000 54.2px);
-    mask-image:radial-gradient(circle 54px at 50% 50%,transparent 53.8px,#000 54.2px)}
+  .artwork{left:43.5px;top:130px;width:306px;height:306px}
+  .artwork .sleeve,.artwork .planetLayer{width:306px;height:306px}
+  /* disc 260 = sleeve*(1-0.15); flush with scaled sleeve when pulled */
+  .discWrap{left:23px!important;top:23px!important;width:260px!important;height:260px!important}
+  .planet{left:110px;top:110px;width:86px;height:86px;box-shadow:none}
+  .sleeve.masked{-webkit-mask-image:radial-gradient(circle 43px at 50% 50%,transparent 42.9px,#000 43.4px);
+    mask-image:radial-gradient(circle 43px at 50% 50%,transparent 42.9px,#000 43.4px)}
   .sleeve{box-shadow:0 5px 12px #0002}
   .discWrap{box-shadow:0 5px 12px #0002}
   .flying{overflow:visible}
@@ -302,12 +303,12 @@
   .grid-echo img{width:74.125px;height:74.125px;object-fit:cover;border-radius:3px}
   .disc{background:repeating-radial-gradient(circle,#171517 0 1px,#191719 1px 2px)}
   .disclabel{width:88px;height:88px;margin:-44px}
-  .dtable{left:21px;right:21px;top:460px}
+  .dtable{left:21px;right:21px;top:466px}
   .thead{font-size:11px;margin-bottom:20px;font-weight:500}
   .trow{height:36px;font-size:15px;color:#777371}
   .trow.on{font-weight:400}
   .trow .side{font-size:15px}
-  .release{left:21px;top:658px;gap:14px}
+  .release{left:21px;top:668px;gap:14px}
   .release img{width:58px;height:58px}
   .release .n1{font-size:17px}
   .release .n2{font-size:13px}
@@ -639,7 +640,7 @@ function applyFlyStart(){
   fly.style.left=flyStart.x+'px'; fly.style.top=flyStart.y+'px';
   fly.style.width=flyStart.w+'px'; fly.style.height=flyStart.w+'px';
 }
-const FLY_END={x:39.5, y:126, s:314};
+const FLY_END={x:43.5, y:130, s:306};
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
 const seg=(f,a,b)=>clamp((f-a)/(b-a),0,1);
 const smooth=t=>{t=clamp(t,0,1);return t*t*(3-2*t)};          // smoothstep，端点导数为 0
@@ -807,7 +808,7 @@ function state(f){
       detailOpacity:smooth(seg(f,9,14)),detailFade:smooth(seg(f,9,16))});
     S.flyOpacity=1;
   }else if(f>=27&&f<165){
-    Object.assign(S,{flyP:1,flyX:39.5,flyY:126,flySize:314,
+    Object.assign(S,{flyP:1,flyX:43.5,flyY:130,flySize:306,
       homeOpacity:0,detailOpacity:1,detailFade:1,blur:18});
   }else if(f>=165&&f<185){
     Object.assign(S,pathPose(CLOSE_PATH,f),{
@@ -820,7 +821,7 @@ function state(f){
   }
   if(f>=41&&f<97){
     S.pull=sample([[41,0],[44,.22],[48,.72],[52,.97],[55,1],[91,1],[93,.78],[95,.25],[97,0]],f);
-    S.discX=62*S.pull; S.sleeve=1-.15*S.pull; S.moon=S.pull;
+    S.discX=56*S.pull; S.sleeve=1-.15*S.pull; S.moon=S.pull;
     S.groupScale=sample([[41,1],[52,1],[62,.92],[80,.92],[91,1],[97,1]],f);
   }
   if(f>=114&&f<165){
