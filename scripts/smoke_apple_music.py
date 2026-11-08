@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+import shutil
 import time
 
 from record_native import choose_device, choose_runtime, select_xcode, text, run
@@ -26,6 +27,7 @@ def smoke(app, output):
         run("xcrun", "simctl", "ui", udid, "appearance", "light")
         run("xcrun", "simctl", "install", udid, str(app))
         launch = text("xcrun", "simctl", "launch", udid, "com.zhaolegs.Vinyl")
+        print(launch, flush=True)
         time.sleep(8)
         run("xcrun", "simctl", "io", udid, "screenshot", str(output / "apple-music-connect.png"))
         # terminate fails if the application crashed or never stayed running.
@@ -36,6 +38,14 @@ def smoke(app, output):
             "limits": "No account authorization or real playback tested",
         }, indent=2))
     finally:
+        diagnostics = output / "diagnostics"
+        diagnostics.mkdir(exist_ok=True)
+        for folder in [Path.home() / "Library/Logs/DiagnosticReports",
+                       Path.home() / f"Library/Developer/CoreSimulator/Devices/{udid}/data/Library/Logs/CrashReporter"]:
+            if folder.exists():
+                for report in folder.glob("Vinyl*"):
+                    if report.is_file():
+                        shutil.copy2(report, diagnostics / report.name)
         subprocess.run(["xcrun", "simctl", "shutdown", udid], capture_output=True)
         subprocess.run(["xcrun", "simctl", "delete", udid], capture_output=True)
 

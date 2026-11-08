@@ -25,7 +25,15 @@ final class AppleMusicStore: ObservableObject {
     @Published var errorMessage: String?
     @Published var showingPlayer = false
 
-    private let player = ApplicationMusicPlayer.shared
+    // MusicKit's player requires a provisioned app identity. Do not initialize it
+    // while simply displaying onboarding (including unsigned CI launches).
+    private var existingPlayer: ApplicationMusicPlayer?
+    private var player: ApplicationMusicPlayer {
+        if let existingPlayer { return existingPlayer }
+        let created = ApplicationMusicPlayer.shared
+        existingPlayer = created
+        return created
+    }
     private var libraryLoaded = false
     private let pageSize = 50
     var authorized: Bool { authorization == .authorized }
@@ -50,7 +58,7 @@ final class AppleMusicStore: ObservableObject {
             hasMorePlaylists = false
             canPlayCatalog = false
             subscriptionKnown = false
-            player.stop()
+            existingPlayer?.stop()
             syncPlayback()
             return
         }
