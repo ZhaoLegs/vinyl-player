@@ -164,7 +164,7 @@ struct LibraryView: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     MiniPlayer()
                         .padding(.horizontal, DS.controlInset)
-                        .padding(.bottom, DS.playerNavigationSpacing)
+                        .padding(.bottom, DS.playerNavigationSpacing + DS.floatingTabClearance)
                 }
         } else {
             // iOS 17–25 没有该 API：退回渐变遮罩（纯外观降级）。

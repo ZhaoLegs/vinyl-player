@@ -38,6 +38,9 @@ enum DS {
     static let controlInset: CGFloat = 16
     static let headerTopSpacing: CGFloat = 0
     static let playerNavigationSpacing: CGFloat = 18
+    // Native floating tab capsule extends ~17pt above the content safe edge
+    // on the verified iOS 27 phone. Reserve it in addition to the visible gap.
+    static let floatingTabClearance: CGFloat = 18
     static let trackSymbolSpacing: CGFloat = 8
     static let playbackIcon: CGFloat = 16
 
