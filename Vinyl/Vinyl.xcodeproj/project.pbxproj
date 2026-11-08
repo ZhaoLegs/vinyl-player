@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AB1000000000000000000001 /* AppleMusicStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000002 /* AppleMusicStore.swift */; };
+		AB1000000000000000000003 /* AppleMusicViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000004 /* AppleMusicViews.swift */; };
 		ACF7C653C98B10BA2A31F6BD /* VinylApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 812F7662D71E6595B75EDD1C /* VinylApp.swift */; };
 		D185CB9900DE34E2206A20F3 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D87CBA14F66CAE3997FA5C5 /* ContentView.swift */; };
 		4690691DC29332372EB6E37F /* Model.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54ABDD544C96091B238DCBE7 /* Model.swift */; };
@@ -54,6 +56,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AB1000000000000000000002 /* AppleMusicStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicStore.swift; sourceTree = "<group>"; };
+		AB1000000000000000000004 /* AppleMusicViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicViews.swift; sourceTree = "<group>"; };
 		812F7662D71E6595B75EDD1C /* VinylApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VinylApp.swift; sourceTree = "<group>"; };
 		2D87CBA14F66CAE3997FA5C5 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		54ABDD544C96091B238DCBE7 /* Model.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model.swift; sourceTree = "<group>"; };
@@ -172,6 +176,8 @@
 		0157955E267509BCB8BB1075 /* Vinyl */ = {
 			isa = PBXGroup;
 			children = (
+				AB1000000000000000000002 /* AppleMusicStore.swift */,
+				AB1000000000000000000004 /* AppleMusicViews.swift */,
 				812F7662D71E6595B75EDD1C /* VinylApp.swift */,
 				2D87CBA14F66CAE3997FA5C5 /* ContentView.swift */,
 				54ABDD544C96091B238DCBE7 /* Model.swift */,
@@ -301,6 +307,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AB1000000000000000000001 /* AppleMusicStore.swift in Sources */,
+				AB1000000000000000000003 /* AppleMusicViews.swift in Sources */,
 				ACF7C653C98B10BA2A31F6BD /* VinylApp.swift in Sources */,
 				D185CB9900DE34E2206A20F3 /* ContentView.swift in Sources */,
 				4690691DC29332372EB6E37F /* Model.swift in Sources */,
@@ -372,6 +380,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "允许 Vinyl 读取你的音乐资料库并播放你选择的 Apple Music 歌曲。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -400,6 +409,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "允许 Vinyl 读取你的音乐资料库并播放你选择的 Apple Music 歌曲。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

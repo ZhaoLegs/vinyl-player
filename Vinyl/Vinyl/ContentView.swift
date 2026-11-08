@@ -32,18 +32,18 @@ struct ContentView: View {
                 // ── iOS 27 · Xcode 27 SDK ───────────────────────────────
                 // 系统 TabView 本身就是悬浮 Liquid Glass 玻璃条，不叠任何自定义背景。
                 TabView(selection: $selection) {
-                    iconTab("资料库", "square.grid.2x2", AppTab.library) { LibraryView() }
+                    iconTab("资料库", "square.grid.2x2", AppTab.library) { library }
                     iconTab("电台", "dot.radiowaves.left.and.right", AppTab.radio) {
                         SimplePage(title: "电台", symbol: "dot.radiowaves.left.and.right")
                     }
                     iconTab("我的", "person.crop.circle", AppTab.profile) {
-                        SimplePage(title: "我的", symbol: "person.crop.circle")
+                        MusicAccountView()
                     }
                     // 普通 tab：系统渲染等宽条目 + 选中高亮，形态与原片一致。
                     // 需要「独立搜索圆钮」时用 role: .search；需要强调某个
                     // 目的地 tab 时用 iOS 27 的 role: .prominent（只能一个）。
                     iconTab("搜索", "magnifyingglass", AppTab.search) {
-                        SimplePage(title: "搜索", symbol: "magnifyingglass")
+                        MusicSearchView()
                     }
                 }
                 .tabViewStyle(.tabBarOnly)
@@ -56,15 +56,15 @@ struct ContentView: View {
                 // Xcode 26 重编译后 TabView 自动变成悬浮 Liquid Glass 玻璃条，
                 // 无需任何自定义背景；下滑时系统自动收成小胶囊。
                 TabView(selection: $selection) {
-                    iconTab("资料库", "square.grid.2x2", AppTab.library) { LibraryView() }
+                    iconTab("资料库", "square.grid.2x2", AppTab.library) { library }
                     iconTab("电台", "dot.radiowaves.left.and.right", AppTab.radio) {
                         SimplePage(title: "电台", symbol: "dot.radiowaves.left.and.right")
                     }
                     iconTab("我的", "person.crop.circle", AppTab.profile) {
-                        SimplePage(title: "我的", symbol: "person.crop.circle")
+                        MusicAccountView()
                     }
                     iconTab("搜索", "magnifyingglass", AppTab.search) {
-                        SimplePage(title: "搜索", symbol: "magnifyingglass")
+                        MusicSearchView()
                     }
                 }
                 .modifier(NativeTabBehavior())
@@ -75,15 +75,15 @@ struct ContentView: View {
                 // 同样是系统 Tab 结构（iOS 18+），只是没有 Liquid Glass 材质，
                 // 由 TabBarAppearance 的 UIBlurEffect 分支提供等效毛玻璃。
                 TabView(selection: $selection) {
-                    iconTab("资料库", "square.grid.2x2", AppTab.library) { LibraryView() }
+                    iconTab("资料库", "square.grid.2x2", AppTab.library) { library }
                     iconTab("电台", "dot.radiowaves.left.and.right", AppTab.radio) {
                         SimplePage(title: "电台", symbol: "dot.radiowaves.left.and.right")
                     }
                     iconTab("我的", "person.crop.circle", AppTab.profile) {
-                        SimplePage(title: "我的", symbol: "person.crop.circle")
+                        MusicAccountView()
                     }
                     iconTab("搜索", "magnifyingglass", AppTab.search) {
-                        SimplePage(title: "搜索", symbol: "magnifyingglass")
+                        MusicSearchView()
                     }
                 }
                 .tint(DS.ink)
@@ -92,21 +92,30 @@ struct ContentView: View {
                 // ── iOS 17 ──────────────────────────────────────────────
                 // tabItem 是 iOS 17 唯一可用的系统写法，底层同样是 UITabBar。
                 TabView(selection: $selection) {
-                    LibraryView()
+                    library
                         .tabItem { Label("资料库", systemImage: "square.grid.2x2").labelStyle(.iconOnly) }
                         .tag(AppTab.library)
                     SimplePage(title: "电台", symbol: "dot.radiowaves.left.and.right")
                         .tabItem { Label("电台", systemImage: "dot.radiowaves.left.and.right").labelStyle(.iconOnly) }
                         .tag(AppTab.radio)
-                    SimplePage(title: "我的", symbol: "person.crop.circle")
+                    MusicAccountView()
                         .tabItem { Label("我的", systemImage: "person.crop.circle").labelStyle(.iconOnly) }
                         .tag(AppTab.profile)
-                    SimplePage(title: "搜索", symbol: "magnifyingglass")
+                    MusicSearchView()
                         .tabItem { Label("搜索", systemImage: "magnifyingglass").labelStyle(.iconOnly) }
                         .tag(AppTab.search)
                 }
                 .tint(DS.ink)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var library: some View {
+        if ProcessInfo.processInfo.arguments.contains("--record-demo") {
+            LibraryView()
+        } else {
+            MusicLibraryView()
         }
     }
 

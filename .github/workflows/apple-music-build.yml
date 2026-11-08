@@ -1,0 +1,35 @@
+name: Apple Music build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/apple-music]
+    paths: ['Vinyl/**', '.github/workflows/apple-music-build.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Apple Music integration
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild -version
+          xcodebuild -project Vinyl/Vinyl.xcodeproj -scheme Vinyl \
+            -configuration Release -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/vinyl-build" \
+            CODE_SIGNING_ALLOWED=NO ARCHS=arm64 \
+            build 2>&1 | tee "$RUNNER_TEMP/apple-music-build.log"
+          /usr/libexec/PlistBuddy -c 'Print :NSAppleMusicUsageDescription' \
+            "$RUNNER_TEMP/vinyl-build/Build/Products/Release-iphonesimulator/Vinyl.app/Info.plist"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apple-music-build-${{ github.sha }}
+          path: ${{ runner.temp }}/apple-music-build.log
