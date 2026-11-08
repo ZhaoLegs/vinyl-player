@@ -17,7 +17,6 @@ struct VinylApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environmentObject(music)
                 .task(id: scenePhase) {
                     guard scenePhase == .active, !recordingDemo else { return }
                     await music.refreshAccess()
@@ -27,6 +26,7 @@ struct VinylApp: App {
                     MusicPlayerView().environmentObject(music)
                 }
                 .safeAreaInset(edge: .top) { MusicErrorBanner() }
+                .environmentObject(music)
         }
     }
 }

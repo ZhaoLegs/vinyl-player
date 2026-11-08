@@ -5,7 +5,7 @@ import SwiftUI
 /// One player for the entire app. Authorization is requested only after a tap.
 @MainActor
 final class AppleMusicStore: ObservableObject {
-    @Published private(set) var authorization = MusicAuthorization.currentStatus
+    @Published private(set) var authorization: MusicAuthorization.Status = .notDetermined
     @Published private(set) var albums: [Album] = []
     @Published private(set) var playlists: [Playlist] = []
     @Published private(set) var isLoading = false
@@ -36,6 +36,7 @@ final class AppleMusicStore: ObservableObject {
     }
     private var libraryLoaded = false
     private let pageSize = 50
+    private let connectionKey = "appleMusicConnectionRequested"
     var authorized: Bool { authorization == .authorized }
     var hasCurrentTrack: Bool { !currentTitle.isEmpty }
 
@@ -43,12 +44,16 @@ final class AppleMusicStore: ObservableObject {
         guard !isConnecting else { return }
         isConnecting = true
         defer { isConnecting = false }
+        UserDefaults.standard.set(true, forKey: connectionKey)
         authorization = await MusicAuthorization.request()
         await refreshAccess()
     }
 
     /// Recheck on returning from Settings; discard personal data after revocation.
     func refreshAccess() async {
+        // A first launch is just onboarding. Once the user has requested a
+        // connection, always consult the system again; this flag is not consent.
+        guard UserDefaults.standard.bool(forKey: connectionKey) else { return }
         authorization = MusicAuthorization.currentStatus
         guard authorized else {
             albums = []
