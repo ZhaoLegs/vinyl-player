@@ -23,10 +23,13 @@ def smoke(app, output):
                 device["identifier"], runtime["identifier"])
     console = None
     try:
+        print("Booting simulator", flush=True)
         run("xcrun", "simctl", "boot", udid)
-        run("xcrun", "simctl", "bootstatus", udid, "-b", timeout=240)
+        run("xcrun", "simctl", "bootstatus", udid, "-b", timeout=480)
+        print("Installing app", flush=True)
         run("xcrun", "simctl", "ui", udid, "appearance", "light")
         run("xcrun", "simctl", "install", udid, str(app))
+        print("Launching default connection screen", flush=True)
         with (output / "console.log").open("w") as log:
             console = subprocess.Popen(
                 ["xcrun", "simctl", "launch", "--console-pty", udid, "com.zhaolegs.Vinyl"],
