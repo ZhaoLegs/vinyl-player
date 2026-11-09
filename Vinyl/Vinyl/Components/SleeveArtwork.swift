@@ -150,14 +150,6 @@ struct SleeveArtwork: View, Animatable {
 
             // 封套缩小 + 左移，制造景深（对应原片 f44–f51）
             ZStack(alignment: .topLeading) {
-                // t145u：孔后固定一张与封套一起移动的完整黑胶（与抽出前的唱片同心同角度，未抽出时与真唱片像素一致），
-                // 抽出过程中 / 静止时孔里永远是完整黑胶，不会露出半个白色背景。
-                VinylDiscView(angle: spin, pull: 0, coverName: coverName, artwork: artwork)
-                    .shadow(radius: 0)
-                    .frame(width: DS.disc, height: DS.disc)
-                    .frame(width: DS.sleeve, height: DS.sleeve)
-                    .clipShape(Circle().inset(by: (DS.sleeve - DS.planet) / 2 - 1))
-                    .allowsHitTesting(false)
                 // 孔是封套的真实透明挖孔（下方 mask destinationOut），孔内不画任何独立图形：
                 // 透过孔看到的就是后面那一张完整的大黑胶在孔位置的那一部分（随抽出位置变化）。
                 // t144u：挖孔封套是静态的（只随 pull / flip 做变换），抽成 Equatable 子视图，转盘每帧不再重算它
