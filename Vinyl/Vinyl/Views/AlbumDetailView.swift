@@ -61,6 +61,9 @@ struct AlbumDetailView: View {
     @State private var barIn: CGFloat = 0
     /// t219u：曲目表可视区底边 / 时间条顶边（同一坐标系实测），最后一行（或相似专辑）底 → 时间条顶 = 24pt
     @State private var listBottomY: CGFloat = 0
+    /// t251u：封面放大真正落定（landed，来自打开弹簧的 completion）后才淡入：标题 → 曲目表（整块）
+    @State private var titleIn: Double = 0
+    @State private var listIn: Double = 0
     /// t247u：封套（封面）下缘 / 歌词区顶 —— 歌词滚动区与顶部渐变模糊向上延伸到封面下缘，不再在半路硬切
     @State private var sleeveBottomY: CGFloat = 0
     @State private var lyricsTopY: CGFloat = 0
@@ -194,6 +197,9 @@ struct AlbumDetailView: View {
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TrackInset.space)).minY } action: { lyricsTopY = $0 }
                     .padding(.top, 40)
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TrackInset.space)).maxY } action: { listBottomY = $0 }
+                    // t251u：整个曲目表 / 歌词容器一次性淡入（不逐行），落定后比标题晚 0.06s
+                    .opacity(listIn)
+                    .visualEffect { [listIn, closing] c, _ in c.offset(y: closing ? 0 : DetailReveal.rise * (1 - listIn)) }
                 } else {
                     trackTable
                         .padding(.horizontal, DS.contentInset)
@@ -244,8 +250,19 @@ struct AlbumDetailView: View {
             else { spinBase = spinAngle(at: Date()); spinFrom = nil }
         }
         .onChange(of: landed) { _, now in
-            guard now, !closing else { return }
+            guard now, !closing else {
+                // 新一次打开开始（landed 复位）：瞬间归零，等这次放大落定再淡入
+                if !now && !closing { setCopy(0, animated: false) }
+                return
+            }
             withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(duration: 0.4, bounce: 0)) { barIn = 1 }
+            setCopy(1, animated: !reduceMotion)
+        }
+        // t251u：关闭 → 标题 / 曲目表 0.15s 快速淡出，封面飞回期间不可见
+        .onChange(of: closing) { _, now in if now { setCopy(0, animated: true) } }
+        .onAppear {
+            // 横滑换专辑 / 视图重建时封面早已落定：直接显示
+            if landed && !closing { setCopy(1, animated: false) }
         }
         // t169u：详情页打开 / 横滑换专辑 → 预取本专辑歌词（正在播放 / 第一首优先，其余随后）
         .task(id: "\(isPresented)-" + (songs ?? []).map(\.id.rawValue).joined(separator: ",")) {
@@ -261,7 +278,7 @@ struct AlbumDetailView: View {
             // t156u：关闭完成后把逐行时间轴归零，下次打开从头错峰
             guard !shown else { return }
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { reveal = 0; barIn = 0 }
+            withTransaction(t) { reveal = 0; barIn = 0; titleIn = 0; listIn = 0 }
         }
         .task {
             guard demoLevels == nil,
@@ -348,8 +365,27 @@ struct AlbumDetailView: View {
         withAnimation(.linear(duration: Double(Reveal.total)).delay(delay)) { reveal = Reveal.total }
     }
 
+    /// t251u：标题 / 曲目表的显隐。淡入：标题 0.28s easeOut，曲目表晚 0.06s；淡出：两者 0.15s。
+    /// 每次都以目标值收尾（不依赖上一次动画是否跑完），快速开关也不会停在半透明。
+    private func setCopy(_ v: Double, animated: Bool) {
+        if DetailReveal.log { print("[t251u] setCopy \(v) animated=\(animated) t=\(Date().timeIntervalSince1970)") }
+        if !animated {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { titleIn = v; listIn = v }
+        } else if v > 0 {
+            withAnimation(.easeOut(duration: DetailReveal.fadeIn)) { titleIn = v }
+            withAnimation(.easeOut(duration: DetailReveal.fadeIn).delay(DetailReveal.listDelay)) { listIn = v }
+        } else {
+            withAnimation(.easeOut(duration: DetailReveal.fadeOut)) { titleIn = v; listIn = v }
+        }
+    }
+
     /// 第 i 行（0 = 表头）：delay = i × 0.035s（上限 0.35s）；首屏之外的行（i > 10）不参与错峰，直接显示
+    /// t251u：真实专辑 / 歌单（collection != nil）不再逐行错峰 —— 整个容器由 listIn 统一淡入
     private func rowReveal(_ i: Int) -> StaggerReveal {
+        if collection != nil {
+            return StaggerReveal(reveal: Reveal.total, delay: 0, duration: 0.001, rise: 0, closing: false, closeAlpha: 1)
+        }
         let d: CGFloat = i > Reveal.visibleRows ? 0 : min(Reveal.maxStagger, CGFloat(i) * Reveal.stagger)
         return StaggerReveal(reveal: i > Reveal.visibleRows ? Reveal.total : reveal, delay: d,
                              duration: Reveal.rowDuration, rise: Reveal.rowRise,
@@ -491,6 +527,9 @@ struct AlbumDetailView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 10)
+            // t251u：标题 / 艺人在放大落定后淡入 + 上浮 8 → 0（只做视觉位移，不影响布局测量）
+            .opacity(titleIn)
+            .visualEffect { [titleIn, closing] c, _ in c.offset(y: closing ? 0 : DetailReveal.rise * (1 - titleIn)) }
 
             // t238u：右上角只留「更多」——与左侧关闭钮同规格的系统玻璃圆钮（同 label / 同 glass 样式 → 同直径、同图标、同中线），
             // 点击弹原生 Menu；「喜欢」已并入菜单顶栏（MenuTopBar）
@@ -902,6 +941,15 @@ struct WipeMask: View {
 
 
 // MARK: - t154u 逐行出现参数 + 修饰器（只改 opacity / offset，不触发布局）
+
+/// t251u：详情标题 / 曲目表在封面放大落定后的淡入淡出
+enum DetailReveal {
+    static let fadeIn: Double = 0.28
+    static let listDelay: Double = 0.06
+    static let fadeOut: Double = 0.15
+    static let rise: CGFloat = 8
+    static let log = ProcessInfo.processInfo.arguments.contains("--log-reveal")
+}
 
 enum Reveal {
     static let stagger: CGFloat = 0.035

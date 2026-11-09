@@ -723,10 +723,12 @@ struct LibraryView: View {
         withTransaction(noAnim) { wipe = 0 }
         // t149u：按本次格子 → 封套的距离决定弹簧时长（封面、网格缩放、模糊、抽唱片延迟共用）
         Motion.setFlight(start: flightStart, end: flightEnd)
+        if DetailReveal.log { print("[t251u] zoom start t=\(Date().timeIntervalSince1970) fluidOpen=\(Motion.fluidOpen)") }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open),
                       completionCriteria: .logicallyComplete) {
             zoom = 1
         } completion: {
+            if DetailReveal.log { print("[t251u] zoom complete → landed t=\(Date().timeIntervalSince1970)") }
             if presented && !closing { landed = true }
         }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomBackdrop.delay(GridMotion.blurDelay)) {
