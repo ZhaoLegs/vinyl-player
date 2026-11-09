@@ -154,12 +154,12 @@ struct MiniPlayer: View {
             VStack(alignment: .leading, spacing: 1) {
                 // t123u：换歌时逐词上飘动画（旧词向上淡出，新词从下方 8pt 模糊淡入，逐词错开）
                 FloatingText(key: trackKey,
-                             tokens: FloatingText.words(title, font: .system(size: 13, weight: .semibold)),
+                             tokens: FloatingText.words(title, font: .system(size: MiniText.title, weight: .semibold)),
                              color: DS.ink)
                 // 第二行：艺人 · 歌曲时长（灰色，m:ss 用 SF Mono）；比第一行稍晚开始
                 FloatingText(key: trackKey,
-                             tokens: FloatingText.words(artist + " ·", font: .system(size: 10.5))
-                                + [.init(text: musicTime(durationValue), font: .system(size: 10.5, design: .monospaced))],
+                             tokens: FloatingText.words(artist + " ·", font: .system(size: MiniText.artist))
+                                + [.init(text: musicTime(durationValue), font: .system(size: MiniText.artist, design: .monospaced))],
                              color: DS.ink,          // t130u：第二行与歌名同为黑色
                              startDelay: 0.08)
             }
@@ -478,6 +478,12 @@ struct SpinWhilePlaying: ViewModifier {
 
 // MARK: - 迷你播放条：逐词上飘文字
 
+/// t189u：迷你播放条字号（标题 13 → 12，第二行 10.5 → 11.5）
+enum MiniText {
+    static let title: CGFloat = 12
+    static let artist: CGFloat = 11.5
+}
+
 struct FloatingText: View {
     struct Token: Equatable {
         var text: String
@@ -496,6 +502,10 @@ struct FloatingText: View {
     let tokens: [Token]
     let color: Color
     var startDelay: Double = 0
+    /// t188u：详情页标题居中用 .center
+    var alignment: Alignment = .leading
+    /// false = 首次出现直接显示（只在 key 变化时上飘）
+    var animateOnAppear = true
 
     @State private var shownKey: String? = nil
     @State private var previous: [Token] = []
@@ -519,19 +529,26 @@ struct FloatingText: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            ZStack(alignment: .leading) {
+            ZStack(alignment: alignment) {
                 if !previous.isEmpty { row(previous, entering: false) }
                 row(tokens, entering: true)
             }
-            // 放不下时退回普通单行文字（避免逐词布局被截断错乱）
-            plain
+            // 放不下时退回单行 … 截断文字；t188u：整行同样上飘（旧行上移淡出、新行从下方淡入）
+            ZStack(alignment: alignment) {
+                if !previous.isEmpty {
+                    plainText(previous)
+                        .modifier(WordFloat(phase: phase, index: 0, entering: false, total: total, delay: startDelay))
+                }
+                plainText(tokens)
+                    .modifier(WordFloat(phase: phase, index: 0, entering: true, total: total, delay: startDelay))
+            }
         }
         .onAppear { animate(fromScratch: true) }
         .onChange(of: key) { _, _ in animate(fromScratch: false) }
     }
 
-    private var plain: some View {
-        tokens.enumerated().reduce(Text("")) { acc, item in
+    private func plainText(_ list: [Token]) -> some View {
+        list.enumerated().reduce(Text("")) { acc, item in
             acc + Text(item.element.displayText(at: item.offset)).font(item.element.font)
         }
         .foregroundStyle(color)
@@ -556,6 +573,11 @@ struct FloatingText: View {
     private func animate(fromScratch: Bool) {
         guard shownKey != key else { return }
         var t = Transaction(); t.disablesAnimations = true
+        if fromScratch && !animateOnAppear {
+            withTransaction(t) { previous = []; phase = 1 }
+            shownKey = key; lastTokens = tokens
+            return
+        }
         withTransaction(t) {
             previous = fromScratch || shownKey == nil ? [] : lastTokens
             phase = 0

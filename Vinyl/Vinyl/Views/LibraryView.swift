@@ -294,7 +294,7 @@ struct LibraryView: View {
         // t138u：原片关闭时网格整体从 0.955 放大回 1（打开时缩到 0.955），与飞行封面同一进度驱动。
         // 用 visualEffect（纯渲染变换，不影响布局 / 不改格子测得的 frame）。
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { gridFrame = $0 }
-        .modifier(GridRipple(progress: zoom, closing: closing,
+        .modifier(GridRipple(shrink: zm.gridShrink,
                              anchor: gridAnchorUnit,
                              enabled: (Motion.zoomPerAxis || Motion.zoomFluid) && !reduceMotion))
     }
@@ -368,7 +368,6 @@ struct LibraryView: View {
         // 转场期间源格子隐藏：屏幕上始终只有一个封面
         .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection?.id == collection.id,
                              closing: closing))
-        .modifier(WaveRipple(t: zm.waveT, distance: waveDistance(key), enabled: !reduceMotion))
         .accessibilityLabel("\(collection.title)，\(collection.artist)")
     }
 
@@ -457,21 +456,8 @@ struct LibraryView: View {
         .buttonStyle(.plain)
         .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection == nil && selectedIndex == index,
                              closing: closing))
-        .modifier(WaveRipple(t: zm.waveT, distance: waveDistance(index), enabled: !reduceMotion))
     }
 
-    /// t182u：格子中心到波源格子中心的距离（pt）；没有波时返回 −1（不参与）
-    private func waveDistance(_ key: Int) -> Double {
-        guard let o = zm.waveOrigin, let a = cellFrames[key], let b = cellFrames[o] else { return -1 }
-        return Double(hypot(a.midX - b.midX, a.midY - b.midY))
-    }
-    /// t182u：从 origin 格子向外扩散一圈「海浪」（打开：封面离开格子时；关闭：封面落回格子时）
-    private func startWave(from origin: Int?) {
-        guard let origin, !reduceMotion else { return }
-        var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { zm.waveOrigin = origin; zm.waveT = 0 }
-        withAnimation(.linear(duration: Wave.total)) { zm.waveT = Wave.total }
-    }
 
     /// 叠在 TabView 之上的详情层：详情页（遵守安全区）+ 飞行封面（全局坐标，忽略安全区）
     private var detailLayer: some View {
@@ -549,7 +535,8 @@ struct LibraryView: View {
                                  discCover: DS.coverName(selectedIndex),
                                  discArtwork: selectedCollection?.artwork,
                                  perAxis: Motion.zoomPerAxis && !reduceMotion,
-                                 fluid: Motion.zoomFluid && !reduceMotion))
+                                 fluid: Motion.zoomFluid && !reduceMotion,
+                                 shrink: zm.gridShrink))
             .opacity(presented && !reduceMotion ? 1 : 0)
     }
 
@@ -564,7 +551,8 @@ struct LibraryView: View {
         flip = 0
         lyricsMode = false
         motionStart = Date()
-        startWave(from: targetKey)
+        // t187u：原片打开 = 整个网格同步缩到 0.95（f5→f9，≈0.13s，无逐格错峰），模糊在缩小之后才开始
+        if !reduceMotion { withAnimation(GridMotion.open) { zm.gridShrink = 1 } }
         // 一条主 spring 驱动封面缩放与背景模糊（同一进度，不再各跑一条曲线）；
         // 详情文字用带 delay 的从曲线错峰淡入，形成「先放大 → 再显内容」的节奏。
         landed = false
@@ -578,7 +566,7 @@ struct LibraryView: View {
         } completion: {
             if presented && !closing { landed = true }
         }
-        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomBackdrop) {
+        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomBackdrop.delay(GridMotion.blurDelay)) {
             blurRadius = 18
             gridDim = 1
         }
@@ -704,12 +692,8 @@ struct LibraryView: View {
         }
         closing = true
         autoplay = false
-        // t182u：封面落回格子时（关闭弹簧约 85% 处）从落点格子扩散波浪
-        let landKey = targetKey
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(Motion.zoomFluid ? Motion.fluidClose * 0.85 : 0.3))
-            startWave(from: landKey)
-        }
+        // t187u：原片关闭 = 清晰网格先停在 0.95，封面快落位时整体放大回 1（f171→f184，≈0.43s，无过冲、无逐格错峰）
+        withAnimation(reduceMotion ? nil : GridMotion.close) { zm.gridShrink = 0 }
         demoToken += 1
         withAnimation(
             reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomCurve.closeAnimation,
@@ -835,10 +819,12 @@ private struct CoverFlight: AnimatableModifier {
     var perAxis: Bool = true
     /// t147u：单一进度 + 弧线（与 perAxis 互斥）
     var fluid: Bool = false
+    /// t187u：网格整体缩小量（0 = 原尺寸，1 = GridMotion.minScale），与网格同一个动画值 → 落点永远与格子重合
+    var shrink: CGFloat = 0
 
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(progress, shrink) }
+        set { progress = newValue.first; shrink = newValue.second }
     }
 
     func body(content: Content) -> some View {
@@ -854,7 +840,7 @@ private struct CoverFlight: AnimatableModifier {
         let fs: CGFloat = fluid ? fluidSize : !perAxis ? p : CGFloat(closing ? 1 - FlightCurves.value(FlightCurves.closeS, u) : FlightCurves.value(FlightCurves.openS, u))
         let clamped: CGFloat = min(1, max(0, fs))
         // t138u：起点格子跟着网格整体缩放（锚点 = 屏幕 46.5% / 68%），落点永远与正在缩放的格子重合
-        let gs: CGFloat = (perAxis || fluid) ? CGFloat(FlightCurves.gridScale(u, closing: closing)) : 1
+        let gs: CGFloat = (perAxis || fluid) ? 1 - (1 - GridMotion.minScale) * shrink : 1
         let screen = UIScreen.main.bounds.size
         let ax = FlightCurves.gridAnchor.x * screen.width, ay = FlightCurves.gridAnchor.y * screen.height
         let sW = start.width * gs
@@ -917,53 +903,30 @@ private struct CoverFlight: AnimatableModifier {
     }
 }
 
-/// t138u：首页网格整体缩放（与 CoverFlight 同一 progress → 同一帧同一值）
+/// t187u：首页网格整体缩放（原片逐帧实测：所有格子同一缩放、同一锚点，无逐格错峰、无过冲）
+enum GridMotion {
+    /// 原片列距 113.3 → 107.2px（4 列中心跨度 339 → 321.5）≈ 0.95
+    static let minScale: CGFloat = 0.95
+    /// 打开：f5→f9 缩到 0.95（≈0.13s，ease-out）
+    static let open: Animation = .timingCurve(0.556, -0.094, 0.592, 1.094, duration: 0.13)
+    /// 模糊 / 变暗在缩小基本完成后才开始（原片 f9→f10 起才糊）
+    static let blurDelay: Double = 0.12
+    /// 关闭：清晰网格停在 0.95，0.12s 后用 0.43s 放大回 1（原片 f171→f184，拟合 bezier）
+    static let close: Animation = .timingCurve(0.293, 0.305, 0.470, 0.829, duration: 0.43).delay(0.12)
+}
+
 struct GridRipple: AnimatableModifier {
-    var progress: CGFloat
-    var closing: Bool
+    var shrink: CGFloat
     var anchor: UnitPoint
     var enabled: Bool
     var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
+        get { shrink }
+        set { shrink = newValue }
     }
     func body(content: Content) -> some View {
-        let u = Double(min(1, max(0, closing ? 1 - progress : progress)))
-        let s = enabled ? CGFloat(FlightCurves.gridScale(u, closing: closing)) : 1
+        let s = enabled ? 1 - (1 - GridMotion.minScale) * shrink : 1
         let a = anchor
         content.visualEffect { c, _ in c.scaleEffect(s, anchor: a) }
-    }
-}
-
-/// t182u：网格「海浪」参数。每个格子的脉冲按距离延迟（每格距 0.028s），幅度按 e^(−d/2.5 格距) 衰减，
-/// 形状 sin(πp)：1 → 1+A → 1（以自身中心缩放，纯渲染变换，不影响布局）
-enum Wave {
-    static let amplitude = 0.06         // 波源格子峰值 1.06
-    static let falloff = 2.5            // 衰减长度（格距）
-    static let delayPerPitch = 0.028    // 波速：每格距 28ms
-    static let pulse = 0.32             // 单个格子脉冲时长
-    static let pitch = 94.5             // 格距（iPhone 16 Pro：76.5 + 18pt）
-    static let total = delayPerPitch * 12 + pulse
-}
-
-struct WaveRipple: AnimatableModifier {
-    var t: CGFloat
-    let distance: Double
-    let enabled: Bool
-    var animatableData: CGFloat {
-        get { t }
-        set { t = newValue }
-    }
-    func body(content: Content) -> some View {
-        var s: CGFloat = 1
-        if enabled, distance >= 0, Double(t) < Wave.total {
-            let dp = distance / Wave.pitch
-            let p = (Double(t) - dp * Wave.delayPerPitch) / Wave.pulse
-            if p > 0 && p < 1 {
-                s = 1 + CGFloat(Wave.amplitude * exp(-dp / Wave.falloff) * sin(.pi * p))
-            }
-        }
-        return content.visualEffect { c, _ in c.scaleEffect(s, anchor: .center) }
     }
 }
 
@@ -1023,9 +986,8 @@ final class LibraryZoomModel: ObservableObject {
     @Published var selectedIndex: Int = AlbumData.featuredIndex
     @Published var pull: CGFloat = 0
     @Published var flip: Double = 0
-    /// t182u：网格波浪时钟（秒，0 → Wave.total 线性）与波源格子
-    @Published var waveT: CGFloat = 10
-    @Published var waveOrigin: Int? = nil
+    /// t187u：网格整体缩小量 0…1（打开 → 1，关闭 → 0）
+    @Published var gridShrink: CGFloat = 0
     /// t160u：封面翻到背面 = 歌词模式
     @Published var lyricsMode: Bool = false
     @Published var demoToken: Int = 0

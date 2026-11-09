@@ -403,16 +403,14 @@ struct AlbumDetailView: View {
 
             // t129u：标题 / 艺人各限一行，超长在右侧以 … 截断；占满两按钮之间（两侧各留 10pt），绝不压到按钮
             VStack(spacing: 1) {
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(theme.ink)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text(artist)
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.dim)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                // t188u：横滑换专辑时，标题 / 艺人与迷你播放条同款逐词上飘（FloatingText，同一组参数）；
+                // 放不下时整行上飘 + 单行 … 截断；颜色跟随主题色
+                FloatingText(key: themeKey,
+                             tokens: FloatingText.words(title, font: .system(size: 14, weight: .semibold)),
+                             color: theme.ink, alignment: .center, animateOnAppear: false)
+                FloatingText(key: themeKey,
+                             tokens: FloatingText.words(artist, font: .system(size: 11)),
+                             color: theme.dim, startDelay: 0.08, alignment: .center, animateOnAppear: false)
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 10)
