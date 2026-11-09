@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AB10000000000000000000E1 /* LyricsData.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000E2 /* LyricsData.swift */; };
 		AB1000000000000000000001 /* AppleMusicStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000002 /* AppleMusicStore.swift */; };
 		AB1000000000000000000003 /* AppleMusicViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000004 /* AppleMusicViews.swift */; };
 		AB10000000000000000000F1 /* RelatedAlbums.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F2 /* RelatedAlbums.swift */; };
@@ -58,6 +59,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AB10000000000000000000E2 /* LyricsData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsData.swift; sourceTree = "<group>"; };
 		AB1000000000000000000002 /* AppleMusicStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicStore.swift; sourceTree = "<group>"; };
 		AB1000000000000000000004 /* AppleMusicViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicViews.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F2 /* RelatedAlbums.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelatedAlbums.swift; sourceTree = "<group>"; };
@@ -180,6 +182,7 @@
 		0157955E267509BCB8BB1075 /* Vinyl */ = {
 			isa = PBXGroup;
 			children = (
+				AB10000000000000000000E2 /* LyricsData.swift */,
 				AB1000000000000000000002 /* AppleMusicStore.swift */,
 				AB1000000000000000000004 /* AppleMusicViews.swift */,
 				AB10000000000000000000F2 /* RelatedAlbums.swift */,
@@ -313,6 +316,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AB10000000000000000000E1 /* LyricsData.swift in Sources */,
 				AB1000000000000000000001 /* AppleMusicStore.swift in Sources */,
 				AB1000000000000000000003 /* AppleMusicViews.swift in Sources */,
 				AB10000000000000000000F1 /* RelatedAlbums.swift in Sources */,

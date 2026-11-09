@@ -6,6 +6,8 @@ __pycache__/
 # Xcode user state and build output
 build/
 DerivedData/
+.build/
+.swiftpm/
 *.xcuserstate
 *.xcscmblueprint
 xcuserdata/

@@ -1,7 +1,6 @@
 import SwiftUI
 import Foundation
 import MusicKit
-import CryptoKit
 
 /// 上报封套在 "library" 坐标空间中的位置，供 zoom 转场计算终点。
 struct SleeveFrameKey: PreferenceKey {
@@ -1201,92 +1200,47 @@ enum Lyrics {
     static let lookahead: Double = 0.15    // 播放时钟 0.25s 一跳，提前一点点亮下一行
 }
 
-struct LyricLine: Codable, Equatable, Identifiable {
-    let id: Int
-    let time: Double
-    let text: String
-    /// t165u：增强 LRC 的逐字时间戳 <mm:ss.xx>（字符偏移 → 时间）；没有则按字数插值
-    var marks: [Mark]? = nil
-    struct Mark: Codable, Equatable { let char: Int; let time: Double }
-}
-
-enum LyricsResult: Codable, Equatable {
-    case synced([LyricLine])
-    case plain(String)
-    case none
-}
-
-/// t160u / t169u：每首歌只请求一次。内存 + Caches/lyrics/<sha256>.json；
-/// 找到的结果永久缓存，「没有歌词」缓存 7 天，网络失败不缓存；同一首歌的并发请求合并。
+/// 同步提供首帧缓存；后台数据仓库负责合并请求、磁盘缓存与失败重试。
 @MainActor
 final class LyricsStore {
     static let shared = LyricsStore()
-    static let notFoundTTL: TimeInterval = 7 * 24 * 3600
     static let maxConcurrent = 3
-    private var memory: [String: LyricsResult] = [:]
-    private var inflight: [String: Task<LyricsResult?, Never>] = [:]
-    nonisolated static let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("lyrics", isDirectory: true)
+    private var memory: [String: LyricsCacheEntry] = [:]
     /// 统计（用于日志）
     private(set) var stats = (requested: 0, cached: 0, fetched: 0, found: 0, notFound: 0, failed: 0)
 
-    private struct Entry: Codable { let result: LyricsResult; let savedAt: Date }
-
-    /// 缓存键 = 歌名 + 艺人（不含专辑：播放队列预取拿不到可靠的专辑名）
-    nonisolated static func key(_ title: String, _ artist: String) -> String {
-        title.lowercased() + "\u{1F}" + artist.lowercased()
-    }
-    nonisolated private static func file(_ key: String) -> URL {
-        let name = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
-        return dir.appendingPathComponent(name + ".json")
-    }
-    nonisolated private static func readDisk(_ key: String) -> LyricsResult? {
-        guard let data = try? Data(contentsOf: file(key)) else { return nil }
-        if let e = try? JSONDecoder().decode(Entry.self, from: data) {
-            if e.result == .none, Date().timeIntervalSince(e.savedAt) > notFoundTTL { return nil }
-            return e.result
-        }
-        return try? JSONDecoder().decode(LyricsResult.self, from: data)   // build 143 的旧格式
-    }
-    nonisolated private static func writeDisk(_ key: String, _ r: LyricsResult) {
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? JSONEncoder().encode(Entry(result: r, savedAt: Date())).write(to: file(key), options: .atomic)
+    private func key(_ title: String, _ artist: String, duration: Double?) -> String {
+        // 首帧同步读取只做轻量字符串处理；搜索用的简繁转换交给后台仓库。
+        [title.lowercased(), artist.lowercased(), duration.map(String.init(describing:)) ?? "unknown"]
+            .joined(separator: "\u{1F}")
     }
 
     /// 同步查内存（歌词面板第一帧直接用，命中就不出现 loading）
-    func peek(_ title: String, _ artist: String) -> LyricsResult? { memory[Self.key(title, artist)] }
-
-    func lyrics(title: String, artist: String, album: String?, duration: Double?) async -> LyricsResult {
-        await load(title: title, artist: artist, album: album, duration: duration) ?? .none
+    func peek(_ title: String, _ artist: String, duration: Double?) -> LyricsResult? {
+        let key = key(title, artist, duration: duration)
+        guard let entry = memory[key], entry.valid(at: Date()) else { memory[key] = nil; return nil }
+        return entry.value.result
     }
 
-    /// 返回 nil = 网络失败
-    @discardableResult
-    private func load(title: String, artist: String, album: String?, duration: Double?) async -> LyricsResult? {
-        let key = Self.key(title, artist)
+    func lyrics(title: String, artist: String, album: String?, duration: Double?) async throws -> LyricsResult {
+        let query = LyricsQuery(title: title, artist: artist, album: album, duration: duration)
         stats.requested += 1
-        if let hit = memory[key] { stats.cached += 1; return hit }
-        if let t = inflight[key] { return await t.value }
-        // 磁盘读取 + 网络请求都在后台低优先级执行
-        let task = Task.detached(priority: .utility) { () -> LyricsResult? in
-            if let hit = LyricsStore.readDisk(key) { return hit }
-            let r = await LyricsStore.fetch(title: title, artist: artist, album: album, duration: duration)
-            if let r { LyricsStore.writeDisk(key, r) }
-            return r
+        if let hit = peek(title, artist, duration: duration) { stats.cached += 1; return hit }
+        do {
+            let entry = try await LyricsRepository.shared.loadEntry(query)
+            memory[key(title, artist, duration: duration)] = entry
+            stats.fetched += 1
+            if entry.value.isFound { stats.found += 1 } else { stats.notFound += 1 }
+            return entry.value.result
+        } catch {
+            stats.failed += 1
+            throw error
         }
-        inflight[key] = task
-        let result = await task.value
-        inflight[key] = nil
-        guard let result else { stats.failed += 1; return nil }
-        memory[key] = result
-        stats.fetched += 1
-        if result == .none { stats.notFound += 1 } else { stats.found += 1 }
-        return result
     }
 
     /// t169u：后台预取（已缓存的跳过，最多 3 个并发）；列表顺序 = 优先级
     func prefetch(_ songs: [Song], reason: String) {
-        let todo = songs.filter { memory[Self.key($0.title, $0.artistName)] == nil }
+        let todo = songs.filter { peek($0.title, $0.artistName, duration: $0.duration) == nil }
         guard !todo.isEmpty else { return }
         let skipped = songs.count - todo.count
         Task(priority: .utility) { @MainActor in
@@ -1296,8 +1250,8 @@ final class LyricsStore {
                     guard next < todo.count else { return }
                     let s = todo[next]; next += 1
                     group.addTask { @MainActor in
-                        await LyricsStore.shared.load(title: s.title, artist: s.artistName,
-                                                      album: s.albumTitle, duration: s.duration)
+                        _ = try? await LyricsStore.shared.lyrics(title: s.title, artist: s.artistName,
+                                                                album: s.albumTitle, duration: s.duration)
                     }
                 }
                 for _ in 0..<Self.maxConcurrent { add() }
@@ -1308,109 +1262,6 @@ final class LyricsStore {
         }
     }
 
-    private struct Record: Decodable {
-        let trackName: String?
-        let duration: Double?
-        let instrumental: Bool?
-        let plainLyrics: String?
-        let syncedLyrics: String?
-        var result: LyricsResult? {
-            if let s = syncedLyrics, case let lines = LyricsStore.parseLRC(s), !lines.isEmpty { return .synced(lines) }
-            if let p = plainLyrics?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty { return .plain(p) }
-            return nil
-        }
-    }
-
-    nonisolated private static func request(_ path: String, _ items: [URLQueryItem]) async throws -> (Data, Int) {
-        var c = URLComponents(string: "https://lrclib.net/api/" + path)!
-        c.queryItems = items
-        var req = URLRequest(url: c.url!, timeoutInterval: 12)
-        req.setValue("Vinyl/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        return (data, (resp as? HTTPURLResponse)?.statusCode ?? 0)
-    }
-
-    /// 去掉 (feat. …) / [Remastered] / - Live 之类的后缀，用于搜索兜底
-    nonisolated private static func cleaned(_ title: String) -> String {
-        var t = title.replacingOccurrences(of: #"\s*[\(\[（【][^\)\]）】]*[\)\]）】]"#, with: "", options: .regularExpression)
-        if let r = t.range(of: " - ") { t = String(t[..<r.lowerBound]) }
-        return t.trimmingCharacters(in: .whitespaces)
-    }
-
-    /// /api/get（精确：歌名 + 艺人 + 专辑 + 时长）→ /api/search（歌名 + 艺人）→ /api/search?q=
-    nonisolated static func fetch(title: String, artist: String, album: String?, duration: Double?) async -> LyricsResult? {
-        do {
-            var items = [URLQueryItem(name: "track_name", value: title),
-                         URLQueryItem(name: "artist_name", value: artist)]
-            if let album, !album.isEmpty { items.append(URLQueryItem(name: "album_name", value: album)) }
-            if let duration, duration > 0 { items.append(URLQueryItem(name: "duration", value: String(Int(duration.rounded())))) }
-            let (data, status) = try await request("get", items)
-            if status == 200, let rec = try? JSONDecoder().decode(Record.self, from: data), let r = rec.result {
-                print("[t160u] lyrics get hit: \(title) — \(artist) synced=\(rec.syncedLyrics != nil)")
-                return r
-            }
-            let short = cleaned(title)
-            let searches: [[URLQueryItem]] = [
-                [URLQueryItem(name: "track_name", value: short), URLQueryItem(name: "artist_name", value: artist)],
-                [URLQueryItem(name: "q", value: "\(short) \(artist)")]
-            ]
-            for q in searches {
-                let (d, s) = try await request("search", q)
-                guard s == 200, let recs = try? JSONDecoder().decode([Record].self, from: d) else { continue }
-                // 时长相差 ≤ 8s 才算同一首（不知道时长时接受任意），有同步歌词的优先
-                let ok = recs.filter { r in
-                    guard let duration, duration > 0, let d = r.duration else { return true }
-                    return abs(d - duration) <= 8
-                }.filter { $0.result != nil }
-                if let best = ok.first(where: { $0.syncedLyrics?.isEmpty == false }) ?? ok.first, let r = best.result {
-                    print("[t160u] lyrics search hit: \(title) — \(artist) synced=\(best.syncedLyrics?.isEmpty == false)")
-                    return r
-                }
-            }
-            print("[t160u] lyrics not found: \(title) — \(artist)")
-            return LyricsResult.none
-        } catch {
-            print("[t160u] lyrics fetch failed: \(error.localizedDescription)")
-            return nil
-        }
-    }
-
-    /// LRC：一行可带多个 [mm:ss.xx] 时间戳；跳过空行与元数据标签（[ar:] 等）
-    nonisolated static func parseLRC(_ text: String) -> [LyricLine] {
-        let stamp = try! NSRegularExpression(pattern: #"\[(\d{1,3}):(\d{1,2}(?:[\.:]\d{1,3})?)\]"#)
-        let word = try! NSRegularExpression(pattern: #"<(\d{1,3}):(\d{1,2}(?:[\.:]\d{1,3})?)>"#)
-        var out: [(Double, String, [LyricLine.Mark]?)] = []
-        for raw in text.components(separatedBy: .newlines) {
-            let ns = raw as NSString
-            let matches = stamp.matches(in: raw, range: NSRange(location: 0, length: ns.length))
-            guard let last = matches.last else { continue }
-            let rawBody = ns.substring(from: last.range.location + last.range.length)
-            // 增强 LRC：<mm:ss.xx> 词级时间戳 → 去掉标签，记下每个标签所在的字符位置
-            var body = "", marks: [LyricLine.Mark] = []
-            let wns = rawBody as NSString
-            var cursor = 0
-            for w in word.matches(in: rawBody, range: NSRange(location: 0, length: wns.length)) {
-                body += wns.substring(with: NSRange(location: cursor, length: w.range.location - cursor))
-                let mm = Double(wns.substring(with: w.range(at: 1))) ?? 0
-                let ss = Double(wns.substring(with: w.range(at: 2)).replacingOccurrences(of: ":", with: ".")) ?? 0
-                marks.append(.init(char: body.count, time: mm * 60 + ss))
-                cursor = w.range.location + w.range.length
-            }
-            body += wns.substring(from: cursor)
-            let lead = body.prefix(while: { $0 == " " }).count
-            body = body.trimmingCharacters(in: .whitespaces)
-            marks = marks.map { .init(char: max(0, min(body.count, $0.char - lead)), time: $0.time) }
-            guard !body.isEmpty else { continue }
-            for m in matches {
-                let mm = Double(ns.substring(with: m.range(at: 1))) ?? 0
-                let ss = Double(ns.substring(with: m.range(at: 2)).replacingOccurrences(of: ":", with: ".")) ?? 0
-                out.append((mm * 60 + ss, body, marks.isEmpty ? nil : marks))
-            }
-        }
-        return out.sorted { $0.0 < $1.0 }.enumerated().map {
-            LyricLine(id: $0.offset, time: $0.element.0, text: $0.element.1, marks: $0.element.2)
-        }
-    }
 }
 
 /// 歌词面板：统一 16pt；普通行和逐字填色使用相同字体与居中排版。
@@ -1425,6 +1276,8 @@ struct LyricsPanel: View {
     var topExtend: CGFloat = 0
     @State private var result: LyricsResult?
     @State private var loadedID: MusicItemID?
+    @State private var loadFailed = false
+    @State private var retryID = UUID()
     /// 播放时钟 0.25s 一跳：记下最近一次的位置与时刻，帧间按真实时间外推
     @State private var anchorPos: Double = 0
     @State private var anchorDate = Date()
@@ -1449,7 +1302,7 @@ struct LyricsPanel: View {
 
     var body: some View {
         Group {
-            switch loadedID == song.id ? result : LyricsStore.shared.peek(song.title, song.artistName) {
+            switch loadedID == song.id ? result : LyricsStore.shared.peek(song.title, song.artistName, duration: song.duration) {
             case .synced(let lines)?: synced(lines)
             case .plain(let text)?:
                 ScrollView(showsIndicators: false) {
@@ -1473,20 +1326,46 @@ struct LyricsPanel: View {
                 }
             case .none?: Self.emptyText
             case nil:
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if loadedID == song.id && loadFailed {
+                    Button {
+                        loadFailed = false
+                        result = nil
+                        retryID = UUID()
+                    } label: {
+                        Text("歌词加载失败，点按重试")
+                            .font(.system(size: Lyrics.fontSize))
+                            .foregroundStyle(theme.dim)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                     .padding(.bottom, 80)
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.bottom, 80)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: music.position) { _, p in anchorPos = p; anchorDate = Date() }
         .onAppear { anchorPos = music.position; anchorDate = Date() }
-        .task(id: song.id) {
-            if let hit = LyricsStore.shared.peek(song.title, song.artistName) { result = hit; loadedID = song.id; return }
-            let r = await LyricsStore.shared.lyrics(title: song.title, artist: song.artistName,
-                                                    album: song.albumTitle ?? albumTitle,
-                                                    duration: song.duration)
-            withAnimation(.easeOut(duration: 0.2)) { result = r; loadedID = song.id }
+        .task(id: "\(song.id.rawValue):\(retryID)") {
+            let requestID = song.id
+            loadFailed = false
+            if let hit = LyricsStore.shared.peek(song.title, song.artistName, duration: song.duration) {
+                result = hit; loadedID = requestID; return
+            }
+            do {
+                let r = try await LyricsStore.shared.lyrics(title: song.title, artist: song.artistName,
+                                                           album: song.albumTitle ?? albumTitle,
+                                                           duration: song.duration)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.2)) { result = r; loadedID = requestID }
+            } catch {
+                guard !Task.isCancelled else { return }
+                result = nil; loadedID = requestID; loadFailed = true
+            }
         }
     }
 
