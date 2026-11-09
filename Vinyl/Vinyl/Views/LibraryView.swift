@@ -14,6 +14,7 @@ struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openURL) private var openURL
     @EnvironmentObject private var music: AppleMusicStore
+    @State private var showingSearch = false
     /// t125u：转场状态放在共享模型里 —— Tab 里的实例画首页，ContentView 叠在 TabView 之上的实例画详情层
     @EnvironmentObject private var zm: LibraryZoomModel
     var overlayMode = false
@@ -58,11 +59,33 @@ struct LibraryView: View {
                 .allowsHitTesting(presented)
         } else {
             homeBody
+                // t196u：原生搜索 sheet（.searchable）
+                .sheet(isPresented: $showingSearch) {
+                    LibrarySearchSheet(
+                        onOpen: { c in
+                            showingSearch = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                openCollection(c, startPlayback: false)
+                            }
+                        },
+                        onPlay: { song, list, fromCatalog in
+                            showingSearch = false
+                            Task { await music.play(song, in: list, fromCatalog: fromCatalog) }
+                        }
+                    )
+                    .environmentObject(music)
+                    .presentationDetents([.large])
+                }
                 // t184u：懒加载首页第一个专辑的曲目（给默认 mini player 用）
                 .task(id: music.collections.first?.id) {
                     guard let c = music.collections.first, !music.hasCurrentTrack else { return }
                     let songs = (try? await c.songs()) ?? []
                     suggestID = c.id; suggestSongs = songs
+                }
+                // t197u：首页可见 + 随后几行预取 MusicBrainz 官方封面（限速，不挡 UI）
+                .task(id: music.homePageRevision) {
+                    let qs = music.collections.prefix(32).map(\.officialQuery)
+                    OfficialCoverStore.shared.prefetch(Array(qs))
                 }
                 // t169u：开始播放一首歌 → 预取它 + 队列里接下来 2 首的歌词
                 // 调试参数 --log-themes：打印前 8 个首页专辑的主题色选取 + 预取第一张专辑歌词（不改界面）
@@ -162,33 +185,27 @@ struct LibraryView: View {
             // Assets logo mark inside system glass circle (not SF Symbol opticaldisc).
             // 左上 logo：未连接时 = 连接 Apple Music 的入口（被拒绝时打开系统设置）
             // t107u：参考视频左上角字形 = SF Symbol square.3.layers.3d.down.right（用户 t111u 选定）（原生 toolbar 尺寸）
+            // t196u：左上角叠层按钮 — 点按仍连接 / 标识；长按菜单 = 刷新资料库 + 显示已隐藏
             GlassCircleButton(systemImage: "square.3.layers.3d.down.right",
                               accessibilityText: music.authorized ? "Vinyl" : "连接 Apple Music") {
                 connectMusic()
             }
-            // 隐藏调试：长按循环切换放大曲线 A/B/C，并短暂显示曲线名
-            .simultaneousGesture(LongPressGesture(minimumDuration: 0.6).onEnded { _ in
-                let curve = Motion.cycleZoomCurve()
-                withAnimation(.easeOut(duration: 0.15)) { curveLabel = curve.name }
-                Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(1))
-                    withAnimation(.easeIn(duration: 0.2)) { curveLabel = nil }
-                }
-            })
-            Spacer(minLength: 0)
-            GlassCircleButton(systemImage: "cube", accessibilityText: "刷新资料库") {
-                if music.authorized {
-                    Task { await music.refreshHome() }
-                } else { connectMusic() }
-            }
-            // t192u：长按右上角按钮 → 恢复「从首页隐藏」的条目
             .contextMenu {
-                Button("刷新资料库", systemImage: "arrow.clockwise") { Task { await music.refreshHome() } }
+                Button("刷新资料库", systemImage: "arrow.clockwise") {
+                    if music.authorized { Task { await music.refreshHome() } }
+                    else { connectMusic() }
+                }
                 if music.hiddenCount > 0 {
                     Button("显示已隐藏的 \(music.hiddenCount) 项", systemImage: "eye") {
                         withAnimation(.spring(duration: 0.4, bounce: 0)) { music.unhideAll() }
                     }
                 }
+            }
+            Spacer(minLength: 0)
+            // t196u：右上角 = 搜索（同款玻璃圆按钮）；原 cube 刷新入口移到左上长按
+            GlassCircleButton(systemImage: "magnifyingglass", accessibilityText: "搜索") {
+                if music.authorized { showingSearch = true }
+                else { connectMusic() }
             }
         }
         .padding(.horizontal, DS.contentInset)
@@ -363,7 +380,7 @@ struct LibraryView: View {
             targetKey = key
             openCollection(collection)
         } label: {
-            ArtworkFill(artwork: collection.artwork)   // 与飞行封面 / 封套同一渲染尺寸，避免换分辨率
+            ArtworkFill(artwork: collection.artwork, official: collection.officialQuery)   // t197u：官方封面就绪后替换
                 .clipShape(RoundedRectangle(cornerRadius: DS.corner))
                 .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
                 .background {
@@ -383,7 +400,7 @@ struct LibraryView: View {
         .contextMenu {
             collectionMenu(collection)
         } preview: {
-            ArtworkFill(artwork: collection.artwork)
+            ArtworkFill(artwork: collection.artwork, official: collection.officialQuery)
                 .frame(width: 280, height: 280)
                 .clipShape(RoundedRectangle(cornerRadius: DS.corner * 280 / 76.5))
         }
@@ -600,7 +617,7 @@ struct LibraryView: View {
         let end = flightEnd
         return Group {
             if let selectedCollection {
-                ArtworkFill(artwork: selectedCollection.artwork)
+                ArtworkFill(artwork: selectedCollection.artwork, official: selectedCollection.officialQuery)
             } else {
                 Image(DS.coverName(selectedIndex)).resizable()
             }
@@ -1154,5 +1171,155 @@ struct HomePlaceholder: View {
             .fill(Color.primary.opacity(0.05))
             .aspectRatio(1, contentMode: .fit)
             .accessibilityHidden(true)
+    }
+}
+
+
+// MARK: - t196u：搜索
+
+struct LibrarySearchSheet: View {
+    @EnvironmentObject private var music: AppleMusicStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var searching = false
+    @State private var albums: [MusicCollection] = []
+    @State private var songs: [(Song, Bool)] = []   // (song, fromCatalog)
+    @State private var recent: [String] = UserDefaults.standard.stringArray(forKey: "vinyl.recentSearches") ?? []
+    var onOpen: (MusicCollection) -> Void
+    var onPlay: (Song, [Song], Bool) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if recent.isEmpty {
+                        ContentUnavailableView("搜索音乐", systemImage: "magnifyingglass",
+                                               description: Text("按专辑、歌单或歌曲名称搜索"))
+                    } else {
+                        List {
+                            Section("最近搜索") {
+                                ForEach(recent, id: \.self) { term in
+                                    Button(term) { query = term }
+                                }
+                                Button("清除", role: .destructive) {
+                                    recent = []; UserDefaults.standard.removeObject(forKey: "vinyl.recentSearches")
+                                }
+                            }
+                        }
+                    }
+                } else if searching && albums.isEmpty && songs.isEmpty {
+                    ProgressView("搜索中…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if albums.isEmpty && songs.isEmpty {
+                    ContentUnavailableView.search(text: query)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 18) {
+                            if !albums.isEmpty {
+                                Text("专辑与歌单").font(.headline).padding(.horizontal, 16)
+                                LazyVGrid(columns: [GridItem(.flexible(), spacing: 14),
+                                                    GridItem(.flexible(), spacing: 14),
+                                                    GridItem(.flexible(), spacing: 14)], spacing: 14) {
+                                    ForEach(albums) { c in
+                                        Button { remember(query); onOpen(c) } label: {
+                                            VStack(alignment: .leading, spacing: 6) {
+                                                ArtworkFill(artwork: c.artwork, official: c.officialQuery)
+                                                    .clipShape(RoundedRectangle(cornerRadius: DS.corner))
+                                                    .aspectRatio(1, contentMode: .fit)
+                                                Text(c.title).font(.caption.weight(.semibold)).lineLimit(1)
+                                                Text(c.artist).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                            }
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.horizontal, 16)
+                            }
+                            if !songs.isEmpty {
+                                Text("歌曲").font(.headline).padding(.horizontal, 16).padding(.top, 8)
+                                ForEach(Array(songs.enumerated()), id: \.offset) { _, item in
+                                    let (song, catalog) = item
+                                    Button {
+                                        remember(query)
+                                        onPlay(song, songs.map(\.0), catalog)
+                                    } label: {
+                                        HStack(spacing: 12) {
+                                            ArtworkFill(artwork: song.artwork, render: 96)
+                                                .frame(width: 48, height: 48)
+                                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(song.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                                                Text(song.artistName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                            }
+                                            Spacer(minLength: 0)
+                                            Image(systemName: "play.fill").font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 6)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 12)
+                    }
+                }
+            }
+            .navigationTitle("搜索")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "专辑、歌单、歌曲")
+            .task(id: query) { await runSearch() }
+        }
+    }
+
+    private func remember(_ term: String) {
+        let t = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        var r = recent.filter { $0.caseInsensitiveCompare(t) != .orderedSame }
+        r.insert(t, at: 0)
+        recent = Array(r.prefix(8))
+        UserDefaults.standard.set(recent, forKey: "vinyl.recentSearches")
+    }
+
+    @MainActor
+    private func runSearch() async {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard term.count >= 1 else { albums = []; songs = []; return }
+        searching = true
+        defer { searching = false }
+        // ① 本地首页筛选
+        let q = term.lowercased()
+        var local = music.collections.filter {
+            $0.title.lowercased().contains(q) || $0.artist.lowercased().contains(q)
+        }
+        var songHits: [(Song, Bool)] = []
+        // ② 资料库搜索
+        do {
+            var req = MusicLibrarySearchRequest(term: term, types: [Album.self, Playlist.self, Song.self])
+            req.limit = 25
+            let r = try await req.response()
+            local += r.albums.map { .album($0, catalog: false) }
+            local += r.playlists.map { .playlist($0) }
+            songHits += r.songs.map { ($0, false) }
+        } catch { print("[t196u] library search: \(error)") }
+        // ③ 曲库搜索
+        do {
+            var req = MusicCatalogSearchRequest(term: term, types: [Album.self, Playlist.self, Song.self])
+            req.limit = 25
+            let r = try await req.response()
+            local += r.albums.map { .album($0, catalog: true) }
+            local += r.playlists.map { .playlist($0) }
+            songHits += r.songs.map { ($0, true) }
+        } catch { print("[t196u] catalog search: \(error)") }
+        // 去重（按 id）
+        var seen = Set<String>()
+        albums = local.filter { seen.insert($0.id).inserted }
+        var seenS = Set<String>()
+        songs = songHits.filter { seenS.insert($0.0.id.rawValue).inserted }
     }
 }
