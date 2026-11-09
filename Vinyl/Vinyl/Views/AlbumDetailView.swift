@@ -45,6 +45,8 @@ struct AlbumDetailView: View {
     @State private var pageWidth: CGFloat = 402
     /// 封套跟手的横向位移（pt）
     @State private var swipeX: CGFloat = 0
+    /// t154u：逐行出现的时间轴（秒，0 → Reveal.total 线性推进；每行 / 播放条按各自 delay 取 easeOut 进度）
+    @State private var reveal: CGFloat = Reveal.total
     /// nil = 未判定；true = 横向主导（接管）；false = 纵向（交给列表滚动）
     @State private var swipeAxisH: Bool? = nil
     @State private var swipeBusy = false
@@ -129,17 +131,15 @@ struct AlbumDetailView: View {
                 if collection != nil {
                     realTrackTable
                         .padding(.top, 40)
-                        .opacity(stage(0.09))
                 } else {
                     trackTable
                         .padding(.horizontal, DS.contentInset)
                         .padding(.top, 40)
-                        .opacity(stage(0.09))
 
                     releaseCard
                         .padding(.horizontal, DS.contentInset)
                         .padding(.top, 22)
-                        .opacity(stage(0.17))
+                        .modifier(rowReveal(AlbumData.tracks.count + 1))
 
                     Spacer(minLength: 8)
                 }
@@ -169,17 +169,48 @@ struct AlbumDetailView: View {
                         .ignoresSafeArea(.container, edges: .bottom)
                         .allowsHitTesting(false)
                     }
-                    .opacity(stage(0.24))
+                    // t154u：封面落定时播放条淡入 + 上浮 6pt（0.25s easeOut）；关闭时随 contentAlpha 一起快速淡出
+                    .modifier(StaggerReveal(reveal: reveal, delay: 0, duration: Reveal.barDuration, rise: Reveal.barRise,
+                                            closing: closing, closeAlpha: contentAlpha))
             }
             // 不再给整列加 contentAlpha：封套只受 ArtworkHandoff 控制（全显 / 全隐），
             // 不会出现半透明封套透出唱片的「鬼影」帧；其余内容各自按 stage() 淡入。
         }
+        .onAppear { startReveal(delay: openRevealDelay) }
+        .onChange(of: motionStart) { _, _ in startReveal(delay: openRevealDelay) }
         .task {
             guard demoLevels == nil,
                   let url = Bundle.main.url(forResource: "demo-audio", withExtension: "m4a")
                     ?? Bundle.main.url(forResource: "demo-audio", withExtension: "wav") else { return }
             demoLevels = try? await WaveformAnalyzer.shared.levels(for: url)
         }
+    }
+
+    // MARK: - t154u 逐行出现
+
+    /// 打开：在封面飞行进度 ≈ 85% 时开始。Fluid 是 bounce 0 的临界阻尼弹簧
+    /// x(t) = 1 − (1 + ωt)e^(−ωt)，ω = 2π / d；x = 0.85 ⇔ ωt ≈ 3.37 ⇔ t ≈ 0.536·d。
+    private var openRevealDelay: Double {
+        switch Motion.zoomCurve {
+        case .fluid: return 0.536 * Motion.fluidOpen
+        case .ref: return 0.85 * Motion.refOpen
+        default: return 0.85 * 0.4
+        }
+    }
+
+    private func startReveal(delay: Double) {
+        var t = Transaction(); t.disablesAnimations = true
+        if reduceMotion { withTransaction(t) { reveal = Reveal.total }; return }
+        withTransaction(t) { reveal = 0 }
+        withAnimation(.linear(duration: Double(Reveal.total)).delay(delay)) { reveal = Reveal.total }
+    }
+
+    /// 第 i 行（0 = 表头）：delay = i × 0.035s（上限 0.35s）；首屏之外的行（i > 10）不参与错峰，直接显示
+    private func rowReveal(_ i: Int) -> StaggerReveal {
+        let d: CGFloat = i > Reveal.visibleRows ? 0 : min(Reveal.maxStagger, CGFloat(i) * Reveal.stagger)
+        return StaggerReveal(reveal: i > Reveal.visibleRows ? Reveal.total : reveal, delay: d,
+                             duration: Reveal.rowDuration, rise: Reveal.rowRise,
+                             closing: closing, closeAlpha: contentAlpha)
     }
 
     /// 详情内容分层淡入：标题 → 曲目 → 发行信息 → 波形条，比整体淡入更接近系统转场
@@ -257,6 +288,8 @@ struct AlbumDetailView: View {
             swipeX = out
         } completion: {
             onPage(dir)
+            // t154u：新专辑的曲目表同样逐行出现（随新封套滑入开始）
+            startReveal(delay: 0.08)
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { swipeX = -out }
             withAnimation(.spring(response: 0.38, dampingFraction: 0.86), completionCriteria: .logicallyComplete) {
@@ -354,6 +387,7 @@ struct AlbumDetailView: View {
             }
             .padding(.horizontal, DS.contentInset)
             .padding(.bottom, TL.headerGap)
+            .modifier(rowReveal(0))
 
             if let songs {
                 if songs.isEmpty {
@@ -368,6 +402,7 @@ struct AlbumDetailView: View {
                             // 行身份 = 歌曲 ID（稳定），切歌时只有两行的颜色 / 图标变化，列表本身不重建
                             ForEach(songs, id: \.id) { song in
                                 realRow(sideIndex[song.id] ?? 0, song, in: songs)
+                                    .modifier(rowReveal((sideIndex[song.id] ?? 0) + 1))
                             }
                         }
                         .padding(.horizontal, DS.contentInset)
@@ -473,6 +508,7 @@ struct AlbumDetailView: View {
                 Spacer(minLength: 0)
             }
             .padding(.bottom, TL.headerGap)
+            .modifier(rowReveal(0))
 
             ForEach(AlbumData.tracks) { track in
                 let index = AlbumData.tracks.firstIndex { $0.id == track.id } ?? 0
@@ -509,6 +545,7 @@ struct AlbumDetailView: View {
                 .animation(.easeInOut(duration: 0.15), value: current)
                 .animation(.easeInOut(duration: 0.15), value: current && music.demoPlaying)
                 .accessibilityLabel("\(current && music.demoPlaying ? "暂停" : "播放") \(track.title)")
+                .modifier(rowReveal(index + 1))
             }
         }
     }
@@ -564,5 +601,39 @@ struct WipeMask: View {
             // 羽化带顶边位置 = (progress·(1+feather) − feather)·h
             .offset(y: (progress * (1 + feather) - feather) * h - h)
         }
+    }
+}
+
+
+// MARK: - t154u 逐行出现参数 + 修饰器（只改 opacity / offset，不触发布局）
+
+enum Reveal {
+    static let stagger: CGFloat = 0.035
+    static let maxStagger: CGFloat = 0.35
+    static let visibleRows = 10
+    static let rowDuration: CGFloat = 0.28
+    static let rowRise: CGFloat = 8
+    static let barDuration: CGFloat = 0.25
+    static let barRise: CGFloat = 6
+    static let total: CGFloat = maxStagger + rowDuration
+}
+
+struct StaggerReveal: AnimatableModifier {
+    var reveal: CGFloat
+    var delay: CGFloat
+    var duration: CGFloat
+    var rise: CGFloat
+    var closing: Bool
+    var closeAlpha: Double
+    var animatableData: CGFloat {
+        get { reveal }
+        set { reveal = newValue }
+    }
+    func body(content: Content) -> some View {
+        let t = min(1, max(0, (reveal - delay) / duration))
+        let e = 1 - pow(1 - t, 3)   // easeOut
+        content
+            .opacity(closing ? closeAlpha : Double(e))
+            .offset(y: closing ? 0 : rise * (1 - e))
     }
 }
