@@ -320,6 +320,8 @@ struct ArtworkFill: View {
     var render: CGFloat = 320
     /// t197u：有值时后台查 MusicBrainz Cover Art Archive；命中后平滑换成官方封面
     var official: OfficialCoverQuery? = nil
+    var animatesOfficial = true
+    var onResolved: ((UIImage?) -> Void)? = nil
 
     var body: some View {
         GeometryReader { geo in
@@ -328,9 +330,11 @@ struct ArtworkFill: View {
                 if let artwork {
                     // t193u：http(s) 封面走本地内存 + 磁盘缓存；资料库本地封面（musicKit://）仍交给系统 ArtworkImage
                     // t197u：先显示 Apple 封面，官方封面就绪后交叉淡入替换（不挡 UI）
-                    CachedArtwork(artwork: artwork, side: render, official: official)
+                    CachedArtwork(artwork: artwork, side: render, official: official,
+                                  animatesOfficial: animatesOfficial, onResolved: onResolved)
                 } else if let official {
-                    CachedArtwork(artwork: nil, side: render, official: official)
+                    CachedArtwork(artwork: nil, side: render, official: official,
+                                  animatesOfficial: animatesOfficial, onResolved: onResolved)
                 } else {
                     ZStack {
                         Color(hex: 0xE4E0DC)
@@ -346,6 +350,51 @@ struct ArtworkFill: View {
             .frame(width: side, height: side, alignment: .topLeading)
         }
         .aspectRatio(1, contentMode: .fit)
+    }
+}
+
+/// 起飞时锁定当前已显示的位图和请求键，网络返回的新封面留到交接结束后再采用。
+/// 本地 musicKit:// 图仍使用同一 ArtworkImage；远端未加载时保留相同主题色占位。
+struct MiniArtworkSnapshot: Equatable {
+    let coverName: String
+    let artwork: Artwork?
+    var image: UIImage?
+    let cacheKey: String
+    let remote: Bool
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.cacheKey == rhs.cacheKey && lhs.image === rhs.image && lhs.artwork == rhs.artwork
+    }
+
+    init(coverName: String, artwork: Artwork?, official: OfficialCoverQuery?, scale: CGFloat) {
+        self.coverName = coverName
+        self.artwork = artwork
+        let px = Int((320 * scale).rounded())
+        let url = artwork?.url(width: px, height: px)
+        remote = url?.scheme == "http" || url?.scheme == "https"
+        if let official, let hit = OfficialCoverStore.shared.cachedImage(for: official.id) {
+            image = hit
+            cacheKey = "official:\(official.id)"
+        } else if remote, let url {
+            image = ArtworkCache.shared.cached(url.absoluteString)
+            cacheKey = url.absoluteString
+        } else {
+            image = artwork == nil && official == nil ? UIImage(named: coverName) : nil
+            cacheKey = artwork == nil ? "asset:\(coverName)" : (url?.absoluteString ?? "local-artwork")
+        }
+    }
+
+    @ViewBuilder var content: some View {
+        if let image {
+            Image(uiImage: image).resizable().interpolation(.high)
+        } else if let artwork {
+            if remote {
+                Rectangle().fill(artwork.backgroundColor.map { Color(cgColor: $0) } ?? Color(hex: 0xE4E0DC))
+            } else {
+                ArtworkImage(artwork, width: 320, height: 320)
+            }
+        } else {
+            Rectangle().fill(Color(hex: 0xE4E0DC))
+        }
     }
 }
 
@@ -376,6 +425,11 @@ final class ArtworkCache: @unchecked Sendable {
     }
 
     func cached(_ key: String) -> UIImage? { memory.object(forKey: key as NSString) }
+
+    func seedMiniDiagnostic(_ image: UIImage, key: String) {
+        guard ProcessInfo.processInfo.arguments.contains("--debug-mini-official") else { return }
+        memory.setObject(image, forKey: key as NSString)
+    }
 
     func image(for url: URL) async -> UIImage? {
         let key = url.absoluteString
@@ -443,6 +497,8 @@ struct CachedArtwork: View {
     var artwork: Artwork? = nil
     let side: CGFloat
     var official: OfficialCoverQuery? = nil
+    var animatesOfficial = true
+    var onResolved: ((UIImage?) -> Void)? = nil
     @Environment(\.displayScale) private var scale
     // t211u：图片带上来源 key，输入变了旧图立即失效（不会把上一个专辑的封面留在格子里）
     @State private var appleLoaded: (key: String, image: UIImage)?
@@ -477,6 +533,7 @@ struct CachedArtwork: View {
             }
         }
         .frame(width: side, height: side)
+        .onChange(of: shown, initial: true) { _, image in onResolved?(image) }
 
         .task(id: appleURL?.absoluteString) {
             guard let appleURL else { return }
@@ -489,7 +546,7 @@ struct CachedArtwork: View {
             }
             if let img = await OfficialCoverStore.shared.image(for: official) {
                 // 首次命中才淡入（之后都同步命中缓存，无动画）
-                withAnimation(.easeInOut(duration: 0.25)) { officialLoaded = (official.id, img) }
+                withAnimation(animatesOfficial ? .easeInOut(duration: 0.25) : nil) { officialLoaded = (official.id, img) }
             }
         }
     }
@@ -551,6 +608,16 @@ final class OfficialCoverStore: @unchecked Sendable {
         lock.lock(); let e = map[id]; lock.unlock()
         guard let u = e?.url, let url = URL(string: u) else { return nil }
         return ArtworkCache.shared.cached(url.absoluteString)
+    }
+
+    /// 只在显式诊断启动参数下使用内置图模拟已经命中的官方缓存，不调用网络/不落盘。
+    func seedMiniDiagnostic(_ image: UIImage) {
+        guard ProcessInfo.processInfo.arguments.contains("--debug-mini-official") else { return }
+        let url = "https://vinyl.invalid/mini-official-fixture"
+        lock.lock()
+        map["mini-official-fixture"] = Entry(url: url, checkedAt: Date())
+        lock.unlock()
+        ArtworkCache.shared.seedMiniDiagnostic(image, key: url)
     }
 
     func image(for q: OfficialCoverQuery) async -> UIImage? {

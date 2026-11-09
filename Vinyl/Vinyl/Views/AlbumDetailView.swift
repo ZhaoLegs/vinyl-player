@@ -35,6 +35,8 @@ struct AlbumDetailView: View {
     let isPresented: Bool
     var closing: Bool = false
     var landed: Bool = false
+    var miniOwner: MiniArtworkOwner? = nil
+    var miniArtwork: MiniArtworkSnapshot? = nil
     /// t160u：点封面翻面后 = 歌词模式（曲目表淡出、歌词淡入）
     var lyricsMode: Bool = false
     /// 关闭时背景擦除进度（0 → 1，自上而下变透明）
@@ -43,6 +45,7 @@ struct AlbumDetailView: View {
     var keepsSpinning: Bool = true
     let motionStart: Date
     let onClose: () -> Void
+    var onSpinAngle: (Double) -> Void = { _ in }
     let onToggleArtwork: () -> Void
     /// t131u：封面区横滑切专辑。dir = +1 下一张（左滑）/ −1 上一张（右滑）
     var canPage: (Int) -> Bool = { _ in false }
@@ -136,13 +139,16 @@ struct AlbumDetailView: View {
                 TimelineView(.animation(paused: !isPresented || reduceMotion || spinFrom == nil)) { timeline in
                     let spin = Angle.degrees(reduceMotion ? 0 : spinAngle(at: timeline.date))
                     SleeveArtwork(coverName: coverName, artwork: collection?.artwork, official: collection?.officialQuery,
+                                  snapshot: miniArtwork,
                                   pull: pull, flip: flip, spin: spin, pageWidth: pageWidth)
                         .frame(width: DS.sleeve, height: DS.sleeve)
                         .contentShape(Rectangle())
                         .onTapGesture(perform: onToggleArtwork)
+                        .onChange(of: spin.degrees, initial: true) { _, angle in onSpinAngle(angle) }
                 }
                 .frame(width: DS.sleeve, height: DS.sleeve)
-                .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom, closing: closing, landed: landed || reduceMotion))
+                .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom, closing: closing,
+                                         landed: landed || reduceMotion, miniOwner: miniOwner))
                 .background(
                     GeometryReader { geo in
                         Color.clear.preference(key: SleeveFrameKey.self,
@@ -244,6 +250,12 @@ struct AlbumDetailView: View {
             }
         }
         .onChange(of: motionStart) { _, _ in startReveal(delay: openRevealDelay) }
+        .onChange(of: motionStart) { _, _ in
+            guard miniArtwork != nil else { return }
+            spinBase = 0
+            spinFrom = nil
+            onSpinAngle(0)
+        }
         .onAppear { if discSpinning { spinFrom = Date() } }
         .onChange(of: discSpinning) { _, on in
             if on { spinFrom = Date() }
@@ -550,6 +562,7 @@ struct AlbumDetailView: View {
     /// t230u：唱片是否该转（以播放器 playbackStatus 为准；演示模式看演示播放状态）
     private var discSpinning: Bool {
         guard isPresented, !closing else { return false }
+        if miniArtwork != nil, !landed { return false }
         if collection != nil { return albumIsPlaying && music.isPlaying }
         return music.demoPlaying
     }

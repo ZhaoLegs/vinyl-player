@@ -106,13 +106,15 @@ struct SystemPauseButton: View {
 /// 首页底部正在播放条：有真实 Apple Music 曲目时显示其标题 / 艺人 / 播放状态，否则显示演示内容。
 struct MiniPlayer: View {
     @EnvironmentObject private var music: AppleMusicStore
+    @EnvironmentObject private var zm: LibraryZoomModel
     /// 点击播放条（除右侧播放键外）= 打开当前专辑的播放页
     var open: () -> Void = {}
     /// t184u：还没播放过时显示的默认条目（首页第一个专辑 + 它的第一首）；nil = 沿用原逻辑
     var suggestion: MiniSuggestion? = nil
-    /// t222u：详情从 mini player 打开 / 缩回期间隐藏小唱片（屏幕上只留飞行封面一个）
+    /// 详情从 mini 打开/缩回期间只隐藏封面标签，黑胶盘面保留。
     var hideDisc: Bool = false
     var onDiscFrame: (CGRect) -> Void = { _ in }
+    var onLabelFrame: (CGRect) -> Void = { _ in }
     /// t226u：标签封面与首页格子 / 详情封套同源（官方封面优先，否则同一个 Apple Artwork + 同一缓存尺寸）
     var coverArtwork: Artwork? = nil
     var coverOfficial: OfficialCoverQuery? = nil
@@ -148,14 +150,24 @@ struct MiniPlayer: View {
                               artwork: coverArtwork ?? (music.hasCurrentTrack ? music.currentArtwork : sug?.artwork),
                               official: coverOfficial,
                               key: labelKey + (coverOfficial?.id ?? ""),
-                              discSize: 27)
-                    // t222u：飞行起落点 = 这枚封面标签（同一张图，交接无跳变）；飞行期间只隐藏标签
+                              discSize: 27,
+                              snapshot: zm.miniArtwork,
+                              onResolved: { if zm.miniRenderedArtwork != $0 { zm.miniRenderedArtwork = $0 } })
+                    // 保留旧几何回报给网格不可见时的既有回退路径；mini 飞行另用外层稳定的圆形 frame。
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onDiscFrame($0) }
                     .opacity(hideDisc ? 0 : 1)
             }
             .frame(width: 27, height: 27)
             // t122u：播放时小唱片匀速旋转（5s 一圈），暂停停在当前角度，继续时从该角度接着转
-            .modifier(SpinWhilePlaying(playing: music.hasCurrentTrack ? music.isPlaying : (sug == nil && music.demoPlaying)))
+            .modifier(MiniDiscRotation(phase: zm.miniPhase,
+                                      playing: music.hasCurrentTrack ? music.isPlaying : (sug == nil && music.demoPlaying)))
+            // 测量放在旋转修饰器外：正圆直径恒定，不采用旋转矩形的包围盒。
+            .onGeometryChange(for: CGRect.self) { geo in
+                let disc = geo.frame(in: .global)
+                let side = 27 * DS.discLabel / DS.disc
+                return CGRect(x: disc.midX - side / 2, y: disc.midY - side / 2,
+                              width: side, height: side)
+            } action: { onLabelFrame($0) }
             // 唱片仍居中于 40pt 胶囊左端圆帽（(40-27)/2 = 6.5pt 左边距），
             // 但右侧不再留 6.5pt 空白：唱片右缘 → 文字左缘 = HStack spacing 8pt。
             .padding(.leading, 6.5)
@@ -486,6 +498,57 @@ struct SpinWhilePlaying: ViewModifier {
     }
 }
 
+/// 只在播放/暂停及交接时发布状态；TimelineView 的逐帧角度不广播到整个首页。
+@MainActor
+final class MiniDiscPhase: ObservableObject {
+    @Published private(set) var base = 0.0
+    @Published private(set) var start: Date?
+    private(set) var playing = false
+    private var held = false
+    var presentedAngle = 0.0
+
+    func angle(at date: Date) -> Double {
+        base + (start.map { max(0, date.timeIntervalSince($0)) * 72 } ?? 0)
+    }
+
+    func setPlaying(_ value: Bool) {
+        guard playing != value else { return }
+        base = angle(at: Date()).truncatingRemainder(dividingBy: 360)
+        playing = value
+        start = value && !held ? Date() : nil
+    }
+
+    func hold() -> Double {
+        let angle = presentedAngle.truncatingRemainder(dividingBy: 360)
+        held = true
+        base = angle
+        start = nil
+        return angle
+    }
+
+    func resume(from angle: Double) {
+        held = false
+        base = angle
+        presentedAngle = angle
+        start = playing ? Date() : nil
+    }
+}
+
+struct MiniDiscRotation: ViewModifier {
+    @ObservedObject var phase: MiniDiscPhase
+    let playing: Bool
+
+    func body(content: Content) -> some View {
+        TimelineView(.animation(paused: phase.start == nil)) { context in
+            let angle = phase.angle(at: context.date)
+            content.rotationEffect(.degrees(angle))
+                .onChange(of: angle, initial: true) { _, value in phase.presentedAngle = value }
+        }
+        .onAppear { phase.setPlaying(playing) }
+        .onChange(of: playing) { _, value in phase.setPlaying(value) }
+    }
+}
+
 // MARK: - 迷你播放条：逐词上飘文字
 
 /// t189u：迷你播放条字号（标题 13 → 12，第二行 10.5 → 11.5）
@@ -628,11 +691,14 @@ private struct WordFloat: AnimatableModifier {
 
 /// t126u：迷你唱片中心标签。尺寸按大唱片比例缩放；换封面时新旧交叉淡入（不闪白），随盘一起转。
 struct MiniDiscLabel: View {
+    @Environment(\.displayScale) private var displayScale
     var coverName: String
     var artwork: Artwork?
     var official: OfficialCoverQuery? = nil
     var key: String
     var discSize: CGFloat
+    var snapshot: MiniArtworkSnapshot? = nil
+    var onResolved: (MiniArtworkSnapshot) -> Void = { _ in }
 
     private var labelSize: CGFloat { discSize * DS.discLabel / DS.disc }   // 27 → 8.31pt
     private var holeSize: CGFloat { max(1.2, discSize * 5 / DS.disc) }     // 27 → 1.2pt
@@ -640,23 +706,36 @@ struct MiniDiscLabel: View {
     var body: some View {
         ZStack {
             Group {
-                if artwork != nil || official != nil {
+                if let snapshot {
+                    snapshot.content.frame(width: labelSize, height: labelSize)
+                } else if artwork != nil || official != nil {
                     // t226u：原来是播放队列条目的 Artwork（ArtworkImage 75px，不走缓存、也不是官方封面）；
                     // 现在用与格子同一个 ArtworkFill（同 render 尺寸 → 同一缓存键），官方封面优先
-                    ArtworkFill(artwork: artwork, official: official)
+                    ArtworkFill(artwork: artwork, official: official, animatesOfficial: false, onResolved: { image in
+                        var resolved = MiniArtworkSnapshot(coverName: coverName, artwork: artwork,
+                                                           official: official, scale: displayScale)
+                        resolved.image = image
+                        onResolved(resolved)
+                    })
                         .frame(width: labelSize, height: labelSize)
                 } else {
                     Image(coverName).resizable().scaledToFill()
                         .frame(width: labelSize, height: labelSize)
+                        .onAppear { reportAsset() }
+                        .onChange(of: coverName) { _, _ in reportAsset() }
                 }
             }
             .clipShape(Circle())
-            .id(key)
+            .id(snapshot?.cacheKey ?? key)
             .transition(.opacity)
             Circle().fill(.white).frame(width: holeSize, height: holeSize)
         }
         .frame(width: labelSize, height: labelSize)
-        .animation(.easeInOut(duration: 0.25), value: key)
+        .animation(snapshot == nil ? .easeInOut(duration: 0.25) : nil, value: key)
+    }
+
+    private func reportAsset() {
+        onResolved(MiniArtworkSnapshot(coverName: coverName, artwork: nil, official: nil, scale: displayScale))
     }
 }
 

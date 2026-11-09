@@ -12,6 +12,7 @@ struct CoverFrameKey: PreferenceKey {
 
 struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.displayScale) private var displayScale
     @Environment(\.openURL) private var openURL
     @EnvironmentObject private var music: AppleMusicStore
     @State private var showingSearch = false
@@ -92,12 +93,30 @@ struct LibraryView: View {
                 // t222u：诊断 —— --debug-mini-cycle：启动 3s 后模拟点 mini player 打开详情，4s 后关闭（录屏取帧用）
                 .task {
                     guard ProcessInfo.processInfo.arguments.contains("--debug-mini-cycle") else { return }
-                    try? await Task.sleep(for: .seconds(3))
+                    if ProcessInfo.processInfo.arguments.contains("--debug-mini-paused") {
+                        try? await Task.sleep(for: .seconds(1))
+                        music.selectDemo(music.demoTrack)
+                        try? await Task.sleep(for: .seconds(2))
+                    } else {
+                        try? await Task.sleep(for: .seconds(3))
+                    }
                     print("[t222u] mini open, disc frame \(zm.miniDiscFrame)")
-                    openNowPlaying()
+                    print("[mini-flight] label=\(zm.miniLabelFrame), angle=\(zm.miniPhase.presentedAngle)")
+                    if ProcessInfo.processInfo.arguments.contains("--debug-mini-tile") {
+                        origin = cellFrames[AlbumData.featuredIndex] ?? origin
+                        targetKey = AlbumData.featuredIndex
+                        selectedIndex = AlbumData.featuredIndex
+                        open()
+                    } else {
+                        openNowPlaying()
+                    }
                     try? await Task.sleep(for: .seconds(4))
                     print("[t222u] close → \(zm.openFromMini ? "mini" : "tile")")
                     close()
+                }
+                .onChange(of: zm.miniOwner) { _, owner in
+                    guard ProcessInfo.processInfo.arguments.contains("--debug-mini-cycle") else { return }
+                    print("[mini-owner] time=\(Date().timeIntervalSince1970) owner=\(owner)")
                 }
                 // t219u：诊断 —— --debug-open=<标题片段> 启动参数：首页加载后直接打开匹配的专辑 / 歌单（不播放），用于设备截图量间距
                 .task(id: music.homePageRevision) {
@@ -189,7 +208,7 @@ struct LibraryView: View {
                 cellFrames = frames
                 // 关闭飞行期间用户滚动首页：目标格子的实时 frame 每帧更新到 origin，
                 // CoverFlight 用当前弹簧进度向这个实时 frame 插值，落点永远在格子上。
-                if closing, let key = targetKey, let live = frames[key] { origin = live }
+                if closing, !zm.openFromMini, let key = targetKey, let live = frames[key] { origin = live }
             }
             .task(id: demoToken) {
                 await runDemo()
@@ -297,6 +316,7 @@ struct LibraryView: View {
                         MiniPlayer(open: openNowPlaying, suggestion: miniSuggestion,
                                    hideDisc: presented && !zm.flyToTile,
                                    onDiscFrame: { zm.miniDiscFrame = $0 },
+                                   onLabelFrame: { if zm.miniLabelFrame != $0 { zm.miniLabelFrame = $0 } },
                                    coverArtwork: miniCover.0, coverOfficial: miniCover.1)
                             .padding(.horizontal, DS.tabBarSideInset)
                             .padding(.bottom, DS.miniPlayerBottomPadding)
@@ -320,6 +340,7 @@ struct LibraryView: View {
                     MiniPlayer(open: openNowPlaying, suggestion: miniSuggestion,
                                hideDisc: presented && !zm.flyToTile,
                                onDiscFrame: { zm.miniDiscFrame = $0 },
+                               onLabelFrame: { if zm.miniLabelFrame != $0 { zm.miniLabelFrame = $0 } },
                                coverArtwork: miniCover.0, coverOfficial: miniCover.1)
                         .padding(.horizontal, 16)
                         .padding(.bottom, 10)
@@ -551,24 +572,39 @@ struct LibraryView: View {
     private func openNowPlaying() {
         guard !presented else { return }
         // t222u：从 mini player 打开 → 封面从 mini 唱片位置放大，关闭时缩回 mini 唱片；格子保持可见、不滚动网格
-        let fromMini = zm.miniDiscFrame != .zero
-        zm.openFromMini = fromMini
-        zm.flyToTile = !fromMini
+        let fromMini = zm.miniLabelFrame != .zero
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            zm.openFromMini = fromMini
+            zm.flyToTile = !fromMini
+            if fromMini {
+                zm.miniArtwork = zm.miniArtwork ?? zm.miniRenderedArtwork
+                    ?? MiniArtworkSnapshot(coverName: music.demoCoverName, artwork: miniCover.0,
+                                           official: miniCover.1, scale: displayScale)
+                zm.miniAngle = zm.miniPhase.hold()
+                zm.detailDiscAngle = 0
+                zm.miniOwner = .flight
+                if ProcessInfo.processInfo.arguments.contains("--debug-mini-cycle") {
+                    renderMiniEndpoints()
+                }
+            }
+        }
         if !music.hasCurrentTrack, !DemoMode.enabled, let c = music.collections.first {
             // t184u：默认条目 → 打开首页第一个专辑（不自动开始播放）
-            origin = fromMini ? zm.miniDiscFrame : (cellFrames[1000] ?? origin)
+            origin = fromMini ? zm.miniLabelFrame : (cellFrames[1000] ?? origin)
             targetKey = 1000
             openCollection(c, startPlayback: false)
             return
         }
         if music.hasCurrentTrack, let collection = nowPlayingCollection {
             let i = music.collections.firstIndex { $0.id == collection.id }
-            origin = fromMini ? zm.miniDiscFrame : (i.flatMap { cellFrames[1000 + $0] } ?? origin)
+            origin = fromMini ? zm.miniLabelFrame : (i.flatMap { cellFrames[1000 + $0] } ?? origin)
             targetKey = i.map { 1000 + $0 }
             openCollection(collection, startPlayback: false)
         } else {
             let index = AlbumData.featuredIndex
-            origin = fromMini ? zm.miniDiscFrame : (cellFrames[index] ?? origin)
+            origin = fromMini ? zm.miniLabelFrame : (cellFrames[index] ?? origin)
             targetKey = index
             selectedIndex = index
             selectedCollection = nil
@@ -585,6 +621,44 @@ struct LibraryView: View {
             Task { await music.refreshHome() }
         default:
             Task { await music.connect() }
+        }
+    }
+
+    /// 诊断附加证据：用正在显示的位图、实测 global frame 和角度生成无损端点。
+    /// 不把这些静态渲染当成录屏帧；实际动画另由 simctl 记录。
+    @MainActor private func renderMiniEndpoints() {
+        guard let snapshot = zm.miniArtwork,
+              let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let directory = documents.appendingPathComponent("mini-endpoints", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let size = UIScreen.main.bounds.size
+        let start = zm.miniLabelFrame, end = flightEnd, angle = zm.miniAngle
+        func save<V: View>(_ view: V, _ name: String) {
+            let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height))
+            renderer.scale = displayScale
+            if let data = renderer.uiImage?.pngData() {
+                try? data.write(to: directory.appendingPathComponent(name + ".png"))
+            }
+        }
+        save(MiniDiscLabel(coverName: snapshot.coverName, artwork: nil, key: snapshot.cacheKey,
+                           discSize: 27, snapshot: snapshot)
+            .rotationEffect(.degrees(angle)).position(x: start.midX, y: start.midY), "mini")
+        save(snapshot.content.modifier(MiniCoverFlight(progress: 0, start: start, end: end, angle: angle,
+                                                       discAngle: 0, snapshot: snapshot, closing: false,
+                                                       perAxis: Motion.zoomPerAxis, fluid: Motion.zoomFluid)), "flight-start")
+        save(SleeveArtwork(coverName: snapshot.coverName, snapshot: snapshot, pull: 0, flip: 0,
+                           spin: .zero, pageWidth: size.width).position(x: end.midX, y: end.midY), "detail")
+        save(snapshot.content.modifier(MiniCoverFlight(progress: 1, start: start, end: end, angle: angle,
+                                                       discAngle: 0, snapshot: snapshot, closing: false,
+                                                       perAxis: Motion.zoomPerAxis, fluid: Motion.zoomFluid)), "flight-end")
+        let values: [String: Any] = [
+            "scale": displayScale, "angle": angle, "cache_key": snapshot.cacheKey,
+            "start": [start.minX, start.minY, start.width, start.height],
+            "end": [end.minX, end.minY, end.width, end.height],
+            "note": "Lossless SwiftUI endpoint renders using actual measured frames; separate from native video."
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: directory.appendingPathComponent("geometry.json"))
         }
     }
 
@@ -638,11 +712,14 @@ struct LibraryView: View {
             isPresented: presented,
             closing: closing,
             landed: landed,
+            miniOwner: zm.openFromMini && !reduceMotion ? zm.miniOwner : nil,
+            miniArtwork: zm.openFromMini ? zm.miniArtwork : nil,
             lyricsMode: lyricsMode,
             wipe: wipe,
             keepsSpinning: !recordingRequested,
             motionStart: motionStart,
             onClose: { close() },
+            onSpinAngle: { zm.detailDiscAngle = $0 },
             onToggleArtwork: { toggleArtwork() },
             canPage: { dir in pageNeighbor(dir) != nil },
             onSwipeBegan: { swipeBegan() },
@@ -682,10 +759,18 @@ struct LibraryView: View {
         sleeveFrame == .zero ? CGRect(x: 43.5, y: 130, width: DS.sleeve, height: DS.sleeve) : sleeveFrame
     }
 
-    private var flyingCover: some View {
+    @ViewBuilder private var flyingCover: some View {
         let start = flightStart
         let end = flightEnd
-        return Group {
+        if zm.openFromMini, let snapshot = zm.miniArtwork {
+            snapshot.content
+                .modifier(MiniCoverFlight(progress: zoom, start: start, end: end, angle: zm.miniAngle,
+                                          discAngle: zm.detailDiscAngle, snapshot: snapshot,
+                                          closing: closing, perAxis: Motion.zoomPerAxis && !reduceMotion,
+                                          fluid: Motion.zoomFluid && !reduceMotion))
+                .opacity(presented && !reduceMotion && zm.miniOwner == .flight ? 1 : 0)
+        } else {
+        Group {
             if let selectedCollection {
                 ArtworkFill(artwork: selectedCollection.artwork, official: selectedCollection.officialQuery)
             } else {
@@ -701,6 +786,7 @@ struct LibraryView: View {
                                  shrink: 0,   // t210u：网格不缩放 → 起落点 = 格子原位
                                  startCorner: zm.flyToTile ? DS.corner : start.width / 2))   // t222u：mini 端 = 圆形唱片
             .opacity(presented && !reduceMotion ? 1 : 0)
+        }
     }
 
     // MARK: - 动效时序（对应原片 185 帧 / 30fps）
@@ -725,11 +811,17 @@ struct LibraryView: View {
         Motion.setFlight(start: flightStart, end: flightEnd)
         if DetailReveal.log { print("[t251u] zoom start t=\(Date().timeIntervalSince1970) fluidOpen=\(Motion.fluidOpen)") }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open),
-                      completionCriteria: .logicallyComplete) {
+                      completionCriteria: zm.openFromMini ? .removed : .logicallyComplete) {
             zoom = 1
         } completion: {
             if DetailReveal.log { print("[t251u] zoom complete → landed t=\(Date().timeIntervalSince1970)") }
-            if presented && !closing { landed = true }
+            if presented && !closing {
+                var transaction = Transaction(); transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    landed = true
+                    if zm.openFromMini { zm.miniOwner = .detail }
+                }
+            }
         }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomBackdrop.delay(GridMotion.blurDelay)) {
             blurRadius = 18
@@ -799,6 +891,7 @@ struct LibraryView: View {
         guard let key = pageNeighbor(dir) else { return }
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) {
+            zm.miniArtwork = nil
             pull = 0
             flip = 0
             lyricsMode = false
@@ -831,6 +924,7 @@ struct LibraryView: View {
     private func jumpToAlbum(_ c: MusicCollection) {
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) {
+            zm.miniArtwork = nil
             pull = 0
             flip = 0
             lyricsMode = false
@@ -861,6 +955,10 @@ struct LibraryView: View {
     }
     /// t226u：mini player 封面 = 正在播放专辑在格子 / 详情里用的同一张图；歌单里的歌 → 该歌自己的专辑
     private var miniCover: (Artwork?, OfficialCoverQuery?) {
+        if ProcessInfo.processInfo.arguments.contains("--debug-mini-cycle"),
+           ProcessInfo.processInfo.arguments.contains("--debug-mini-official") {
+            return (nil, OfficialCoverQuery(id: "mini-official-fixture", title: "Fixture", artist: "Fixture"))
+        }
         guard music.hasCurrentTrack else {
             guard let c = music.collections.first else { return (nil, nil) }
             return (c.artwork, c.officialQuery)
@@ -897,6 +995,9 @@ struct LibraryView: View {
         if let tile {
             origin = tile
             zm.flyToTile = true
+        } else if zm.openFromMini, zm.miniLabelFrame != .zero {
+            origin = zm.miniLabelFrame
+            zm.flyToTile = false
         } else if zm.miniDiscFrame != .zero {
             origin = zm.miniDiscFrame
             zm.flyToTile = false
@@ -910,6 +1011,7 @@ struct LibraryView: View {
         var reset = Transaction()
         reset.disablesAnimations = true
         withTransaction(reset) {
+            if zm.openFromMini { zm.miniOwner = .flight }
             flip = 0
             // 网格瞬间变清晰、不再变暗：此刻被不透明的详情背景完整盖住，看不到这一跳；
             // 之后背景自上而下擦除，逐步露出清晰的网格。
@@ -928,14 +1030,28 @@ struct LibraryView: View {
         ) {
             zoom = 0
         } completion: {
-            presented = false
-            closing = false
-            pull = 0
-            flip = 0
-            lyricsMode = false
-            zm.openFromMini = false
-            zm.flyToTile = true
+            var transaction = Transaction(); transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                if zm.openFromMini {
+                    zm.miniPhase.resume(from: zm.miniAngle)
+                    zm.miniOwner = .mini
+                }
+                presented = false
+                closing = false
+                pull = 0
+                flip = 0
+                lyricsMode = false
+                zm.openFromMini = false
+                zm.flyToTile = true
+            }
             recordingMarker("complete")
+            // 落地帧仍用锁定的位图；稍后才恢复官方封面到达时的原有换图逻辑。
+            if zm.miniArtwork != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    guard !presented else { return }
+                    withAnimation(.easeInOut(duration: 0.25)) { zm.miniArtwork = nil }
+                }
+            }
         }
         // 曲目 / 波形等文字比背景擦除更早消失，避免叠在露出的网格上
         withAnimation(.easeOut(duration: 0.12)) {
@@ -1135,6 +1251,94 @@ private struct CoverFlight: AnimatableModifier {
     }
 }
 
+/// mini 标签独立用 frame + position 插值；网格保留原 CoverFlight。
+private struct MiniCoverFlight: AnimatableModifier {
+    var progress: CGFloat
+    let start: CGRect
+    let end: CGRect
+    let angle: Double
+    let discAngle: Double
+    let snapshot: MiniArtworkSnapshot
+    let closing: Bool
+    let perAxis: Bool
+    let fluid: Bool
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let p = progress
+        let u = Double(min(1, max(0, closing ? 1 - p : p)))
+        let fx: CGFloat = fluid || !perAxis ? p : CGFloat(closing
+            ? 1 - FlightCurves.value(FlightCurves.closeX, u) : FlightCurves.value(FlightCurves.openX, u))
+        let fy: CGFloat = !perAxis ? p : CGFloat(closing
+            ? 1 - FlightCurves.value(FlightCurves.closeY, u) : FlightCurves.value(FlightCurves.openY, u))
+        let fs: CGFloat = fluid ? p - Motion.fluidSizeLag * p * (1 - p) : !perAxis ? p : CGFloat(closing
+            ? 1 - FlightCurves.value(FlightCurves.closeS, u) : FlightCurves.value(FlightCurves.openS, u))
+        let t = min(1, max(0, fs))
+        let width = max(0.1, start.width + (end.width - start.width) * fs)
+        var x = start.midX + (end.midX - start.midX) * fx
+        var y = start.midY + (end.midY - start.midY) * fy
+        if fluid {
+            let dx = end.midX - start.midX, dy = end.midY - start.midY
+            let length = max(1, hypot(dx, dy))
+            var nx = -dy / length, ny = dx / length
+            if nx * dx / 2 + ny * -dy / 2 < 0 { nx = -nx; ny = -ny }
+            let cx = start.midX + dx / 2 + nx * Motion.fluidBow
+            let cy = start.midY + dy / 2 + ny * Motion.fluidBow
+            x = (1 - p) * (1 - p) * start.midX + 2 * (1 - p) * p * cx + p * p * end.midX
+            y = (1 - p) * (1 - p) * start.midY + 2 * (1 - p) * p * cy + p * p * end.midY
+        }
+        let holeT = min(1, max(0, (t - 0.70) / 0.30))
+        let holeOpen = holeT * holeT * (3 - 2 * holeT)
+        let hole = width * DS.planet / DS.sleeve * holeOpen
+        let pinT = min(1, t / 0.15)
+        let pin = 1 - pinT * pinT * (3 - 2 * pinT)
+        // SleeveCutout 实际终点是直角；圆角从 mini 正圆半径连续归零。
+        let radius = start.width / 2 * (1 - t)
+        let rotation = angle * Double(1 - t)
+        let ratio = width / DS.sleeve
+        let masked = content
+            .frame(width: width, height: width)
+            .mask {
+                RoundedRectangle(cornerRadius: radius)
+                    .overlay {
+                        Circle().frame(width: hole, height: hole).blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+            }
+        let backed = masked.background {
+                if holeOpen > 0 {
+                    VinylDiscView(angle: .degrees(closing ? discAngle : 0), pull: 0,
+                                  coverName: snapshot.coverName, snapshot: snapshot)
+                        .scaleEffect(ratio)
+                        .frame(width: hole, height: hole)
+                        .clipShape(Circle())
+                }
+            }
+        let withPin = backed.overlay {
+                Circle().fill(.white).frame(width: 1.2, height: 1.2).opacity(Double(pin))
+            }
+        return withPin.overlay {
+                Circle()
+                    .strokeBorder(.black.opacity(0.35 * Double(holeOpen)), lineWidth: ratio)
+                    .background(Circle().strokeBorder(.black.opacity(0.18 * Double(holeOpen)),
+                                                      lineWidth: 4 * ratio).blur(radius: 2.5 * ratio))
+                    .frame(width: hole, height: hole)
+                    .clipShape(Circle())
+            }
+            .rotationEffect(.degrees(rotation))
+            .shadow(color: .black.opacity(0.12 * Double(t)), radius: 8 * t, y: 5 * t)
+            .position(x: x, y: y)
+            .onChange(of: progress) { _, value in
+                guard ProcessInfo.processInfo.arguments.contains("--debug-mini-cycle") else { return }
+                print("[mini-frame] time=\(Date().timeIntervalSince1970) close=\(closing) p=\(value) center=(\(x),\(y)) side=\(width) angle=\(rotation) key=\(snapshot.cacheKey)")
+            }
+    }
+}
+
 /// t187u：首页网格整体缩放（原片逐帧实测：所有格子同一缩放、同一锚点，无逐格错峰、无过冲）
 enum GridMotion {
     /// 原片列距 113.3 → 107.2px（4 列中心跨度 339 → 321.5）≈ 0.95
@@ -1208,6 +1412,7 @@ struct ArtworkHandoff: AnimatableModifier {
     var progress: CGFloat
     var closing: Bool = false
     var landed: Bool = false
+    var miniOwner: MiniArtworkOwner? = nil
 
     var animatableData: CGFloat {
         get { progress }
@@ -1216,7 +1421,8 @@ struct ArtworkHandoff: AnimatableModifier {
 
     func body(content: Content) -> some View {
         // 飞行封面落定后才显示（几何与飞行终点完全一致），关闭时立即隐藏，由飞行封面飞回
-        let shown: Double = (!closing && (landed || progress >= 1.5)) ? 1 : 0
+        let shown: Double = miniOwner.map { $0 == .detail ? 1 : 0 }
+            ?? ((!closing && (landed || progress >= 1.5)) ? 1 : 0)
         content
             .opacity(shown)
     }
@@ -1242,14 +1448,25 @@ struct TileReveal: AnimatableModifier {
 
 
 /// t125u：首页与详情层（叠在 TabView 之上）共享的转场状态
+enum MiniArtworkOwner { case mini, flight, detail }
+
+@MainActor
 final class LibraryZoomModel: ObservableObject {
     @Published var selectedCollection: MusicCollection?
     /// t222u：本次详情从哪里打开（网格格子 / 底部 mini player），关闭时回到同一处
     @Published var openFromMini = false
     /// t222u：本次飞行的另一端是格子（隐藏该格子）还是 mini player 唱片（隐藏 mini 唱片、格子保持可见）
     @Published var flyToTile = true
-    /// t222u：mini player 唱片（27pt）在 global 坐标里的 frame
+    /// 兼容原网格回退路径的旧标签包围盒；mini 飞行不再采用这一旋转后的矩形。
     @Published var miniDiscFrame: CGRect = .zero
+    /// 未旋转容器内的标签正圆（8.3077pt），与飞行层同为 global 坐标。
+    @Published var miniLabelFrame: CGRect = .zero
+    @Published var miniOwner: MiniArtworkOwner = .mini
+    @Published var miniArtwork: MiniArtworkSnapshot?
+    var miniRenderedArtwork: MiniArtworkSnapshot?
+    let miniPhase = MiniDiscPhase()
+    var miniAngle = 0.0
+    var detailDiscAngle = 0.0
     @Published var collectionSongs: [Song]?
     @Published var presented: Bool = false
     @Published var flipBusy: Bool = false
@@ -1296,7 +1513,7 @@ enum Features {
 enum DemoMode {
     static let enabled: Bool = {
         let a = ProcessInfo.processInfo.arguments
-        return a.contains("--record-demo") || a.contains("--open-featured")
+        return a.contains("--record-demo") || a.contains("--open-featured") || a.contains("--debug-mini-cycle")
     }()
 }
 
