@@ -30,6 +30,8 @@ struct LibraryView: View {
     private var blurRadius: CGFloat { get { zm.blurRadius } nonmutating set { zm.blurRadius = newValue } }
     /// 首页网格变暗程度（打开时随封面一起到 1；关闭时瞬间归 0，由详情背景的自上而下擦除露出清晰网格）
     private var gridDim: CGFloat { get { zm.gridDim } nonmutating set { zm.gridDim = newValue } }
+    /// t141u：首页网格渐进模糊覆盖度（0 清晰 → 1 全模糊）
+    private var veil: CGFloat { get { zm.veil } nonmutating set { zm.veil = newValue } }
     /// 关闭时详情模糊背景的自上而下擦除进度：0 = 全覆盖，1 = 全部消失
     private var wipe: CGFloat { get { zm.wipe } nonmutating set { zm.wipe = newValue } }
     private var origin: CGRect { get { zm.origin } nonmutating set { zm.origin = newValue } }
@@ -65,7 +67,6 @@ struct LibraryView: View {
                 AuroraBackground()
                 homeContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .opacity(Double(1 - 0.72 * gridDim))
 
             }
             .overlay(alignment: .top) {
@@ -162,6 +163,7 @@ struct LibraryView: View {
                 .safeAreaBar(edge: .top, spacing: 0) {
                     header
                         .padding(.bottom, 6)
+                        .modifier(VeilFade(veil: veil, y: 0.08))
                 }
                 // safeAreaBar 会把 mini player 贴到底部安全区，并**自动把滚动边缘效果延伸到它**，
                 // 所以不需要再手写 LinearGradient mask。
@@ -169,6 +171,7 @@ struct LibraryView: View {
                     MiniPlayer(open: openNowPlaying)
                         .padding(.horizontal, DS.tabBarSideInset)
                         .padding(.bottom, DS.miniPlayerBottomPadding)
+                        .modifier(VeilFade(veil: veil, y: 0.94))
                 }
         } else {
             // iOS 17–25 没有该 API：退回渐变遮罩（纯外观降级）。
@@ -199,11 +202,14 @@ struct LibraryView: View {
                 if real.isEmpty {
                     // 未授权 / 资料库为空：保留内置演示封面
                     ForEach(1...AlbumData.coverCount, id: \.self) { index in
-                        coverCell(index).id(index)
+                        coverCell(index)
+                            .modifier(GridVeil(veil: veil, enabled: true))
+                            .id(index)
                     }
                 } else {
                     ForEach(Array(real.enumerated()), id: \.element.id) { index, collection in
                         musicCell(index, collection)
+                            .modifier(GridVeil(veil: veil, enabled: true))
                             .id(1000 + index)
                     }
                 }
@@ -226,14 +232,6 @@ struct LibraryView: View {
             guard let key else { return }
             proxy.scrollTo(key, anchor: .center)
         }
-        }
-        // t140u：不再逐帧改 blur 半径（整张网格每帧重新离屏高斯模糊 = 掉帧主因），
-        // 改为系统材质（渲染服务端 backdrop 模糊）只动不透明度。
-        .overlay {
-            Rectangle()
-                .fill(.regularMaterial)
-                .opacity(Double(min(1, blurRadius / 18)))
-                .allowsHitTesting(false)
         }
         // t138u：原片关闭时网格整体从 0.955 放大回 1（打开时缩到 0.955），与飞行封面同一进度驱动。
         // 用 visualEffect（纯渲染变换，不影响布局 / 不改格子测得的 frame）。
@@ -454,8 +452,7 @@ struct LibraryView: View {
             if presented && !closing { landed = true }
         }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomBackdrop) {
-            blurRadius = 18
-            gridDim = 1
+            veil = 1
         }
         // Detail copy fades in after the cover has started moving (reference frames 9–16).
         withAnimation(.easeInOut(duration: 7.0 / 30).delay(4.0 / 30)) {
@@ -566,8 +563,6 @@ struct LibraryView: View {
             flip = 0
             // 网格瞬间变清晰、不再变暗：此刻被不透明的详情背景完整盖住，看不到这一跳；
             // 之后背景自上而下擦除，逐步露出清晰的网格。
-            blurRadius = 0
-            gridDim = 0
             wipe = 0
         }
         closing = true
@@ -593,6 +588,8 @@ struct LibraryView: View {
         withAnimation(reduceMotion ? .easeOut(duration: 0.15)
                       : .timingCurve(0.256, 0.091, 0.141, 0.888, duration: 0.4)) {
             wipe = 1
+            // t141u：模糊自上而下渐变清除（与原 wipe 同曲线、同 0.35 羽化带）
+            veil = 0
         }
     }
 
@@ -825,6 +822,7 @@ final class LibraryZoomModel: ObservableObject {
     @Published var contentAlpha: Double = 0
     @Published var blurRadius: CGFloat = 0
     @Published var gridDim: CGFloat = 0
+    @Published var veil: CGFloat = 0
     @Published var wipe: CGFloat = 0
     @Published var origin: CGRect = .zero
     @Published var sleeveFrame: CGRect = .zero
@@ -842,4 +840,80 @@ final class LibraryZoomModel: ObservableObject {
     @Published var targetKey: Int? = nil
     @Published var scrollRequest: Int? = nil
     @Published var gridFrame: CGRect = .zero
+}
+
+
+// MARK: - t141u 渐进高斯模糊
+
+enum VeilMask {
+    static let radius: Float = 18
+    static let feather: CGFloat = 0.35
+    static let dim: Float = 0.45
+    /// 与 GridVeil.metal 的 veilAmount 完全一致（屏幕相对 y）
+    static func amount(y: CGFloat, veil: CGFloat) -> CGFloat {
+        let t = 1 - veil
+        let top = t * (1 + feather) - feather
+        let x = min(1, max(0, (y - top) / feather))
+        return x * x * (3 - 2 * x)
+    }
+}
+
+/// 网格：两遍可分离高斯（横 + 纵），逐像素半径 = 18pt × 遮罩值；veil = 0 时整体关闭（零开销）
+/// 逐格施加（ScrollView 是 UIKit 承载，整体挂不了遮罩式模糊；格子互不重叠、间隙透明，逐格 ≈ 整张）：
+/// 清晰原图 × (1 − a) + 固定半径 18pt 的高斯模糊副本 × a·(1 − dim)，a = 屏幕高度上的 smoothstep 羽化遮罩。
+/// 动画期间只有遮罩（渐变色标）在动，模糊半径恒定 → Core Animation 原生模糊，不逐帧改半径、不重排版。
+struct GridVeil: AnimatableModifier {
+    var veil: CGFloat
+    var enabled: Bool
+    var animatableData: CGFloat {
+        get { veil }
+        set { veil = newValue }
+    }
+    func body(content: Content) -> some View {
+        let v = enabled ? veil : 0
+        let on = v > 0.001
+        content
+            .mask { VeilGradient(veil: v, blurred: false) }
+            .overlay {
+                content
+                    .blur(radius: CGFloat(VeilMask.radius))
+                    .mask { VeilGradient(veil: v, blurred: true).padding(-28) }
+                    .opacity(on ? 1 : 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+    }
+}
+
+/// 把屏幕坐标下的遮罩换算成当前视图自身的竖向渐变（9 个色标，羽化带 ≈ 0.35 屏高，远大于格子高度）
+struct VeilGradient: View {
+    var veil: CGFloat
+    var blurred: Bool
+    var body: some View {
+        GeometryReader { p in
+            let f = p.frame(in: .global)
+            let H = max(1, UIScreen.main.bounds.height)
+            let n = 8
+            let stops = (0...n).map { i -> Gradient.Stop in
+                let l = CGFloat(i) / CGFloat(n)
+                let a = VeilMask.amount(y: (f.minY + l * f.height) / H, veil: veil)
+                let o = blurred ? a * (1 - CGFloat(VeilMask.dim)) : 1 - a
+                return Gradient.Stop(color: .black.opacity(Double(o)), location: l)
+            }
+            LinearGradient(stops: stops, startPoint: .top, endPoint: .bottom)
+        }
+    }
+}
+
+/// 顶栏 / mini player：按所在屏幕高度取同一遮罩值淡出（详情页自己的顶栏 / 播放条在同位置）
+struct VeilFade: AnimatableModifier {
+    var veil: CGFloat
+    var y: CGFloat
+    var animatableData: CGFloat {
+        get { veil }
+        set { veil = newValue }
+    }
+    func body(content: Content) -> some View {
+        content.opacity(Double(1 - VeilMask.amount(y: y, veil: veil)))
+    }
 }
