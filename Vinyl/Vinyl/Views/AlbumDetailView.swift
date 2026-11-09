@@ -266,7 +266,7 @@ struct AlbumDetailView: View {
         } label: {
             HStack(spacing: 0) {
                 Text(side)
-                    .font(.system(size: TL.row, weight: .regular))
+                    .font(.system(size: TL.row, weight: .medium))   // Side 字母 A/B：500 (medium)
                     .foregroundStyle(DS.ink)
                     .frame(width: TL.sideW, alignment: .leading)
                 Text(musicTime(song.duration ?? 0))
@@ -338,7 +338,7 @@ struct AlbumDetailView: View {
                 Button { music.selectDemo(index) } label: {
                     HStack(spacing: 0) {
                         Text(track.side)
-                            .font(.system(size: TL.row, weight: .regular))
+                            .font(.system(size: TL.row, weight: .medium))   // Side 字母 A/B：500 (medium)
                             .foregroundStyle(DS.ink)
                             .frame(width: TL.sideW, alignment: .leading)
                         Text("\(track.bpm)")
