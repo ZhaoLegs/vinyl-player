@@ -1,5 +1,6 @@
 import MusicKit
 import SwiftUI
+import ImageIO
 
 struct MusicArtwork: View {
     let artwork: Artwork?
@@ -320,10 +321,12 @@ struct ArtworkFill: View {
     var render: CGFloat = 320
     /// t197u：有值时后台查 MusicBrainz Cover Art Archive；命中后平滑换成官方封面
     var official: OfficialCoverQuery? = nil
+    var useDisplaySize = false
 
     var body: some View {
         GeometryReader { geo in
             let side = max(1, geo.size.width)
+            let render = useDisplaySize ? side : self.render
             Group {
                 if let artwork {
                     // t193u：http(s) 封面走本地内存 + 磁盘缓存；资料库本地封面（musicKit://）仍交给系统 ArtworkImage
@@ -357,8 +360,11 @@ final class ArtworkCache: @unchecked Sendable {
     private let memory = NSCache<NSString, UIImage>()
     private let dir: URL
     private let io = DispatchQueue(label: "vinyl.artwork.io", qos: .utility)
+    private let decoder = DispatchQueue(label: "vinyl.artwork.decode", qos: .userInitiated)
     private var inflight: [String: Task<UIImage?, Never>] = [:]
     private let lock = NSLock()
+    private var previews: [String: String] = [:]
+    private var variants: [String: [String]] = [:]
     static let diskLimit = 200 * 1024 * 1024
     private(set) var stats = (memory: 0, disk: 0, network: 0)
 
@@ -377,35 +383,103 @@ final class ArtworkCache: @unchecked Sendable {
 
     func cached(_ key: String) -> UIImage? { memory.object(forKey: key as NSString) }
 
-    func image(for url: URL) async -> UIImage? {
-        let key = url.absoluteString
+    static func key(for url: URL, pixelSize: Int?) -> String {
+        pixelSize.map { "\(url.absoluteString)#pixels=\(max(1, $0))" } ?? url.absoluteString
+    }
+
+    func cached(for url: URL, pixelSize: Int?) -> UIImage? {
+        cached(Self.key(for: url, pixelSize: pixelSize))
+    }
+
+    func cachedPreview(for url: URL) -> UIImage? {
+        if let full = cached(url.absoluteString) { return full }
+        let keys = lock.withLock { variants[url.absoluteString] ?? [] }
+        return keys.compactMap(cached).max {
+            ($0.cgImage?.width ?? 0) < ($1.cgImage?.width ?? 0)
+        }
+    }
+
+    func rememberPreview(_ url: URL, pixelSize: Int?, source: String) {
+        lock.withLock { previews[source] = Self.key(for: url, pixelSize: pixelSize) }
+    }
+
+    func preview(for artwork: Artwork?) -> UIImage? {
+        guard let source = artwork?.url(width: 1, height: 1)?.absoluteString,
+              let key = lock.withLock({ previews[source] }) else { return nil }
+        return cached(key)
+    }
+
+    func image(for url: URL, pixelSize: Int? = nil) async -> UIImage? {
+        let key = Self.key(for: url, pixelSize: pixelSize)
         if let m = cached(key) { return m }
-        lock.lock()
-        if let t = inflight[key] { lock.unlock(); return await t.value }
-        let task = Task.detached(priority: .userInitiated) { [self] () -> UIImage? in
-            let f = file(key)
-            if let data = try? Data(contentsOf: f), let img = UIImage(data: data)?.preparingForDisplay() {
-                try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: f.path)   // LRU
-                store(img, key: key, source: 1)
+        let (task, created) = lock.withLock { () -> (Task<UIImage?, Never>, Bool) in
+            if let existing = inflight[key] { return (existing, false) }
+            let task = Task.detached(priority: .userInitiated) { [self] () -> UIImage? in
+                let f = file(url.absoluteString)
+                if let data = try? Data(contentsOf: f), let img = await decode(data, pixelSize: pixelSize) {
+                    try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: f.path)
+                    store(img, key: key, source: 1, url: url)
+                    return img
+                }
+                guard let (data, response) = try? await URLSession.shared.data(from: url),
+                      let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode),
+                      let img = await decode(data, pixelSize: pixelSize) else { return nil }
+                try? data.write(to: f, options: .atomic)
+                store(img, key: key, source: 2, url: url)
                 return img
             }
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let img = UIImage(data: data)?.preparingForDisplay() else { return nil }
-            try? data.write(to: f, options: .atomic)
-            store(img, key: key, source: 2)
-            return img
+            inflight[key] = task
+            return (task, true)
         }
-        inflight[key] = task
-        lock.unlock()
         let img = await task.value
-        lock.lock(); inflight[key] = nil; lock.unlock()
+        if created { lock.withLock { inflight[key] = nil } }
         return img
     }
 
-    private func store(_ img: UIImage, key: String, source: Int) {
-        let cost = Int(img.size.width * img.size.height * img.scale * img.scale * 4)
+    private func decode(_ data: Data, pixelSize: Int?) async -> UIImage? {
+        await withCheckedContinuation { continuation in
+            decoder.async {
+                assert(!Thread.isMainThread)
+                guard let pixelSize else {
+                    continuation.resume(returning: UIImage(data: data)?.preparingForDisplay())
+                    return
+                }
+                let options = [kCGImageSourceShouldCache: false] as CFDictionary
+                guard let source = CGImageSourceCreateWithData(data as CFData, options) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+                let width = (properties?[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue ?? Double(pixelSize)
+                let height = (properties?[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue ?? Double(pixelSize)
+                // Both axes must cover the square display. Preserve the old image's
+                // sampling quality for rectangular CAA covers as well as square artwork.
+                let longest = max(1, max(width, height))
+                let shortest = max(1, min(width, height))
+                let limit = max(1, Int(min(longest, ceil(Double(pixelSize) * longest / shortest))))
+                guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceShouldCacheImmediately: true,
+                        kCGImageSourceThumbnailMaxPixelSize: limit
+                      ] as CFDictionary) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: UIImage(cgImage: image))
+            }
+        }
+    }
+
+    private func store(_ img: UIImage, key: String, source: Int, url: URL) {
+        let cost = img.cgImage.map { $0.bytesPerRow * $0.height }
+            ?? Int(img.size.width * img.size.height * img.scale * img.scale * 4)
         memory.setObject(img, forKey: key as NSString, cost: cost)
         lock.lock()
+        var keys = variants[url.absoluteString] ?? []
+        keys.removeAll { $0 == key }
+        keys.insert(key, at: 0)
+        variants[url.absoluteString] = Array(keys.prefix(8))
         if source == 1 { stats.disk += 1 } else { stats.network += 1 }
         let n = stats.disk + stats.network, st = stats
         lock.unlock()
@@ -432,11 +506,59 @@ final class ArtworkCache: @unchecked Sendable {
     }
 
     /// 预取（首页可见 + 后几行）
-    func prefetch(_ urls: [URL]) {
-        for u in urls where cached(u.absoluteString) == nil {
-            Task.detached(priority: .utility) { _ = await self.image(for: u) }
+    func prefetch(_ urls: [URL], pixelSize: Int? = nil) {
+        Task.detached(priority: .utility) {
+            for start in stride(from: 0, to: urls.count, by: 4) {
+                await withTaskGroup(of: Void.self) { group in
+                    for url in urls[start..<min(urls.count, start + 4)] {
+                        group.addTask { _ = await self.image(for: url, pixelSize: pixelSize) }
+                    }
+                }
+            }
         }
     }
+}
+
+@MainActor
+final class GridArtworkPrefetcher {
+    private var row: Int?
+    private var task: Task<Void, Never>?
+
+    func update(_ collections: [MusicCollection], around index: Int, side: CGFloat, scale: CGFloat) {
+        let nextRow = index / 4
+        guard row != nextRow, side > 1 else { return }
+        row = nextRow
+        task?.cancel()
+        let pixels = max(1, Int((side * scale).rounded(.up)))
+        let start = max(0, nextRow * 4 - 8)
+        let end = min(collections.count, (nextRow + 5) * 4)
+        let requests = collections[start..<end].compactMap { collection -> (URL, String)? in
+            guard let artwork = collection.artwork,
+                  let url = artwork.url(width: pixels, height: pixels),
+                  url.scheme == "http" || url.scheme == "https",
+                  let source = artwork.url(width: 1, height: 1)?.absoluteString else { return nil }
+            return (url, source)
+        }
+        task = Task {
+            // Four downloads per batch; fast scrolling cancels queued batches.
+            // A request shared with a visible tile is allowed to finish and warm its cache.
+            for start in stride(from: 0, to: requests.count, by: 4) {
+                guard !Task.isCancelled else { return }
+                let batch = Array(requests[start..<min(requests.count, start + 4)])
+                await withTaskGroup(of: Void.self) { group in
+                    for (url, source) in batch {
+                        group.addTask {
+                            if await ArtworkCache.shared.image(for: url, pixelSize: pixels) != nil {
+                                ArtworkCache.shared.rememberPreview(url, pixelSize: pixels, source: source)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    deinit { task?.cancel() }
 }
 
 struct CachedArtwork: View {
@@ -447,11 +569,14 @@ struct CachedArtwork: View {
     // t211u：图片带上来源 key，输入变了旧图立即失效（不会把上一个专辑的封面留在格子里）
     @State private var appleLoaded: (key: String, image: UIImage)?
     @State private var officialLoaded: (key: String, image: UIImage)?
-    private var appleImage: UIImage? { appleLoaded.flatMap { $0.key == appleURL?.absoluteString ? $0.image : nil } }
-    private var officialImage: UIImage? { officialLoaded.flatMap { $0.key == official?.id ? $0.image : nil } }
+    private var pixels: Int { max(1, Int((side * scale).rounded(.up))) }
+    private var appleKey: String? { appleURL.map { ArtworkCache.key(for: $0, pixelSize: pixels) } }
+    private var officialKey: String? { official.map { "\($0.id)#pixels=\(pixels)" } }
+    private var appleImage: UIImage? { appleLoaded.flatMap { $0.key == appleKey ? $0.image : nil } }
+    private var officialImage: UIImage? { officialLoaded.flatMap { $0.key == officialKey ? $0.image : nil } }
 
     private var appleURL: URL? {
-        let px = Int((side * scale).rounded())
+        let px = pixels
         guard let artwork, let u = artwork.url(width: px, height: px),
               u.scheme == "http" || u.scheme == "https" else { return nil }
         return u
@@ -459,9 +584,11 @@ struct CachedArtwork: View {
 
     var body: some View {
         // t204u：同步读官方封面内存缓存 → 新建的视图（飞行封面 / 封套 / 标签）第一帧就和格子是同一张图，不会中途交叉淡入成「两个封面」
+        let _ = GridScrollProfile.recordUpdate("CachedArtwork")
         let shown = officialImage
-            ?? official.flatMap { OfficialCoverStore.shared.cachedImage(for: $0.id) }
-            ?? (appleURL.flatMap { appleImage ?? ArtworkCache.shared.cached($0.absoluteString) })
+            ?? official.flatMap { OfficialCoverStore.shared.cachedImage(for: $0.id, pixelSize: pixels) }
+            ?? (appleURL.flatMap { appleImage ?? ArtworkCache.shared.cached(for: $0, pixelSize: pixels) })
+            ?? ArtworkCache.shared.preview(for: artwork)
         ZStack {
             if let shown {
                 Image(uiImage: shown).resizable().interpolation(.high)
@@ -478,18 +605,26 @@ struct CachedArtwork: View {
         }
         .frame(width: side, height: side)
 
-        .task(id: appleURL?.absoluteString) {
-            guard let appleURL else { return }
-            if let i = await ArtworkCache.shared.image(for: appleURL) { appleLoaded = (appleURL.absoluteString, i) }
-        }
-        .task(id: official?.id) {
-            guard let official else { return }
-            if let cached = OfficialCoverStore.shared.cachedImage(for: official.id) {
-                officialLoaded = (official.id, cached); return
+        .task(id: appleKey) {
+            guard let appleURL, let appleKey else { return }
+            if let i = await ArtworkCache.shared.image(for: appleURL, pixelSize: pixels), !Task.isCancelled {
+                if let source = artwork?.url(width: 1, height: 1)?.absoluteString {
+                    ArtworkCache.shared.rememberPreview(appleURL, pixelSize: pixels, source: source)
+                }
+                appleLoaded = (appleKey, i)
             }
-            if let img = await OfficialCoverStore.shared.image(for: official) {
+        }
+        .task(id: officialKey) {
+            guard let official, let officialKey else { return }
+            if let cached = OfficialCoverStore.shared.cachedImage(for: official.id, pixelSize: pixels,
+                                                                  allowFullSizeFallback: false) {
+                officialLoaded = (officialKey, cached); return
+            }
+            let alreadyShown = OfficialCoverStore.shared.cachedImage(for: official.id) != nil
+            if let img = await OfficialCoverStore.shared.image(for: official, pixelSize: pixels), !Task.isCancelled {
                 // 首次命中才淡入（之后都同步命中缓存，无动画）
-                withAnimation(.easeInOut(duration: 0.25)) { officialLoaded = (official.id, img) }
+                if alreadyShown { officialLoaded = (officialKey, img) }
+                else { withAnimation(.easeInOut(duration: 0.25)) { officialLoaded = (officialKey, img) } }
             }
         }
     }
@@ -547,20 +682,27 @@ final class OfficialCoverStore: @unchecked Sendable {
         }
     }
 
-    func cachedImage(for id: String) -> UIImage? {
+    func cachedImage(for id: String, pixelSize: Int? = nil, allowFullSizeFallback: Bool = true) -> UIImage? {
         lock.lock(); let e = map[id]; lock.unlock()
         guard let u = e?.url, let url = URL(string: u) else { return nil }
-        return ArtworkCache.shared.cached(url.absoluteString)
+        return ArtworkCache.shared.cached(for: url, pixelSize: pixelSize)
+            ?? (allowFullSizeFallback ? ArtworkCache.shared.cachedPreview(for: url) : nil)
     }
 
-    func image(for q: OfficialCoverQuery) async -> UIImage? {
+    func image(for q: OfficialCoverQuery, pixelSize: Int? = nil) async -> UIImage? {
+        guard !GridScrollProfile.enabled else { return nil }
         lock.lock()
         if let e = map[q.id] {
             lock.unlock()
             guard let u = e.url, let url = URL(string: u) else { return nil }
-            return await ArtworkCache.shared.image(for: url)
+            return await ArtworkCache.shared.image(for: url, pixelSize: pixelSize)
         }
-        if let t = inflight[q.id] { lock.unlock(); return await t.value }
+        if let t = inflight[q.id] {
+            lock.unlock()
+            let image = await t.value
+            if pixelSize != nil { return await resizedImage(for: q.id, pixelSize: pixelSize) ?? image }
+            return image
+        }
         let task = Task.detached(priority: .utility) { [self] () -> UIImage? in
             let result = await lookup(q)   // .success(url?) = 确定命中/未命中；.failure = 网络错误，不落盘以便重试
             switch result {
@@ -587,11 +729,19 @@ final class OfficialCoverStore: @unchecked Sendable {
         lock.unlock()
         let img = await task.value
         lock.lock(); inflight[q.id] = nil; lock.unlock()
+        if pixelSize != nil { return await resizedImage(for: q.id, pixelSize: pixelSize) ?? img }
         return img
+    }
+
+    private func resizedImage(for id: String, pixelSize: Int?) async -> UIImage? {
+        let value = lock.withLock { map[id]?.url }
+        guard let value, let url = URL(string: value) else { return nil }
+        return await ArtworkCache.shared.image(for: url, pixelSize: pixelSize)
     }
 
     /// 预取首页可见专辑的官方封面（排队，受 MB 限速约束）
     func prefetch(_ items: [OfficialCoverQuery]) {
+        guard !GridScrollProfile.enabled else { return }
         for q in items {
             lock.lock(); let known = map[q.id] != nil; lock.unlock()
             if known { continue }

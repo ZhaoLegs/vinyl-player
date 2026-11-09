@@ -18,7 +18,12 @@ struct VinylApp: App {
         WindowGroup {
             ContentView()
                 .task(id: scenePhase) {
-                    guard scenePhase == .active, !recordingDemo else { return }
+                    if scenePhase == .active, GridScrollProfile.enabled,
+                       ProcessInfo.processInfo.arguments.contains("--verify-perf") {
+                        await GridScrollProfile.verify(music)
+                        return
+                    }
+                    guard scenePhase == .active, !recordingDemo, !GridScrollProfile.enabled else { return }
                     // 首次启动直接弹出系统的 Apple Music 授权；之后每次回到前台重新核对授权并刷新资料库。
                     if music.connectionRequested { await music.refreshAccess() }
                     else { await music.connect() }
@@ -26,6 +31,7 @@ struct VinylApp: App {
                 }
                 .overlay(alignment: .top) { MusicErrorBanner() }
                 .environmentObject(music)
+                .environmentObject(music.timeline)
         }
     }
 }

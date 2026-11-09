@@ -15,6 +15,7 @@ struct SleeveFrameKey: PreferenceKey {
 struct AlbumDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var music: AppleMusicStore
+    @EnvironmentObject private var timeline: PlaybackTimeline
     var coverName: String = "sleeve_cutout"
     /// 真实 Apple Music 集合（nil = 内置演示专辑）
     var collection: MusicCollection? = nil
@@ -91,6 +92,7 @@ struct AlbumDetailView: View {
     }
 
     var body: some View {
+        let _ = GridScrollProfile.recordUpdate("AlbumDetailView")
         ZStack(alignment: .top) {
             AuroraBackground()
                 .opacity(closing ? 1 : contentAlpha)
@@ -459,14 +461,14 @@ struct AlbumDetailView: View {
     @ViewBuilder
     private var waveform: some View {
         if collection != nil, music.hasCurrentTrack, let id = music.currentSongID {
-            WaveformBar(progress: music.duration > 0 ? music.position / music.duration : 0,
+            WaveformBar(progress: music.duration > 0 ? timeline.position / music.duration : 0,
                         levels: Waveform.seeded(id.rawValue),
                         isPlaying: music.isPlaying,
                         toggle: { Task { await music.togglePlayback() } },
                         seek: { music.seek(to: $0 * music.duration) },
                         duration: music.duration)
         } else {
-            WaveformBar(progress: music.demoElapsed / AppleMusicStore.demoDuration,
+            WaveformBar(progress: timeline.demoElapsed / AppleMusicStore.demoDuration,
                         levels: demoLevels,
                         isPlaying: music.demoPlaying,
                         toggle: { music.selectDemo(music.demoTrack) },
@@ -1108,6 +1110,7 @@ final class LyricsStore {
 /// 歌词面板：与曲目表同字号（15pt）/ 同色（当前行 DS.ink 600，其余 DS.secondary 灰）
 struct LyricsPanel: View {
     @EnvironmentObject private var music: AppleMusicStore
+    @EnvironmentObject private var timeline: PlaybackTimeline
     @Environment(\.detailTheme) private var theme
     let song: Song
     let songs: [Song]
@@ -1160,8 +1163,8 @@ struct LyricsPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onChange(of: music.position) { _, p in anchorPos = p; anchorDate = Date() }
-        .onAppear { anchorPos = music.position; anchorDate = Date() }
+        .onChange(of: timeline.position) { _, p in anchorPos = p; anchorDate = Date() }
+        .onAppear { anchorPos = timeline.position; anchorDate = Date() }
         .task(id: song.id) {
             if let hit = LyricsStore.shared.peek(song.title, song.artistName) { result = hit; loadedID = song.id; return }
             let r = await LyricsStore.shared.lyrics(title: song.title, artist: song.artistName,
@@ -1173,7 +1176,7 @@ struct LyricsPanel: View {
 
     private func currentIndex(_ lines: [LyricLine]) -> Int {
         guard music.isCurrent(song) else { return -1 }
-        let t = music.position + Lyrics.lookahead
+        let t = timeline.position + Lyrics.lookahead
         guard let first = lines.first, t >= first.time else { return -1 }
         var lo = 0, hi = lines.count - 1
         while lo < hi { let mid = (lo + hi + 1) / 2; if lines[mid].time <= t { lo = mid } else { hi = mid - 1 } }

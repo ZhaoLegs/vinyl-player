@@ -1,0 +1,91 @@
+{
+  "baselineCommit": "2c19982",
+  "date": "2026-11-09",
+  "device": "iPhone 16 Pro simulator, iOS 26.5",
+  "xcode": "27.2",
+  "dataSet": "240 deterministic MusicKit Album objects; 28 repository covers; localhost CDN",
+  "pairedBefore": {
+    "callbackFPS": 33.88389924961031,
+    "callbacks": 611,
+    "collectionCount": 240,
+    "contentHeight": 5672,
+    "estimatedMissedRefreshPercent": 42.736644798500464,
+    "frameBudgetMS": 16.666666604578495,
+    "lateCallbackPercent": 60.392798690671036,
+    "mainThreadCPUMS": 12972.106,
+    "mainThreadCPUPercent": 71.9387123992251,
+    "maxCallbackMS": 316.6544586420059,
+    "note": "CADisplayLink scheduling proxy, not compositor FPS or Animation Hitches ratio",
+    "p95CallbackMS": 45.44662497937679,
+    "seconds": 18.032163166906685,
+    "speedPointsPerSecond": 1200,
+    "viewBodyUpdates": {
+      "AlbumDetailView": 682,
+      "CachedArtwork": 1496,
+      "LibraryView.home": 682,
+      "LibraryView.overlay": 682
+    }
+  },
+  "pairedAfter": {
+    "callbackFPS": 59.00530529784625,
+    "callbacks": 1063,
+    "collectionCount": 240,
+    "contentHeight": 5672,
+    "estimatedMissedRefreshPercent": 1.6651248843663276,
+    "frameBudgetMS": 16.666666604578495,
+    "lateCallbackPercent": 0.8466603951081844,
+    "mainThreadCPUMS": 3227.716,
+    "mainThreadCPUPercent": 17.91649745952428,
+    "maxCallbackMS": 152.8098750859499,
+    "note": "CADisplayLink scheduling proxy, not compositor FPS or Animation Hitches ratio",
+    "p95CallbackMS": 17.65458332374692,
+    "seconds": 18.015329208690673,
+    "speedPointsPerSecond": 1200,
+    "viewBodyUpdates": {
+      "AlbumDetailView": 72,
+      "CachedArtwork": 1208
+    }
+  },
+  "finalImplementationRecheck": {
+    "callbackFPS": 57.9556405214146,
+    "callbacks": 1047,
+    "collectionCount": 240,
+    "contentHeight": 5672,
+    "estimatedMissedRefreshPercent": 3.4132841328413286,
+    "frameBudgetMS": 16.666666604578495,
+    "lateCallbackPercent": 0.8595988538681949,
+    "mainThreadCPUMS": 3180.231,
+    "mainThreadCPUPercent": 17.6038514432721,
+    "maxCallbackMS": 234.1354163363576,
+    "note": "CADisplayLink scheduling proxy, not compositor FPS or Animation Hitches ratio",
+    "p95CallbackMS": 17.737541813403368,
+    "seconds": 18.06554099963978,
+    "speedPointsPerSecond": 1200,
+    "viewBodyUpdates": {
+      "AlbumDetailView": 72,
+      "CachedArtwork": 1208
+    }
+  },
+  "verification": {
+    "checks": {
+      "clockDoesNotPublishLibrary": true,
+      "concurrentMemoryRequestsShareImage": true,
+      "detail960px": true,
+      "geometryDoesNotPublishZoom": true,
+      "rectangleShortEdge230px": true,
+      "sameSourcePreviewAvailable": true,
+      "sizeVariantsDistinct": true,
+      "thumbnail230px": true
+    },
+    "passed": true
+  },
+  "mainSampleWeightMS": {
+    "before": 13016,
+    "after": 3259
+  },
+  "limits": [
+    "CADisplayLink scheduling proxy, not compositor FPS or hitch ratio",
+    "SwiftUI instrument reported no data on this tool/runtime combination",
+    "Tile shadow rendering path retained to preserve appearance"
+  ]
+}
