@@ -97,7 +97,7 @@ enum Motion {
         case snappy, smooth, spring, ref
         var name: String {
             switch self {
-            case .ref: return "Ref · 原片逐轴拟合（x / y / 尺寸各一条贝塞尔，弧线轨迹）0.40s"
+            case .ref: return "Ref · 原片逐轴拟合（x / y / 尺寸各一条贝塞尔，弧线轨迹）0.32s"
             case .snappy: return "B · .snappy(duration: 0.4, extraBounce: 0)"
             case .smooth: return "A · .smooth(duration: 0.5)"
             case .spring: return "C · .spring(response: 0.45, damping: 0.76)"
@@ -110,7 +110,7 @@ enum Motion {
         }
         var animation: Animation {
             switch self {
-            case .ref: return .linear(duration: 0.40)   // t128u：线性时间轴，逐轴曲线见 FlightCurves
+            case .ref: return .linear(duration: refOpen)   // t128u 线性时间轴 + 逐轴曲线；t135u 0.40 → 0.32s
             case .snappy: return .snappy(duration: 0.4, extraBounce: 0)
             case .smooth: return .smooth(duration: 0.5)
             case .spring: return .spring(response: zoomSpring.response, dampingFraction: zoomSpring.damping)
@@ -119,8 +119,12 @@ enum Motion {
     }
     /// Ref 模式下背景模糊 / 网格变暗仍用 t119u 的单条拟合曲线（封面改走逐轴曲线）
     static var zoomBackdrop: Animation {
-        zoomCurve == .ref ? .timingCurve(0.389, 0.032, 0.701, 1.008, duration: 0.40) : zoomCurve.animation
+        zoomCurve == .ref ? .timingCurve(0.389, 0.032, 0.701, 1.008, duration: refOpen) : zoomCurve.animation
     }
+    /// t135u：Ref 打开时长 0.40 → 0.32s（逐轴曲线形状不变，只缩放时间）；关闭仍 0.31s
+    static let refOpen: Double = 0.32
+    /// 打开时长相对 t119u 基准 0.40s 的比例（唱片抽出延迟同比缩放）
+    static var openScale: Double { zoomCurve == .ref ? refOpen / 0.40 : 1 }
     static var zoomPerAxis: Bool { zoomCurve == .ref }
     static var zoomCurve: ZoomCurve {
         get { (UserDefaults.standard.object(forKey: "vinyl.zoomCurve2") as? Int).flatMap(ZoomCurve.init(rawValue:)) ?? .ref }

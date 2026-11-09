@@ -11,7 +11,40 @@ struct PlaybackSymbol: View {
         Image(systemName: isPlaying ? "pause.fill" : "play.fill")
             .font(.system(size: size, weight: .semibold))
             .foregroundStyle(DS.ink)
+            // t134u：播放 ↔ 暂停字形用系统 replace 符号过渡交叉淡入
+            .contentTransition(.symbolEffect(.replace))
+            .animation(.easeInOut(duration: 0.2), value: isPlaying)
     }
+}
+
+/// t136u：迷你播放条字形光学平衡（SF Symbols semibold 实测墨迹）：
+/// 13pt 时 pause.fill 8.25×12.00（面积 80）、play.fill 10.15×11.95（73）、forward.fill 18.05×10.95（121）——
+/// 播放 / 暂停其实比 forward 更高，「显小」来自墨迹面积只有它的 66% / 61%。
+/// 播放 / 暂停放大到 14.5pt（+11.5%）：pause 10.0×13.9（112）、play 12.0×13.9（101）≈ forward 面积的 92% / 83%，
+/// 再大会明显比 forward 高出一截。三者墨迹中心都在字形框中心（偏差 ≤ 0.03pt），按钮同高 40pt → 同一中心线。
+enum MiniGlyph {
+    static let playPause: CGFloat = 14.5
+    static let forward: CGFloat = 13
+}
+
+/// t134u：按下缩小 + 弹性回弹的按钮样式（可复用）。
+/// 按下：缩到 0.82，spring(response 0.2, damping 0.7)，快而不弹；
+/// 松开：回到 1，spring(response 0.35, damping 0.55)，带一点过冲。
+/// 只做视觉缩放，不改布局 → 点击热区不变。
+struct PressShrinkButtonStyle: ButtonStyle {
+    var pressedScale: CGFloat = 0.82
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? pressedScale : 1)
+            .animation(configuration.isPressed
+                       ? .spring(response: 0.2, dampingFraction: 0.7)
+                       : .spring(response: 0.35, dampingFraction: 0.55),
+                       value: configuration.isPressed)
+    }
+}
+
+extension ButtonStyle where Self == PressShrinkButtonStyle {
+    static var pressShrink: PressShrinkButtonStyle { PressShrinkButtonStyle() }
 }
 
 /// 真实播放控制：状态来自 ApplicationMusicPlayer，而不是按钮自己的乐观状态。
@@ -26,7 +59,7 @@ struct SystemPlaybackButton: View {
                 .frame(width: 32, height: 40)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressShrink)
         .disabled(disabled)
         .accessibilityLabel(isPlaying ? "暂停" : "播放")
     }
@@ -49,7 +82,7 @@ struct NextTrackButton: View {
                 .frame(width: 36, height: 40)
                 .contentShape(Rectangle().inset(by: -4))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressShrink)
         .sensoryFeedback(.impact(weight: .light), trigger: taps)
         .accessibilityLabel("下一首")
     }
@@ -134,11 +167,11 @@ struct MiniPlayer: View {
             // 播放键 / 下一首独立于整条的点击
             HStack(spacing: 0) {
                 if music.hasCurrentTrack {
-                    SystemPlaybackButton(isPlaying: music.isPlaying) {
+                    SystemPlaybackButton(isPlaying: music.isPlaying, size: MiniGlyph.playPause) {
                         Task { await music.togglePlayback() }
                     }
                 } else {
-                    SystemPlaybackButton(isPlaying: music.demoPlaying) { music.selectDemo(music.demoTrack) }
+                    SystemPlaybackButton(isPlaying: music.demoPlaying, size: MiniGlyph.playPause) { music.selectDemo(music.demoTrack) }
                 }
                 // t132u：下一首（forward.fill，与暂停键同字号 / 字重 / 颜色），热区 44pt，轻触觉
                 NextTrackButton {
