@@ -58,9 +58,30 @@ struct LibraryView: View {
                 .allowsHitTesting(presented)
         } else {
             homeBody
+                // t184u：懒加载首页第一个专辑的曲目（给默认 mini player 用）
+                .task(id: music.collections.first?.id) {
+                    guard let c = music.collections.first, !music.hasCurrentTrack else { return }
+                    let songs = (try? await c.songs()) ?? []
+                    suggestID = c.id; suggestSongs = songs
+                }
                 // t169u：开始播放一首歌 → 预取它 + 队列里接下来 2 首的歌词
-                .onChange(of: music.currentSongID) { _, id in
-                    guard id != nil else { return }
+                // 调试参数 --log-themes：打印前 8 个首页专辑的主题色选取 + 预取第一张专辑歌词（不改界面）
+                .task(id: music.homePageRevision) {
+                    guard ProcessInfo.processInfo.arguments.contains("--log-themes"), !music.collections.isEmpty else { return }
+                    for c in music.collections.prefix(8) {
+                        let r = c.artwork.map(ThemeColor.fromArtwork) ?? (nil, "no-artwork")
+                        print("[t172u] \(c.title) — \(c.artist): \(r.1) \(r.0?.hex ?? "default black")")
+                    }
+                    for c in music.collections.prefix(10) {
+                        do { let songs = try await c.songs(); print("[t181u] \(c.title): \(songs.count) songs, catalog=\(c.isCatalog)") }
+                        catch { print("[t181u] \(c.title): FAILED \(error)") }
+                    }
+                    if let c = music.collections.first, let songs = try? await c.songs() {
+                        LyricsStore.shared.prefetch(songs, reason: "debug album \(c.title)")
+                    }
+                }
+                .task(id: music.currentSongID) {
+                    guard music.currentSongID != nil else { return }
                     let entries = Array(ApplicationMusicPlayer.shared.queue.entries)
                     let cur = ApplicationMusicPlayer.shared.queue.currentEntry
                     let i = entries.firstIndex(where: { $0.id == cur?.id }) ?? 0
@@ -180,8 +201,8 @@ struct LibraryView: View {
                 // 所以不需要再手写 LinearGradient mask。
                 .safeAreaBar(edge: .bottom, spacing: 0) {
                     // t158u：没有真实正在播放的曲目时不显示假的 mini player
-                    if music.hasCurrentTrack || DemoMode.enabled {
-                        MiniPlayer(open: openNowPlaying)
+                    if showMini {
+                        MiniPlayer(open: openNowPlaying, suggestion: miniSuggestion)
                             .padding(.horizontal, DS.tabBarSideInset)
                             .padding(.bottom, DS.miniPlayerBottomPadding)
                             .transition(.opacity)
@@ -200,8 +221,8 @@ struct LibraryView: View {
                             .init(color: .clear, location: 1)
                         ], startPoint: .top, endPoint: .bottom)
                     )
-                if music.hasCurrentTrack || DemoMode.enabled {
-                    MiniPlayer(open: openNowPlaying)
+                if showMini {
+                    MiniPlayer(open: openNowPlaying, suggestion: miniSuggestion)
                         .padding(.horizontal, 16)
                         .padding(.bottom, 10)
                 }
@@ -278,6 +299,31 @@ struct LibraryView: View {
                              enabled: (Motion.zoomPerAxis || Motion.zoomFluid) && !reduceMotion))
     }
 
+    /// t184u：真实资料加载完成后 mini player 常驻；占位阶段（还没有真实数据）隐藏
+    private var showMini: Bool { music.hasCurrentTrack || DemoMode.enabled || !music.collections.isEmpty }
+    @State private var suggestSongs: [Song]? = nil
+    @State private var suggestID: String? = nil
+    /// 没播过任何歌：默认显示首页第一个专辑（封面 + 第一首歌名 + 艺人 · 时长，暂停态）；歌曲未读到前先显示专辑名 / 艺人
+    private var miniSuggestion: MiniSuggestion? {
+        guard let c = music.collections.first else { return nil }
+        let songs = suggestID == c.id ? suggestSongs : nil
+        let first = songs?.first
+        return MiniSuggestion(key: c.id + (first?.id.rawValue ?? ""),
+                              title: first?.title ?? c.title,
+                              artist: first?.artistName ?? c.artist,
+                              duration: first?.duration ?? 0,
+                              artwork: c.artwork,
+                              play: { i in
+                                  Task { @MainActor in
+                                      var list = songs ?? []
+                                      if list.isEmpty { list = (try? await c.songs()) ?? [] }
+                                      guard !list.isEmpty else { return }
+                                      nowPlayingCollection = c
+                                      await music.play(list[min(i, list.count - 1)], in: list, fromCatalog: c.isCatalog)
+                                  }
+                              })
+    }
+
     /// t158u：首页无内容时的简短中文提示（nil = 仍在加载，显示占位格）
     private var homeNotice: String? {
         switch music.authorization {
@@ -322,6 +368,7 @@ struct LibraryView: View {
         // 转场期间源格子隐藏：屏幕上始终只有一个封面
         .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection?.id == collection.id,
                              closing: closing))
+        .modifier(WaveRipple(t: zm.waveT, distance: waveDistance(key), enabled: !reduceMotion))
         .accessibilityLabel("\(collection.title)，\(collection.artist)")
     }
 
@@ -350,6 +397,13 @@ struct LibraryView: View {
     /// 迷你播放条点击：打开正在播放的专辑（不重新开始播放）；演示模式打开演示专辑。
     private func openNowPlaying() {
         guard !presented else { return }
+        if !music.hasCurrentTrack, !DemoMode.enabled, let c = music.collections.first {
+            // t184u：默认条目 → 打开首页第一个专辑（不自动开始播放）
+            origin = cellFrames[1000] ?? origin
+            targetKey = 1000
+            openCollection(c, startPlayback: false)
+            return
+        }
         if music.hasCurrentTrack, let collection = nowPlayingCollection {
             let i = music.collections.firstIndex { $0.id == collection.id }
             origin = i.flatMap { cellFrames[1000 + $0] } ?? origin
@@ -403,6 +457,20 @@ struct LibraryView: View {
         .buttonStyle(.plain)
         .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection == nil && selectedIndex == index,
                              closing: closing))
+        .modifier(WaveRipple(t: zm.waveT, distance: waveDistance(index), enabled: !reduceMotion))
+    }
+
+    /// t182u：格子中心到波源格子中心的距离（pt）；没有波时返回 −1（不参与）
+    private func waveDistance(_ key: Int) -> Double {
+        guard let o = zm.waveOrigin, let a = cellFrames[key], let b = cellFrames[o] else { return -1 }
+        return Double(hypot(a.midX - b.midX, a.midY - b.midY))
+    }
+    /// t182u：从 origin 格子向外扩散一圈「海浪」（打开：封面离开格子时；关闭：封面落回格子时）
+    private func startWave(from origin: Int?) {
+        guard let origin, !reduceMotion else { return }
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { zm.waveOrigin = origin; zm.waveT = 0 }
+        withAnimation(.linear(duration: Wave.total)) { zm.waveT = Wave.total }
     }
 
     /// 叠在 TabView 之上的详情层：详情页（遵守安全区）+ 飞行封面（全局坐标，忽略安全区）
@@ -496,6 +564,7 @@ struct LibraryView: View {
         flip = 0
         lyricsMode = false
         motionStart = Date()
+        startWave(from: targetKey)
         // 一条主 spring 驱动封面缩放与背景模糊（同一进度，不再各跑一条曲线）；
         // 详情文字用带 delay 的从曲线错峰淡入，形成「先放大 → 再显内容」的节奏。
         landed = false
@@ -570,7 +639,7 @@ struct LibraryView: View {
     private func swipeBegan() {
         demoToken += 1          // 取消尚未执行的自动抽出
         flipBusy = false
-        withAnimation(Motion.animation(Motion.retract)) { pull = 0 }
+        // t185u：识别到横滑时不再收回唱片（那会让封套 + 唱片抖一下）；整组跟手平移，换专辑后才应用新专辑的唱片状态
     }
     /// 换到相邻专辑：只换展示内容，不动播放
     private func pageAlbum(_ dir: Int) {
@@ -589,6 +658,11 @@ struct LibraryView: View {
                     let songs = (try? await c.songs()) ?? []
                     guard selectedCollection?.id == c.id else { return }
                     collectionSongs = songs
+                    // t185u：换到新专辑后自动从第一首开始播放（mini player / 歌词 / 主题色随之更新）
+                    if let first = songs.first(where: { $0.playParameters != nil }) {
+                        nowPlayingCollection = c
+                        await music.play(first, in: songs, fromCatalog: c.isCatalog)
+                    }
                 }
             } else {
                 selectedIndex = key
@@ -630,6 +704,12 @@ struct LibraryView: View {
         }
         closing = true
         autoplay = false
+        // t182u：封面落回格子时（关闭弹簧约 85% 处）从落点格子扩散波浪
+        let landKey = targetKey
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Motion.zoomFluid ? Motion.fluidClose * 0.85 : 0.3))
+            startWave(from: landKey)
+        }
         demoToken += 1
         withAnimation(
             reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomCurve.closeAnimation,
@@ -855,6 +935,38 @@ struct GridRipple: AnimatableModifier {
     }
 }
 
+/// t182u：网格「海浪」参数。每个格子的脉冲按距离延迟（每格距 0.028s），幅度按 e^(−d/2.5 格距) 衰减，
+/// 形状 sin(πp)：1 → 1+A → 1（以自身中心缩放，纯渲染变换，不影响布局）
+enum Wave {
+    static let amplitude = 0.06         // 波源格子峰值 1.06
+    static let falloff = 2.5            // 衰减长度（格距）
+    static let delayPerPitch = 0.028    // 波速：每格距 28ms
+    static let pulse = 0.32             // 单个格子脉冲时长
+    static let pitch = 94.5             // 格距（iPhone 16 Pro：76.5 + 18pt）
+    static let total = delayPerPitch * 12 + pulse
+}
+
+struct WaveRipple: AnimatableModifier {
+    var t: CGFloat
+    let distance: Double
+    let enabled: Bool
+    var animatableData: CGFloat {
+        get { t }
+        set { t = newValue }
+    }
+    func body(content: Content) -> some View {
+        var s: CGFloat = 1
+        if enabled, distance >= 0, Double(t) < Wave.total {
+            let dp = distance / Wave.pitch
+            let p = (Double(t) - dp * Wave.delayPerPitch) / Wave.pulse
+            if p > 0 && p < 1 {
+                s = 1 + CGFloat(Wave.amplitude * exp(-dp / Wave.falloff) * sin(.pi * p))
+            }
+        }
+        return content.visualEffect { c, _ in c.scaleEffect(s, anchor: .center) }
+    }
+}
+
 struct ArtworkHandoff: AnimatableModifier {
     var progress: CGFloat
     var closing: Bool = false
@@ -911,6 +1023,9 @@ final class LibraryZoomModel: ObservableObject {
     @Published var selectedIndex: Int = AlbumData.featuredIndex
     @Published var pull: CGFloat = 0
     @Published var flip: Double = 0
+    /// t182u：网格波浪时钟（秒，0 → Wave.total 线性）与波源格子
+    @Published var waveT: CGFloat = 10
+    @Published var waveOrigin: Int? = nil
     /// t160u：封面翻到背面 = 歌词模式
     @Published var lyricsMode: Bool = false
     @Published var demoToken: Int = 0
@@ -935,7 +1050,13 @@ enum DemoMode {
 
 /// t158u：加载中的封面占位：与封面同尺寸、同圆角的浅色方块，无文字
 struct HomePlaceholder: View {
-    static let count = 20
+    /// t178u：铺满整屏（含 mini player / 底部区域）：行数 = ⌈屏高 / 行距⌉ + 1，× 4 列
+    static var count: Int {
+        let b = UIScreen.main.bounds.size
+        let cell = (b.width - 2 * DS.contentInset - 3 * 18) / 4
+        let pitch = max(1, cell + 18)
+        return (Int((b.height / pitch).rounded(.up)) + 1) * 4
+    }
     var body: some View {
         RoundedRectangle(cornerRadius: DS.corner)
             .fill(Color.primary.opacity(0.05))

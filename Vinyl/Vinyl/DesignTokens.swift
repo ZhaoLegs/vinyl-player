@@ -141,7 +141,8 @@ enum Motion {
     /// open = clamp(0.195 + 0.0093·√c, 0.30, 0.42)，close = 0.85·open；c = hypot(dx, dy) + 0.5·|Δsize|（pt）
     static func flightDurations(start: CGRect, end: CGRect) -> (open: Double, close: Double) {
         let c = Double(hypot(start.midX - end.midX, start.midY - end.midY) + 0.5 * abs(end.width - start.width))
-        let o = min(0.42, max(0.30, 0.195 + 0.0093 * c.squareRoot()))   // t152u：压缩区间 0.34–0.42s
+        // t177u：近处更快、远处不变：顶行 ≈ 0.27s（原 0.34），底行仍 ≈ 0.42s；区间 0.24–0.42s
+        let o = min(0.42, max(0.24, 0.27 + 0.0178 * (c.squareRoot() - 15.6)))
         return (o, o * 0.85)
     }
     static func setFlight(start: CGRect, end: CGRect) {
@@ -576,11 +577,24 @@ enum FlightCurves {
     /// 关闭：u∈[0.40, 0.95] 从 0.955 回到 1（原片 f173→f184，关闭段 40%→95%）
     static let gridClose: B = (0.293, 0.305, 0.470, 0.829)
     static func gridScale(_ u: Double, closing: Bool) -> Double {
+        // t182u：按参考视频实测，关闭时网格整体 0.955 → 1（列距 53.4 → 56px），逐格波浪另见 WaveRipple
         if closing {
             let t = (u - 0.40) / 0.55
             return gridMin + (1 - gridMin) * value(gridClose, t)
         }
         return 1 - (1 - gridMin) * value(gridOpen, u / 0.25)
+    }
+
+    // MARK: t171u 关闭落位：格子按距离放大后整体回落到 1
+    /// 最近（落点）格子额外放大 swellPeak，全体再加 swellBase；距离衰减 e^(−d / swellFalloff)，d 以格距（90pt）计
+    static let swellPeak = 0.05, swellBase = 0.02, swellFalloff = 1.2, tilePitch = 90.0
+    /// 关闭进度 u（0 → 1）上的包络：0.45 → 0.70 放大到峰值，0.70 → 1 回落到 0（随关闭弹簧的尾段一起落定）
+    static func swell(_ u: Double) -> Double {
+        func ss(_ a: Double, _ b: Double, _ x: Double) -> Double { let t = min(1, max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t) }
+        return ss(0.45, 0.70, u) * (1 - ss(0.70, 1.0, u))
+    }
+    static func tileSwell(_ u: Double, distance d: Double) -> Double {
+        1 + swell(u) * (swellBase + swellPeak * exp(-d / (swellFalloff * tilePitch)))
     }
 
     /// CSS 同款 cubic-bezier：给定时间 u∈[0,1] 求输出

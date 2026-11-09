@@ -7,10 +7,12 @@ import MusicKit
 struct PlaybackSymbol: View {
     let isPlaying: Bool
     var size: CGFloat = 13
+    /// t180u：详情页内 = 专辑主题色；首页 mini player 不在详情环境里 → 默认墨色
+    @Environment(\.detailTheme) private var theme
     var body: some View {
         Image(systemName: isPlaying ? "pause.fill" : "play.fill")
             .font(.system(size: size, weight: .semibold))
-            .foregroundStyle(DS.ink)
+            .foregroundStyle(theme.ink)
             // t134u：播放 ↔ 暂停字形用系统 replace 符号过渡交叉淡入
             .contentTransition(.symbolEffect(.replace))
             .animation(.easeInOut(duration: 0.2), value: isPlaying)
@@ -106,10 +108,14 @@ struct MiniPlayer: View {
     @EnvironmentObject private var music: AppleMusicStore
     /// 点击播放条（除右侧播放键外）= 打开当前专辑的播放页
     var open: () -> Void = {}
+    /// t184u：还没播放过时显示的默认条目（首页第一个专辑 + 它的第一首）；nil = 沿用原逻辑
+    var suggestion: MiniSuggestion? = nil
 
-    private var title: String { music.hasCurrentTrack ? music.currentTitle : music.demoMiniTitle }
-    private var artist: String { music.hasCurrentTrack ? music.currentArtist : AlbumData.artist }
-    private var durationValue: Double { music.hasCurrentTrack ? music.duration : AppleMusicStore.demoDuration }
+    /// 没有正在播放的曲目、且不是演示模式时才用默认条目
+    private var sug: MiniSuggestion? { music.hasCurrentTrack || DemoMode.enabled ? nil : suggestion }
+    private var title: String { music.hasCurrentTrack ? music.currentTitle : (sug?.title ?? music.demoMiniTitle) }
+    private var artist: String { music.hasCurrentTrack ? music.currentArtist : (sug?.artist ?? AlbumData.artist) }
+    private var durationValue: Double { music.hasCurrentTrack ? music.duration : (sug.map { $0.duration } ?? AppleMusicStore.demoDuration) }
     /// 只在换歌时变化（时长后到不会触发动画）
     private var trackKey: String { title + "\u{1}" + artist }
     /// 中心标签的身份：换专辑封面时才交叉淡入
@@ -117,6 +123,7 @@ struct MiniPlayer: View {
         if music.hasCurrentTrack {
             return music.currentArtwork?.url(width: 75, height: 75)?.absoluteString ?? ("t:" + trackKey)
         }
+        if let sug { return "s:" + sug.key }
         return music.demoCoverName
     }
 
@@ -132,13 +139,13 @@ struct MiniPlayer: View {
                 // t126u：中心标签 = 正在播放歌曲所属专辑的封面（圆形裁切），比例与详情页大唱片一致
                 // （DS.discLabel / DS.disc = 72 / 234）；主轴孔同比例（5 / 234）。换歌时交叉淡入。
                 MiniDiscLabel(coverName: music.demoCoverName,
-                              artwork: music.hasCurrentTrack ? music.currentArtwork : nil,
+                              artwork: music.hasCurrentTrack ? music.currentArtwork : sug?.artwork,
                               key: labelKey,
                               discSize: 27)
             }
             .frame(width: 27, height: 27)
             // t122u：播放时小唱片匀速旋转（5s 一圈），暂停停在当前角度，继续时从该角度接着转
-            .modifier(SpinWhilePlaying(playing: music.hasCurrentTrack ? music.isPlaying : music.demoPlaying))
+            .modifier(SpinWhilePlaying(playing: music.hasCurrentTrack ? music.isPlaying : (sug == nil && music.demoPlaying)))
             // 唱片仍居中于 40pt 胶囊左端圆帽（(40-27)/2 = 6.5pt 左边距），
             // 但右侧不再留 6.5pt 空白：唱片右缘 → 文字左缘 = HStack spacing 8pt。
             .padding(.leading, 6.5)
@@ -170,12 +177,16 @@ struct MiniPlayer: View {
                     SystemPlaybackButton(isPlaying: music.isPlaying, size: MiniGlyph.playPause) {
                         Task { await music.togglePlayback() }
                     }
+                } else if let sug {
+                    // t184u：默认条目 = 暂停态；播放 = 从第 1 首开始播这张专辑
+                    SystemPlaybackButton(isPlaying: false, size: MiniGlyph.playPause) { sug.play(0) }
                 } else {
                     SystemPlaybackButton(isPlaying: music.demoPlaying, size: MiniGlyph.playPause) { music.selectDemo(music.demoTrack) }
                 }
                 // t132u：下一首（forward.fill，与暂停键同字号 / 字重 / 颜色），热区 44pt，轻触觉
                 NextTrackButton {
                     if music.hasCurrentTrack { Task { await music.skip(next: true) } }
+                    else if let sug { sug.play(1) }      // t184u：下一首 = 第 2 首
                     else { music.nextDemo() }
                 }
             }
@@ -198,6 +209,8 @@ struct WaveformBar: View {
     var seek: ((Double) -> Void)? = nil
     @Environment(\.displayScale) private var displayScale
     @State private var scrub: Double? = nil
+    /// t180u：已播放竖条 / 播放头 / 时间气泡 = 主题色，未播放 = 主题色低透明度
+    @Environment(\.detailTheme) private var theme
     /// 擦洗时手指所在的竖条序号：每跨进一根新竖条触发一次 selection「刻度」触觉
     @State private var scrubBar: Int? = nil
     /// t124u：直接抓住播放头拖动（不需要长按）
@@ -261,7 +274,7 @@ struct WaveformBar: View {
             if let s = scrub {
                 Text(duration > 0 ? "\(musicTime(s * duration)) / \(musicTime(duration))" : musicTime(s * duration))
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(DS.ink)
+                    .foregroundStyle(theme.ink)
                     .padding(.horizontal, 9)
                     .frame(height: 24)              // 气泡固定 24pt 高（文字 + 上下 5pt）
                     .fixedSize()
@@ -326,8 +339,9 @@ struct WaveformBar: View {
                 let w = head ? bar + (Head.activeWidth - bar) * g : bar
                 let y = head ? (size.height - h) / 2 : (((size.height - h) / 2) * scale).rounded() / scale
                 let rect = CGRect(x: x + (bar - w) / 2, y: y, width: w, height: h)
-                let path = Path(roundedRect: rect, cornerRadius: w / 2)
-                let color = i < playedBars ? DS.ink : Color(hex: 0xB9B5B1)
+                // t183u：两端始终是正圆（圆形 Capsule；默认 continuous 圆角在 r = w/2 时两端会发平）
+                let path = Capsule(style: .circular).path(in: rect)
+                let color = i < playedBars ? theme.ink : theme.track
                 if head {
                     context.drawLayer { layer in
                         layer.addFilter(.shadow(color: .black.opacity(0.28), radius: 3))
@@ -465,8 +479,19 @@ struct SpinWhilePlaying: ViewModifier {
 // MARK: - 迷你播放条：逐词上飘文字
 
 struct FloatingText: View {
-    struct Token: Equatable { var text: String; var font: Font
-        static func == (a: Token, b: Token) -> Bool { a.text == b.text } }
+    struct Token: Equatable {
+        var text: String
+        var font: Font
+        var separator = " "
+
+        func displayText(at index: Int) -> String {
+            (index == 0 ? "" : separator) + text
+        }
+
+        static func == (a: Token, b: Token) -> Bool {
+            a.text == b.text && a.separator == b.separator
+        }
+    }
     let key: String
     let tokens: [Token]
     let color: Color
@@ -481,9 +506,12 @@ struct FloatingText: View {
 
     /// 按空格切词；没有空格的中日韩文本按字切
     static func words(_ s: String, font: Font) -> [Token] {
-        let parts = s.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-        let cjk = s.unicodeScalars.contains { (0x3000...0x9FFF).contains($0.value) || (0xAC00...0xD7AF).contains($0.value) }
-        if parts.count <= 1 && cjk { return s.map { Token(text: String($0), font: font) } }
+        let text = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        let cjk = text.unicodeScalars.contains { (0x3000...0x9FFF).contains($0.value) || (0xAC00...0xD7AF).contains($0.value) }
+        if parts.count <= 1 && cjk {
+            return text.map { Token(text: String($0), font: font, separator: "") }
+        }
         return parts.map { Token(text: $0, font: font) }
     }
 
@@ -504,7 +532,7 @@ struct FloatingText: View {
 
     private var plain: some View {
         tokens.enumerated().reduce(Text("")) { acc, item in
-            acc + Text((item.offset == 0 ? "" : " ") + item.element.text).font(item.element.font)
+            acc + Text(item.element.displayText(at: item.offset)).font(item.element.font)
         }
         .foregroundStyle(color)
         .lineLimit(1)
@@ -514,7 +542,7 @@ struct FloatingText: View {
     private func row(_ list: [Token], entering: Bool) -> some View {
         HStack(spacing: 0) {
             ForEach(Array(list.enumerated()), id: \.offset) { i, t in
-                Text((i == 0 ? "" : " ") + t.text)
+                Text(t.displayText(at: i))
                     .font(t.font)
                     .foregroundStyle(color)
                     .fixedSize()
@@ -621,4 +649,15 @@ struct HeadGrowLayer<Content: View>: View, Animatable {
         set { grow = newValue }
     }
     var body: some View { content(grow) }
+}
+
+/// t184u：首页 mini player 的默认条目（还没播放任何歌时）
+struct MiniSuggestion {
+    let key: String
+    let title: String
+    let artist: String
+    let duration: Double
+    let artwork: Artwork?
+    /// 从第 i 首开始播放
+    let play: (Int) -> Void
 }

@@ -59,8 +59,12 @@ struct AlbumDetailView: View {
     /// nil = 未判定；true = 横向主导（接管）；false = 纵向（交给列表滚动）
     @State private var swipeAxisH: Bool? = nil
     @State private var swipeBusy = false
+    @State private var swipeBase: CGFloat = 0
     @State private var swipeSettle = 0
     @State private var favoriteBounce = 0
+    /// t172u：专辑主题色（MusicKit Artwork 颜色优先，位图兜底；近白 / 无彩色 → 默认黑）
+    @State private var theme = DetailTheme.standard
+    private var themeKey: String { collection?.id ?? "demo:" + coverName }
 
     /// 收藏目标：Apple Music = 正在播放的那首（在本专辑里），否则本专辑第一首；演示 = 当前演示曲目
     private var favoriteTarget: (key: String, song: Song?) {
@@ -198,7 +202,14 @@ struct AlbumDetailView: View {
             // 不再给整列加 contentAlpha：封套只受 ArtworkHandoff 控制（全显 / 全隐），
             // 不会出现半透明封套透出唱片的「鬼影」帧；其余内容各自按 stage() 淡入。
         }
-        .onAppear { startReveal(delay: openRevealDelay) }
+        .onAppear {
+            startReveal(delay: openRevealDelay)
+            // 横滑换专辑时详情视图会重建（@State 归零），封面早已落定 → 时间条直接保持显示，不再消失
+            if landed && !closing {
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { barIn = 1 }
+            }
+        }
         .onChange(of: motionStart) { _, _ in startReveal(delay: openRevealDelay) }
         .onChange(of: landed) { _, now in
             guard now, !closing else { return }
@@ -210,6 +221,10 @@ struct AlbumDetailView: View {
             let first = lyricsSong.map { [$0] } ?? []
             LyricsStore.shared.prefetch(first + songs.filter { $0.id != first.first?.id }, reason: "album")
         }
+        .environment(\.detailTheme, theme)
+        // t172u：换专辑时主题色 0.25s 交叉过渡
+        .animation(.easeInOut(duration: 0.25), value: theme)
+        .task(id: themeKey) { await loadTheme() }
         .onChange(of: isPresented) { _, shown in
             // t156u：关闭完成后把逐行时间轴归零，下次打开从头错峰
             guard !shown else { return }
@@ -222,6 +237,23 @@ struct AlbumDetailView: View {
                     ?? Bundle.main.url(forResource: "demo-audio", withExtension: "wav") else { return }
             demoLevels = try? await WaveformAnalyzer.shared.levels(for: url)
         }
+    }
+
+    private func loadTheme() async {
+        let key = themeKey
+        let picked: (ThemeColor.RGB?, String)
+        if let hit = ThemeColor.cache[key] {
+            picked = hit
+        } else if let art = collection?.artwork, case let r = ThemeColor.fromArtwork(art), r.1 != "no-artwork-colors" {
+            picked = r
+        } else {
+            let name = coverName
+            picked = await Task.detached(priority: .userInitiated) { ThemeColor.fromImage(UIImage(named: name)) }.value
+        }
+        ThemeColor.cache[key] = picked
+        print("[t172u] theme \(title): \(picked.1) \(picked.0?.hex ?? "default black")")
+        let next = picked.0.map { DetailTheme.tinted(Color(red: $0.r, green: $0.g, blue: $0.b)) } ?? .standard
+        if next != theme { theme = next }
     }
 
     // MARK: - t166u 底部渐变高斯模糊
@@ -309,16 +341,18 @@ struct AlbumDetailView: View {
                 let dx = v.translation.width, dy = v.translation.height
                 if swipeAxisH == nil {
                     swipeAxisH = abs(dx) > abs(dy) * 1.4
-                    if swipeAxisH == true { onSwipeBegan() }
+                    // t185u：以识别那一刻的位移为零点，封套 + 唱片从 0 开始跟手，不会跳 10pt
+                    if swipeAxisH == true { swipeBase = dx; onSwipeBegan() }
                 }
                 guard swipeAxisH == true else { return }
-                let dir = dx < 0 ? 1 : -1
-                swipeX = canPage(dir) ? dx : rubberBand(dx)
+                let x = dx - swipeBase
+                let dir = x < 0 ? 1 : -1
+                swipeX = canPage(dir) ? x : rubberBand(x)
             }
             .onEnded { v in
                 defer { swipeAxisH = nil }
                 guard swipeAxisH == true, !swipeBusy else { return }
-                let dx = v.translation.width
+                let dx = v.translation.width - swipeBase
                 let dir = dx < 0 ? 1 : -1
                 let flick = abs(v.predictedEndTranslation.width) > 160
                 if canPage(dir) && (abs(dx) > 70 || flick) {
@@ -371,12 +405,12 @@ struct AlbumDetailView: View {
             VStack(spacing: 1) {
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(DS.ink)
+                    .foregroundStyle(theme.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(artist)
                     .font(.system(size: 11))
-                    .foregroundStyle(DS.secondary)
+                    .foregroundStyle(theme.dim)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -429,16 +463,16 @@ struct AlbumDetailView: View {
             HStack(spacing: 0) {
                 Text("Side")
                     .font(.system(size: TL.header, weight: .regular))
-                    .foregroundStyle(DS.ink)
+                    .foregroundStyle(theme.ink)
                     .frame(width: TL.sideW, alignment: .leading)
                 Text("Time")
                     .font(.system(size: TL.header, weight: .regular))
-                    .foregroundStyle(TL.bpmHeader)
+                    .foregroundStyle(theme.header)
                     .frame(width: TL.bpmW, alignment: .leading)
                 Color.clear.frame(width: TL.glyphW, height: 1)
                 Text("Tracklist")
                     .font(.system(size: TL.header, weight: .regular))
-                    .foregroundStyle(DS.ink)
+                    .foregroundStyle(theme.ink)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, DS.contentInset)
@@ -447,11 +481,13 @@ struct AlbumDetailView: View {
 
             if let songs {
                 if songs.isEmpty {
+                    // t181u：空 / 失败提示在空列表区域（封套底 → 时间条顶）上下、屏幕左右居中
                     Text("这个列表里没有可播放的歌曲")
                         .font(.system(size: 15))
-                        .foregroundStyle(TL.idle)
-                        .padding(.horizontal, DS.contentInset)
-                    Spacer(minLength: 8)
+                        .foregroundStyle(theme.dim)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.bottom, TL.headerGap + TL.header)   // 抵消表头高度 → 相对整块空区域居中
                 } else {
                     ScrollView(showsIndicators: false) {
                         LazyVStack(alignment: .leading, spacing: 0) {
@@ -467,9 +503,10 @@ struct AlbumDetailView: View {
                     }
                 }
             } else {
+                // t181u：读取中的 loading 在空列表区域上下、屏幕左右居中（不再贴在表头下面）
                 ProgressView()
-                    .padding(.horizontal, DS.contentInset)
-                Spacer(minLength: 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.bottom, TL.headerGap + TL.header)
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
@@ -495,23 +532,23 @@ struct AlbumDetailView: View {
             HStack(spacing: 0) {
                 Text(side)
                     .font(.system(size: TL.row, weight: .medium))   // Side 字母 A/B：500 (medium)
-                    .foregroundStyle(DS.ink)
+                    .foregroundStyle(theme.ink)
                     .frame(width: TL.sideW, alignment: .leading)
                 Text(musicTime(song.duration ?? 0))
                     .font(.system(size: TL.row, weight: .regular, design: .monospaced))   // t115u：时间用 SF Mono
-                    .foregroundStyle(current ? TL.bpm : DS.ink)   // t104u：播放中灰、其余黑
+                    .foregroundStyle(current ? theme.mid : theme.ink)   // t104u：播放中灰、其余黑
                     .frame(width: TL.bpmW, alignment: .leading)
                     .lineLimit(1)
                 Image(systemName: current && music.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: TL.glyph, weight: .regular))
-                    .foregroundStyle(current ? TL.idle : DS.ink)
+                    .foregroundStyle(current ? theme.dim : theme.ink)
                     // 图标在列内右对齐：图标右缘 → 歌名首字母（含 D 的 ~1.5pt 字形边距）= 8pt，play / pause 一致
                     .frame(width: TL.glyphW - TL.glyphTrail, alignment: .center)
                     .padding(.trailing, TL.glyphTrail)
                     .offset(x: (current && music.isPlaying ? TL.pauseNudge : 0) - TL.iconShift)
                 Text("\(song.artistName) - \(song.title)")
                     .font(.system(size: TL.row, weight: .regular))
-                    .foregroundStyle(current ? TL.idle : DS.ink)   // t104u：播放中灰、其余黑
+                    .foregroundStyle(current ? theme.dim : theme.ink)   // t104u：播放中灰、其余黑
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -552,16 +589,16 @@ struct AlbumDetailView: View {
             HStack(spacing: 0) {
                 Text("Side")
                     .font(.system(size: TL.header, weight: .regular))
-                    .foregroundStyle(DS.ink)
+                    .foregroundStyle(theme.ink)
                     .frame(width: TL.sideW, alignment: .leading)
                 Text("BPM")
                     .font(.system(size: TL.header, weight: .regular))
-                    .foregroundStyle(TL.bpmHeader)
+                    .foregroundStyle(theme.header)
                     .frame(width: TL.bpmW, alignment: .leading)
                 Color.clear.frame(width: TL.glyphW, height: 1)
                 Text("Tracklist")
                     .font(.system(size: TL.header, weight: .regular))
-                    .foregroundStyle(DS.ink)
+                    .foregroundStyle(theme.ink)
                 Spacer(minLength: 0)
             }
             .padding(.bottom, TL.headerGap)
@@ -575,23 +612,23 @@ struct AlbumDetailView: View {
                     HStack(spacing: 0) {
                         Text(track.side)
                             .font(.system(size: TL.row, weight: .medium))   // Side 字母 A/B：500 (medium)
-                            .foregroundStyle(DS.ink)
+                            .foregroundStyle(theme.ink)
                             .frame(width: TL.sideW, alignment: .leading)
                         Text("\(track.bpm)")
                             .font(.system(size: TL.row, weight: .regular, design: .monospaced))   // t115u：数字列用 SF Mono
-                            .foregroundStyle(current ? TL.bpm : DS.ink)   // t104u：播放中灰、其余黑
+                            .foregroundStyle(current ? theme.mid : theme.ink)   // t104u：播放中灰、其余黑
                             .frame(width: TL.bpmW, alignment: .leading)
                         // SF Symbols：当前曲目播放中 = pause.fill，其余 / 暂停 = play.fill
                         Image(systemName: current && music.demoPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: TL.glyph, weight: .regular))
-                            .foregroundStyle(current ? TL.idle : DS.ink)
+                            .foregroundStyle(current ? theme.dim : theme.ink)
                             // 图标在列内右对齐：图标右缘 → 歌名首字母（含 D 的 ~1.5pt 字形边距）= 8pt，play / pause 一致
                     .frame(width: TL.glyphW - TL.glyphTrail, alignment: .center)
                     .padding(.trailing, TL.glyphTrail)
                             .offset(x: (current && music.demoPlaying ? TL.pauseNudge : 0) - TL.iconShift)
                         Text(track.title)
                             .font(.system(size: TL.row, weight: .regular))
-                            .foregroundStyle(current ? TL.idle : DS.ink)   // t104u：播放中灰、其余黑
+                            .foregroundStyle(current ? theme.dim : theme.ink)   // t104u：播放中灰、其余黑
                             .lineLimit(1)
                         Spacer(minLength: 0)
                     }
@@ -626,10 +663,10 @@ struct AlbumDetailView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(AlbumData.artist)
                     .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(DS.ink)
+                    .foregroundStyle(theme.ink)
                 Text(AlbumData.release)
                     .font(.system(size: 13))
-                    .foregroundStyle(DS.secondary)
+                    .foregroundStyle(theme.dim)
                 Text(AlbumData.catalog)
                     .font(.system(size: 10))
                     .foregroundStyle(DS.tertiary)
@@ -716,6 +753,101 @@ enum BottomFade {
     }
 }
 
+// MARK: - t172u 专辑主题色
+
+/// 详情页文字配色：ink = 主文字；dim = 次级（非当前行 / 未唱歌词）；mid = 当前行时间；header = 表头 Time 列
+struct DetailTheme: Equatable {
+    var ink: Color, dim: Color, mid: Color, header: Color
+    /// t180u：时间条未播放竖条
+    var track: Color
+    static let standard = DetailTheme(ink: DS.ink, dim: DS.secondary, mid: Color(hex: 0x7A787B), header: Color(hex: 0x8F8D8E),
+                                      track: Color(hex: 0xB9B5B1))
+    static func tinted(_ c: Color) -> DetailTheme {
+        DetailTheme(ink: c, dim: c.opacity(0.45), mid: c.opacity(0.62), header: c.opacity(0.55), track: c.opacity(0.3))
+    }
+}
+
+private struct DetailThemeKey: EnvironmentKey { static let defaultValue = DetailTheme.standard }
+extension EnvironmentValues {
+    var detailTheme: DetailTheme {
+        get { self[DetailThemeKey.self] }
+        set { self[DetailThemeKey.self] = newValue }
+    }
+}
+
+/// 主题色选取：优先 MusicKit Artwork 自带的颜色（background / primary / secondary / tertiary / quaternaryTextColor），
+/// 取其中「最饱和、非近白」的一个，压暗到与浅色页面背景对比度 ≥ 4.5:1；都偏灰 / 近白 → nil（默认黑）。
+/// 没有 Artwork 颜色（演示 / 本地封面）时才从位图取色（40×40 降采样，后台线程）。
+enum ThemeColor {
+    static let minChroma: CGFloat = 0.18      // max(r,g,b) − min(r,g,b)，低于此视为无彩色
+    static let pageLuminance: CGFloat = 0.88  // 详情页浅色背景（极光 + 白）相对亮度
+    static let minContrast: CGFloat = 4.5
+
+    struct RGB { var r, g, b: CGFloat
+        var chroma: CGFloat { max(r, g, b) - min(r, g, b) }
+        var luminance: CGFloat {
+            func l(_ c: CGFloat) -> CGFloat { c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+            return 0.2126 * l(r) + 0.7152 * l(g) + 0.0722 * l(b)
+        }
+        init(r: CGFloat, g: CGFloat, b: CGFloat) { self.r = r; self.g = g; self.b = b }
+        init?(_ cg: CGColor?) {
+            guard let cg, let c = cg.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent, options: nil),
+                  let p = c.components, p.count >= 3 else { return nil }
+            r = p[0]; g = p[1]; b = p[2]
+        }
+        var hex: String { String(format: "#%02X%02X%02X", Int(r * 255), Int(g * 255), Int(b * 255)) }
+    }
+
+    /// 压暗（保持色相）直到对比度达标
+    static func readable(_ c: RGB) -> RGB {
+        var x = c
+        for _ in 0..<40 where (pageLuminance + 0.05) / (x.luminance + 0.05) < minContrast {
+            x = RGB(r: x.r * 0.92, g: x.g * 0.92, b: x.b * 0.92)
+        }
+        return x
+    }
+
+    @MainActor static var cache: [String: (RGB?, String)] = [:]
+
+    static func fromArtwork(_ a: Artwork) -> (RGB?, String) {
+        let fields: [(String, CGColor?)] = [("backgroundColor", a.backgroundColor), ("primaryTextColor", a.primaryTextColor),
+                                            ("secondaryTextColor", a.secondaryTextColor), ("tertiaryTextColor", a.tertiaryTextColor),
+                                            ("quaternaryTextColor", a.quaternaryTextColor)]
+        let cands = fields.compactMap { f -> (String, RGB)? in RGB(f.1).map { (f.0, $0) } }
+        guard !cands.isEmpty else { return (nil, "no-artwork-colors") }
+        let ok = cands.filter { $0.1.chroma >= minChroma && $0.1.luminance < 0.85 }
+        guard let best = ok.max(by: { $0.1.chroma < $1.1.chroma }) else { return (nil, "neutral→black") }
+        return (readable(best.1), best.0)
+    }
+
+    /// 位图兜底：40×40，量化到 4bit/通道，按「出现次数 × 色度²」取最佳色块的平均色
+    static func fromImage(_ img: UIImage?) -> (RGB?, String) {
+        guard let cg = img?.cgImage else { return (nil, "no-image") }
+        let n = 40
+        var px = [UInt8](repeating: 0, count: n * n * 4)
+        guard let ctx = CGContext(data: &px, width: n, height: n, bitsPerComponent: 8, bytesPerRow: n * 4,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return (nil, "ctx") }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: n, height: n))
+        var buckets: [Int: (count: Int, r: CGFloat, g: CGFloat, b: CGFloat)] = [:]
+        for i in stride(from: 0, to: px.count, by: 4) {
+            let c = RGB(r: CGFloat(px[i]) / 255, g: CGFloat(px[i + 1]) / 255, b: CGFloat(px[i + 2]) / 255)
+            guard c.chroma >= minChroma, c.luminance < 0.85, c.luminance > 0.01 else { continue }
+            let k = (Int(px[i]) >> 4) << 8 | (Int(px[i + 1]) >> 4) << 4 | (Int(px[i + 2]) >> 4)
+            var e = buckets[k] ?? (0, 0, 0, 0); e.count += 1; e.r += c.r; e.g += c.g; e.b += c.b; buckets[k] = e
+        }
+        let minCount = n * n / 50   // 至少占 2%
+        let best = buckets.values.filter { $0.count >= minCount }.max { a, b in
+            let ca = RGB(r: a.r / CGFloat(a.count), g: a.g / CGFloat(a.count), b: a.b / CGFloat(a.count))
+            let cb = RGB(r: b.r / CGFloat(b.count), g: b.g / CGFloat(b.count), b: b.b / CGFloat(b.count))
+            return CGFloat(a.count) * ca.chroma * ca.chroma < CGFloat(b.count) * cb.chroma * cb.chroma
+        }
+        guard let best else { return (nil, "pixels-neutral→black") }
+        let c = RGB(r: best.r / CGFloat(best.count), g: best.g / CGFloat(best.count), b: best.b / CGFloat(best.count))
+        return (readable(c), "pixels")
+    }
+}
+
 enum Lyrics {
     static let merge: Double = 0.3         // t162u：封套与唱片向中间合拢：spring 0.3s，bounce 0
     static let flip: Double = 0.5          // 封套 Y 轴翻转：spring 0.5s，bounce 0
@@ -724,6 +856,8 @@ enum Lyrics {
     static let fadeInDelay: Double = 0.3   // t162u：歌词在翻转阶段（合拢 0.3s 之后）淡入
     static let anchor = UnitPoint(x: 0.5, y: 1.0 / 3)   // 当前行滚到列表高度 1/3 处
     static let lineGap: CGFloat = 14
+    static let topInset: CGFloat = 0       // t175u：和曲目表表头同一起点（封套下 20 + 40pt）
+    static let bottomGap: CGFloat = 24     // t175u：最后一行底 → 时间条顶 = 24pt
     static let lookahead: Double = 0.15    // 播放时钟 0.25s 一跳，提前一点点亮下一行
 }
 
@@ -942,6 +1076,7 @@ final class LyricsStore {
 /// 歌词面板：与曲目表同字号（15pt）/ 同色（当前行 DS.ink 600，其余 DS.secondary 灰）
 struct LyricsPanel: View {
     @EnvironmentObject private var music: AppleMusicStore
+    @Environment(\.detailTheme) private var theme
     let song: Song
     let songs: [Song]
     let albumTitle: String
@@ -958,12 +1093,16 @@ struct LyricsPanel: View {
         return start + max(0.3, min(Karaoke.maxLine, next - start))
     }
 
-    static var emptyText: some View {
+    static var emptyText: some View { EmptyLyrics() }
+    struct EmptyLyrics: View {
+        @Environment(\.detailTheme) private var theme
+        var body: some View {
         Text("暂无歌词")
             .font(.system(size: 15))
-            .foregroundStyle(DS.secondary)
+            .foregroundStyle(theme.dim)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.bottom, 80)
+        }
     }
 
     var body: some View {
@@ -974,12 +1113,12 @@ struct LyricsPanel: View {
                 ScrollView(showsIndicators: false) {
                     Text(text)
                         .font(.system(size: 15))
-                        .foregroundStyle(DS.ink)
+                        .foregroundStyle(theme.ink)
                         .lineSpacing(Lyrics.lineGap)
                         .multilineTextAlignment(.center)   // t163u：歌词整体居中
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.horizontal, DS.contentInset)
-                        .padding(.bottom, BottomFade.contentInset + 60)
+                        .padding(.bottom, Lyrics.bottomGap)
                 }
             case .none?: Self.emptyText
             case nil:
@@ -1024,7 +1163,7 @@ struct LyricsPanel: View {
                             } else {
                                 Text(line.text)
                                     .font(.system(size: 15, weight: .regular))
-                                    .foregroundStyle(DS.secondary)
+                                    .foregroundStyle(theme.dim)
                             }
                         }
                             .multilineTextAlignment(.center)   // t163u：歌词整体居中
@@ -1035,8 +1174,9 @@ struct LyricsPanel: View {
                     }
                 }
                 .padding(.horizontal, DS.contentInset)
-                .padding(.top, 4)
-                .padding(.bottom, 260)
+                .padding(.top, Lyrics.topInset)
+                // t175u：歌词最后一行最多停在时间条顶部上方 24pt（不再留 260pt 空白，scrollTo 被内容边界夹住，不会把歌词推到顶部）
+                .padding(.bottom, Lyrics.bottomGap)
                 .animation(.easeOut(duration: 0.2), value: current)
             }
             .onAppear { if current >= 0 { proxy.scrollTo(current, anchor: Lyrics.anchor) } }
@@ -1070,6 +1210,7 @@ enum Karaoke {
 /// 当前行：灰字底 + 逐字黑色。用同一段 Text 拼接（同字重 600），换行 / 居中与普通行完全一致，
 /// 多行时自然一行一行填；边界那个字按小数进度在灰 → 黑之间插值，过渡顺滑。
 struct KaraokeLine: View {
+    @Environment(\.detailTheme) private var theme
     let line: LyricLine
     let end: Double
     let anchorPos: Double
@@ -1118,10 +1259,10 @@ struct KaraokeLine: View {
             var text = Text(verbatim: "")
             let done = String(cs[0..<full])
             let rest = full < cs.count ? String(cs[(full + 1)...]) : ""
-            text = Text("\(Text(verbatim: done).foregroundColor(DS.ink))")
+            text = Text("\(Text(verbatim: done).foregroundColor(theme.ink))")
             if full < cs.count {
-                let edge = Text(verbatim: String(cs[full])).foregroundColor(Color.mix(DS.secondary, DS.ink, frac))
-                text = Text("\(text)\(edge)\(Text(verbatim: rest).foregroundColor(DS.secondary))")
+                let edge = Text(verbatim: String(cs[full])).foregroundColor(Color.mix(theme.dim, theme.ink, frac))
+                text = Text("\(text)\(edge)\(Text(verbatim: rest).foregroundColor(theme.dim))")
             }
             return text.font(.system(size: 15, weight: .semibold))
         }
@@ -1137,6 +1278,7 @@ extension Color {
         ua.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
         ub.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
         let k = CGFloat(max(0, min(1, t)))
-        return Color(red: r1 + (r2 - r1) * k, green: g1 + (g2 - g1) * k, blue: b1 + (b2 - b1) * k)
+        return Color(red: r1 + (r2 - r1) * k, green: g1 + (g2 - g1) * k, blue: b1 + (b2 - b1) * k,
+                     opacity: a1 + (a2 - a1) * k)
     }
 }

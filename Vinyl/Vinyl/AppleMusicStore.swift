@@ -135,7 +135,9 @@ final class AppleMusicStore: ObservableObject {
         collections = HomeFeed.merged(
             groups: [recentlyPlayed, recentlyAdded, recommended,
                      songs.isEmpty ? [] : [.librarySongs(songs)], libraryPlaylists, libraryAlbums],
-            identityKeys: \.identityKeys
+            identityKeys: \.identityKeys,
+            // 保留来源位置，但已在资料库里的同专辑使用本地曲目，避免额外要求曲库订阅。
+            preferredItems: libraryPlaylists + libraryAlbums
         )
     }
 
@@ -607,13 +609,50 @@ enum MusicCollection: Identifiable {
         }
     }
 
+    /// t181u：读取曲目。每条路径失败都打印真实 MusicKit 错误；依次尝试：
+    /// ① 对象自身 .with(.tracks) → ② 按 ID 重新请求（曲库：MusicCatalogResourceRequest；资料库：MusicLibraryRequest）再 .with(.tracks)
+    /// → 整体失败 0.8s 后再重试一次。
     func songs() async throws -> [Song] {
         if case .librarySongs(let songs) = self { return songs }
+        do { return try await loadSongs() } catch {
+            if error is CancellationError { throw error }
+            print("[t181u] songs() attempt 1 failed for \(title): \(error) | \(String(reflecting: error))")
+            try await Task.sleep(for: .milliseconds(800))
+            do { return try await loadSongs() } catch {
+                print("[t181u] songs() attempt 2 failed for \(title): \(error) | \(String(reflecting: error))")
+                throw error
+            }
+        }
+    }
+
+    private func loadSongs() async throws -> [Song] {
         var tracks: MusicItemCollection<MusicKit.Track>?
         switch self {
         case .librarySongs: return []
-        case .album(let album, _): tracks = try await album.with(.tracks).tracks
-        case .playlist(let playlist): tracks = try await playlist.with(.tracks).tracks
+        case .album(let album, let catalog):
+            do { tracks = try await album.with(.tracks).tracks }
+            catch {
+                print("[t181u] album.with(.tracks) failed (\(album.id.rawValue), catalog=\(catalog)): \(error)")
+                if catalog {
+                    var r = MusicCatalogResourceRequest<Album>(matching: \.id, equalTo: album.id); r.properties = [.tracks]
+                    tracks = try await r.response().items.first?.tracks
+                } else {
+                    var r = MusicLibraryRequest<Album>(); r.filter(matching: \.id, equalTo: album.id)
+                    tracks = try await r.response().items.first?.with(.tracks).tracks
+                }
+            }
+        case .playlist(let playlist):
+            do { tracks = try await playlist.with(.tracks).tracks }
+            catch {
+                print("[t181u] playlist.with(.tracks) failed (\(playlist.id.rawValue)): \(error)")
+                if playlist.id.rawValue.hasPrefix("pl.") {
+                    var r = MusicCatalogResourceRequest<Playlist>(matching: \.id, equalTo: playlist.id); r.properties = [.tracks]
+                    tracks = try await r.response().items.first?.tracks
+                } else {
+                    var r = MusicLibraryRequest<Playlist>(); r.filter(matching: \.id, equalTo: playlist.id)
+                    tracks = try await r.response().items.first?.with(.tracks).tracks
+                }
+            }
         }
         var songs: [Song] = []
         while let batch = tracks {
@@ -622,7 +661,11 @@ enum MusicCollection: Identifiable {
                 if case .song(let song) = $0 { return song }
                 return nil
             })
-            tracks = batch.hasNextBatch ? try await batch.nextBatch() : nil
+            // t181u：后续分页失败不让整张列表失败（保留已读到的曲目）
+            if batch.hasNextBatch {
+                do { tracks = try await batch.nextBatch() }
+                catch { print("[t181u] tracks.nextBatch failed for \(title): \(error)"); tracks = nil }
+            } else { tracks = nil }
         }
         return songs
     }

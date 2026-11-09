@@ -147,13 +147,17 @@ struct SleeveArtwork: View, Animatable {
             // 唱片在封套之后，抽出时向右位移并旋转
             VinylDiscView(angle: spin, pull: pull, coverName: coverName, artwork: artwork)
                 .offset(x: discInset + discPullX * pull, y: discInset)
+                // t176u：翻到背面（过 90° 侧立的那一帧）唱片不再渲染 → 背面的孔是干净的透明挖孔，只透出页面背景；
+                // 翻回正面时（同样在 90° 处）唱片重新出现在正面孔后
+                .opacity(flip > 90 ? 0 : 1)
 
             // 封套缩小 + 左移，制造景深（对应原片 f44–f51）
             ZStack(alignment: .topLeading) {
                 // 孔是封套的真实透明挖孔（下方 mask destinationOut），孔内不画任何独立图形：
                 // 透过孔看到的就是后面那一张完整的大黑胶在孔位置的那一部分（随抽出位置变化）。
                 // t144u：挖孔封套是静态的（只随 pull / flip 做变换），抽成 Equatable 子视图，转盘每帧不再重算它
-                SleeveCutout(coverName: coverName, artwork: artwork).equatable()
+                // t186u：翻过 90° 后背面 = 完整封面（无孔、无唱片）；翻回正面时恢复挖孔 + 唱片
+                SleeveCutout(coverName: coverName, artwork: artwork, solid: flip > 90).equatable()
             }
             .scaleEffect(1 - DS.pullScale * pull, anchor: .center)   // 以中心缩放，封套中线不动 → 唱片始终上下居中
             .offset(x: -sleevePullX * pull)
@@ -171,6 +175,8 @@ struct SleeveArtwork: View, Animatable {
 struct SleeveCutout: View, Equatable {
     var coverName: String
     var artwork: Artwork?
+    /// t186u：true = 背面，完整封面不挖孔
+    var solid: Bool = false
     var body: some View {
         Group {
             if let artwork {
@@ -185,8 +191,8 @@ struct SleeveCutout: View, Equatable {
                 Rectangle()
                     .overlay {
                         Circle()
-                            .frame(width: DS.planet,
-                                   height: DS.planet)
+                            .frame(width: solid ? 0 : DS.planet,
+                                   height: solid ? 0 : DS.planet)
                             .blendMode(.destinationOut)
                     }
                     .compositingGroup()
@@ -198,6 +204,7 @@ struct SleeveCutout: View, Equatable {
                     .background(Circle().strokeBorder(.black.opacity(0.18), lineWidth: 4).blur(radius: 2.5))
                     .frame(width: DS.planet, height: DS.planet)
                     .clipShape(Circle())
+                    .opacity(solid ? 0 : 1)
                     .allowsHitTesting(false)
             }
             .shadow(color: .black.opacity(0.12), radius: 8, y: 5)

@@ -2,15 +2,24 @@ import Foundation
 
 enum HomeFeed {
     /// 保留来源顺序。重复项的新别名也记下来，避免后续缺少 UPC 的同专辑再次出现。
-    static func merged<Item>(groups: [[Item]], identityKeys: (Item) -> [String]) -> [Item] {
+    static func merged<Item>(groups: [[Item]], identityKeys: (Item) -> [String],
+                             preferredItems: [Item] = []) -> [Item] {
+        var preferredByKey: [String: Item] = [:]
+        for item in preferredItems {
+            for key in identityKeys(item) where preferredByKey[key] == nil {
+                preferredByKey[key] = item
+            }
+        }
         var seen = Set<String>()
         var result: [Item] = []
         for group in groups {
             for item in group {
-                let keys = identityKeys(item)
+                let sourceKeys = identityKeys(item)
+                let resolved = sourceKeys.lazy.compactMap { preferredByKey[$0] }.first ?? item
+                let keys = sourceKeys + identityKeys(resolved)
                 let duplicate = keys.contains { seen.contains($0) }
                 seen.formUnion(keys)
-                if !duplicate { result.append(item) }
+                if !duplicate { result.append(resolved) }
             }
         }
         return result
