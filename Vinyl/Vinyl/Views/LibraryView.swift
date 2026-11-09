@@ -123,12 +123,6 @@ struct LibraryView: View {
                         }
                     } }
                 }
-                // t214u：诊断 —— --log-related 启动参数时，对首页前几个专辑跑一遍相似专辑查询并打印数据源
-                .task(id: music.homePageRevision) {
-                    guard ProcessInfo.processInfo.arguments.contains("--log-related") else { return }
-                    let albums = music.collections.filter { if case .album = $0 { return true }; return false }
-                    for c in albums.prefix(4) { _ = await RelatedAlbumStore.shared.albums(for: c) }
-                }
                 // t197u：首页可见 + 随后几行预取 MusicBrainz 官方封面（限速，不挡 UI）
                 .task(id: music.homePageRevision) {
                     let qs = music.collections.prefix(32).map(\.officialQuery)

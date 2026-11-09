@@ -642,14 +642,6 @@ struct AlbumDetailView: View {
                                 realRow(sideIndex[song.id] ?? 0, song, in: songs)
                                     .modifier(rowReveal((sideIndex[song.id] ?? 0) + 1))
                             }
-                            // t214u：曲目表末尾「相似专辑」（无结果整段隐藏；在 BottomFade 留白之上，不被时间条挡住）
-                            if let collection {
-                                RelatedAlbumsSection(collection: collection, songs: songs, ink: theme.ink, dim: theme.dim) { c in
-                                    guard !swipeBusy else { return }
-                                    commitJump(to: c)
-                                }
-                                .padding(.horizontal, -DS.contentInset)
-                            }
                         }
                         .padding(.horizontal, DS.contentInset)
                         // t219u：滚到底时最后一行（有相似专辑时 = 相似专辑）底边距时间条顶 24pt，
@@ -666,8 +658,6 @@ struct AlbumDetailView: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        // t214u：详情一打开就预取相似专辑，滚到底时已就绪
-        .task(id: collection?.id) { RelatedAlbumStore.shared.prefetch(collection) }
     }
 
     /// t229u：顶栏三图标（添加 / 喜爱 / 共享）→ 歌单 · 下一首 · 队列末尾 → 前往专辑 / 艺人

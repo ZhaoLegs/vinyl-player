@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		AB1000000000000000000001 /* AppleMusicStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000002 /* AppleMusicStore.swift */; };
 		AB1000000000000000000003 /* AppleMusicViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000004 /* AppleMusicViews.swift */; };
-		AB10000000000000000000F1 /* RelatedAlbums.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F2 /* RelatedAlbums.swift */; };
 		AB1000000000000000000005 /* Waveform.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000006 /* Waveform.swift */; };
 		ACF7C653C98B10BA2A31F6BD /* VinylApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 812F7662D71E6595B75EDD1C /* VinylApp.swift */; };
 		D185CB9900DE34E2206A20F3 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D87CBA14F66CAE3997FA5C5 /* ContentView.swift */; };
@@ -60,7 +59,6 @@
 /* Begin PBXFileReference section */
 		AB1000000000000000000002 /* AppleMusicStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicStore.swift; sourceTree = "<group>"; };
 		AB1000000000000000000004 /* AppleMusicViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicViews.swift; sourceTree = "<group>"; };
-		AB10000000000000000000F2 /* RelatedAlbums.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelatedAlbums.swift; sourceTree = "<group>"; };
 		AB1000000000000000000006 /* Waveform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Waveform.swift; sourceTree = "<group>"; };
 		812F7662D71E6595B75EDD1C /* VinylApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VinylApp.swift; sourceTree = "<group>"; };
 		2D87CBA14F66CAE3997FA5C5 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -182,7 +180,6 @@
 			children = (
 				AB1000000000000000000002 /* AppleMusicStore.swift */,
 				AB1000000000000000000004 /* AppleMusicViews.swift */,
-				AB10000000000000000000F2 /* RelatedAlbums.swift */,
 				AB1000000000000000000006 /* Waveform.swift */,
 				812F7662D71E6595B75EDD1C /* VinylApp.swift */,
 				2D87CBA14F66CAE3997FA5C5 /* ContentView.swift */,
@@ -315,7 +312,6 @@
 			files = (
 				AB1000000000000000000001 /* AppleMusicStore.swift in Sources */,
 				AB1000000000000000000003 /* AppleMusicViews.swift in Sources */,
-				AB10000000000000000000F1 /* RelatedAlbums.swift in Sources */,
 				AB1000000000000000000005 /* Waveform.swift in Sources */,
 				ACF7C653C98B10BA2A31F6BD /* VinylApp.swift in Sources */,
 				D185CB9900DE34E2206A20F3 /* ContentView.swift in Sources */,
@@ -386,7 +382,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 168;
+				CURRENT_PROJECT_VERSION = 169;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Vinyl/Info.plist;
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "允许 Vinyl 读取你的音乐资料库并播放你选择的 Apple Music 歌曲。";
@@ -416,7 +412,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 168;
+				CURRENT_PROJECT_VERSION = 169;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Vinyl/Info.plist;
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "允许 Vinyl 读取你的音乐资料库并播放你选择的 Apple Music 歌曲。";
