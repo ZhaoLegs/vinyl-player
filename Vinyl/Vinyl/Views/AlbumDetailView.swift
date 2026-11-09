@@ -15,6 +15,10 @@ struct SleeveFrameKey: PreferenceKey {
 struct AlbumDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var music: AppleMusicStore
+    @Environment(\.openURL) private var openURL
+    /// t230u：唱片角度 = 已累计角度 + 本段播放以来的角度（暂停时定格，不回 0°）
+    @State private var spinBase: Double = 0
+    @State private var spinFrom: Date? = nil
     var coverName: String = "sleeve_cutout"
     /// 真实 Apple Music 集合（nil = 内置演示专辑）
     var collection: MusicCollection? = nil
@@ -120,9 +124,9 @@ struct AlbumDetailView: View {
 
                 // 唱片角速度：0 → smoothstep 缓入 → 45°/s 匀速 → smoothstep 缓出 → 0。
                 // 累计角度由角速度解析积分得到，C¹ 连续，不再「突然开始 / 突然停住」。
-                TimelineView(.animation(paused: !isPresented || reduceMotion)) { timeline in
-                    let elapsed = timeline.date.timeIntervalSince(motionStart)
-                    let spin = Angle.degrees(reduceMotion ? 0 : spinDegrees(elapsed))
+                // t230u：只在真实播放器正在播放「这张专辑」时转（打开但没播 / 暂停 = 停在当前角度），恢复播放时从当前角度缓入继续
+                TimelineView(.animation(paused: !isPresented || reduceMotion || spinFrom == nil)) { timeline in
+                    let spin = Angle.degrees(reduceMotion ? 0 : spinAngle(at: timeline.date))
                     SleeveArtwork(coverName: coverName, artwork: collection?.artwork, official: collection?.officialQuery,
                                   pull: pull, flip: flip, spin: spin, pageWidth: pageWidth)
                         .frame(width: DS.sleeve, height: DS.sleeve)
@@ -222,6 +226,11 @@ struct AlbumDetailView: View {
             }
         }
         .onChange(of: motionStart) { _, _ in startReveal(delay: openRevealDelay) }
+        .onAppear { if discSpinning { spinFrom = Date() } }
+        .onChange(of: discSpinning) { _, on in
+            if on { spinFrom = Date() }
+            else { spinBase = spinAngle(at: Date()); spinFrom = nil }
+        }
         .onChange(of: landed) { _, now in
             guard now, !closing else { return }
             withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(duration: 0.4, bounce: 0)) { barIn = 1 }
@@ -473,6 +482,22 @@ struct AlbumDetailView: View {
     /// Apple Music 正在播放属于本集合的歌时：进度 = playbackTime / duration，
     /// 高度 = 以歌曲 ID 为种子的伪波形（DRM 拿不到采样）。否则保持演示波形。
     @ViewBuilder
+    /// t230u：唱片是否该转（以播放器 playbackStatus 为准；演示模式看演示播放状态）
+    private var discSpinning: Bool {
+        guard isPresented, !closing else { return false }
+        if collection != nil { return albumIsPlaying && music.isPlaying }
+        return music.demoPlaying
+    }
+    /// 缓入 0.3s（smoothstep 角速度积分，C¹ 连续）后匀速 Motion.spinPeak °/s
+    private func spinAngle(at date: Date) -> Double {
+        guard let from = spinFrom else { return spinBase }
+        let x = max(0, date.timeIntervalSince(from)), r = 0.3, peak = Motion.spinPeak
+        let ramped: Double
+        if x < r { let u = x / r; ramped = peak * r * (u * u * u - 0.5 * u * u * u * u) }
+        else { ramped = peak * (r * 0.5 + (x - r)) }
+        return spinBase + ramped
+    }
+
     /// t223u：正在播放的是不是这张专辑（只看本专辑曲目里有没有当前曲目）
     private var albumIsPlaying: Bool {
         guard collection != nil, music.hasCurrentTrack, let songs else { return false }
@@ -580,6 +605,55 @@ struct AlbumDetailView: View {
         .task(id: collection?.id) { RelatedAlbumStore.shared.prefetch(collection) }
     }
 
+    /// t229u：顶栏三图标（添加 / 喜爱 / 共享）→ 歌单 · 下一首 · 队列末尾 → 前往专辑 / 艺人
+    @ViewBuilder
+    private func songMenu(_ song: Song) -> some View {
+        let catalog = collection?.isCatalog ?? false
+        let key = "am:" + song.id.rawValue
+        ControlGroup {
+            if music.canAddToLibrary(song, fromCatalog: catalog) {
+                Button("添加", systemImage: "plus") { Task { await music.addToLibrary(song) } }
+            }
+            let fav = music.isFavorite(key)
+            Button(fav ? "取消喜爱" : "喜爱", systemImage: fav ? "star.fill" : "star") {
+                Task { await music.toggleFavorite(key, song: song, fromCatalog: catalog) }
+            }
+            if let url = song.url {
+                ShareLink(item: url, subject: Text(song.title)) { Label("共享", systemImage: "square.and.arrow.up") }
+            }
+        }
+        Section {
+            if !music.editablePlaylists.isEmpty {
+                Menu {
+                    ForEach(music.editablePlaylists, id: \.id) { pl in
+                        Button(pl.name, systemImage: "music.note.list") { Task { await music.addToPlaylist(song, playlist: pl) } }
+                    }
+                } label: { Label("添加到播放列表", systemImage: "text.badge.plus") }
+            }
+            Button("下一首播放", systemImage: "text.insert") { Task { await music.enqueue(song, next: true, fromCatalog: catalog) } }
+            Button("加到队列末尾", systemImage: "text.append") { Task { await music.enqueue(song, next: false, fromCatalog: catalog) } }
+        }
+        Section {
+            // 当前页就是这张专辑 → 省略「前往专辑」；歌单里的歌 → 解析它的专辑后用相似专辑同一条换专辑路径打开
+            if let album = song.albumTitle, !album.isEmpty, !(collection.map { if case .album = $0 { return true }; return false } ?? false) {
+                Button {
+                    Task {
+                        if let a = try? await song.with([.albums]).albums?.first {
+                            await MainActor.run { if !swipeBusy { commitJump(to: .album(a, catalog: catalog)) } }
+                        }
+                    }
+                } label: {
+                    Label { Text("前往专辑"); Text(album) } icon: { Image(systemName: "square.stack") }
+                }
+            }
+            if let url = song.artistURL {
+                Button { openURL(url) } label: {
+                    Label { Text("前往艺人"); Text(song.artistName) } icon: { Image(systemName: "music.microphone") }
+                }
+            }
+        }
+    }
+
     /// 歌曲 ID → 序号（只随 songs 变化，切歌不影响）
     private var sideIndex: [MusicItemID: Int] {
         var map: [MusicItemID: Int] = [:]
@@ -635,6 +709,8 @@ struct AlbumDetailView: View {
         // 重复点击由 AppleMusicStore.play 内的 isPreparing 守卫挡掉。
         .disabled(song.playParameters == nil)
         .opacity(song.playParameters == nil ? 0.45 : 1)
+        // t229u：歌曲长按菜单（结构对齐 Apple Music）
+        .contextMenu { songMenu(song) }
         .animation(.easeInOut(duration: 0.15), value: current)
         .animation(.easeInOut(duration: 0.15), value: current && music.isPlaying)
         .accessibilityLabel("\(current && music.isPlaying ? "暂停" : "播放") \(song.title)，\(song.artistName)")

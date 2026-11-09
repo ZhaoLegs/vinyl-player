@@ -728,6 +728,24 @@ extension AppleMusicStore {
         catch { report(error, action: next ? "下一首播放失败" : "加入播放队列失败") }
     }
 
+    // MARK: t229u：单曲动作（详情页歌曲长按菜单）
+    func enqueue(_ s: Song, next: Bool, fromCatalog: Bool) async {
+        guard s.playParameters != nil else { return }
+        guard hasCurrentTrack else { await play(s, in: [s], fromCatalog: fromCatalog); return }
+        do { try await player.queue.insert([s], position: next ? .afterCurrentEntry : .tail) }
+        catch { report(error, action: next ? "下一首播放失败" : "加入播放队列失败") }
+    }
+    /// 曲库歌曲（ID 不是资料库 i. 前缀）才显示「添加」
+    func canAddToLibrary(_ s: Song, fromCatalog: Bool) -> Bool { fromCatalog && !s.id.rawValue.hasPrefix("i.") }
+    func addToLibrary(_ s: Song) async {
+        do { try await MusicLibrary.shared.add(s); print("[t229u] added song to library: \(s.title)") }
+        catch { report(error, action: "加到资料库失败") }
+    }
+    func addToPlaylist(_ s: Song, playlist: Playlist) async {
+        do { _ = try await MusicLibrary.shared.add(MusicKit.Track.song(s), to: playlist) }
+        catch { report(error, action: "加到歌单失败") }
+    }
+
     /// 资料库里的条目（ID 以 l. / p. 开头）不显示「加到资料库」
     func canAddToLibrary(_ c: MusicCollection) -> Bool {
         switch c {

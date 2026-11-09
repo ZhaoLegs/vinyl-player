@@ -471,40 +471,45 @@ struct LibraryView: View {
         }
     }
 
+    // t229u：长按菜单分层对齐 Apple Music Now Playing：顶栏三图标 → 歌单 / 播放 → 前往 → 队列 → 负向（从首页隐藏）
     @ViewBuilder
     private func collectionMenu(_ c: MusicCollection) -> some View {
-        Section {
-            Button("播放", systemImage: "play.fill") { Task { await music.playCollection(c, shuffle: false) } }
-            Button("随机播放", systemImage: "shuffle") { Task { await music.playCollection(c, shuffle: true) } }
-            Button("下一首播放", systemImage: "text.insert") { Task { await music.enqueue(c, next: true) } }
-            Button("加到播放队列末尾", systemImage: "text.append") { Task { await music.enqueue(c, next: false) } }
-        }
-        Section {
+        ControlGroup {
+            if music.canAddToLibrary(c) {
+                Button("添加", systemImage: "plus") { Task { await music.addToLibrary(c) } }
+            }
             let loved = music.isLoved(c)
             Button(loved ? "取消喜欢" : "喜欢", systemImage: loved ? "star.fill" : "star") {
                 Task { await music.toggleLove(c) }
             }
-            if music.canAddToLibrary(c) {
-                Button("加到资料库", systemImage: "plus") { Task { await music.addToLibrary(c) } }
+            if let url = c.shareURL {
+                ShareLink(item: url, subject: Text(c.title)) { Label("共享", systemImage: "square.and.arrow.up") }
             }
+        }
+        Section {
             if !music.editablePlaylists.isEmpty {
                 Menu {
                     ForEach(music.editablePlaylists, id: \.id) { pl in
                         Button(pl.name, systemImage: "music.note.list") { Task { await music.addToPlaylist(c, playlist: pl) } }
                     }
                 } label: {
-                    Label("加到歌单…", systemImage: "text.badge.plus")
+                    Label("添加到播放列表", systemImage: "text.badge.plus")
+                }
+            }
+            Button("播放", systemImage: "play.fill") { Task { await music.playCollection(c, shuffle: false) } }
+            Button("随机播放", systemImage: "shuffle") { Task { await music.playCollection(c, shuffle: true) } }
+        }
+        if let url = c.artistURL {
+            Section {
+                // 工程里没有歌手页 → 在 Apple Music 中打开歌手（副标题 = 艺人名）
+                Button { openURL(url) } label: {
+                    Label { Text("前往艺人"); Text(c.artist) } icon: { Image(systemName: "music.microphone") }
                 }
             }
         }
         Section {
-            if let url = c.shareURL {
-                ShareLink(item: url, subject: Text(c.title)) { Label("分享", systemImage: "square.and.arrow.up") }
-            }
-            if let url = c.artistURL {
-                // 工程里没有歌手页 → 在 Apple Music 中打开歌手
-                Button("去看歌手", systemImage: "music.microphone") { openURL(url) }
-            }
+            Button("下一首播放", systemImage: "text.insert") { Task { await music.enqueue(c, next: true) } }
+            Button("加到队列末尾", systemImage: "text.append") { Task { await music.enqueue(c, next: false) } }
         }
         Section {
             Button("从首页隐藏", systemImage: "eye.slash", role: .destructive) {
