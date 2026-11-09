@@ -82,6 +82,12 @@ struct LibraryView: View {
                     let songs = (try? await c.songs()) ?? []
                     suggestID = c.id; suggestSongs = songs
                 }
+                // t214u：诊断 —— --log-related 启动参数时，对首页前几个专辑跑一遍相似专辑查询并打印数据源
+                .task(id: music.homePageRevision) {
+                    guard ProcessInfo.processInfo.arguments.contains("--log-related") else { return }
+                    let albums = music.collections.filter { if case .album = $0 { return true }; return false }
+                    for c in albums.prefix(4) { _ = await RelatedAlbumStore.shared.albums(for: c) }
+                }
                 // t197u：首页可见 + 随后几行预取 MusicBrainz 官方封面（限速，不挡 UI）
                 .task(id: music.homePageRevision) {
                     let qs = music.collections.prefix(32).map(\.officialQuery)
@@ -571,7 +577,8 @@ struct LibraryView: View {
             canPage: { dir in pageNeighbor(dir) != nil },
             onSwipeBegan: { swipeBegan() },
             onPage: { dir in pageAlbum(dir) },
-            onSwipeSettled: { swipeSettled() }
+            onSwipeSettled: { swipeSettled() },
+            onJump: { c in jumpToAlbum(c) }
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // t203u：详情层（含顶部专辑名 / 艺人）只在打开 / 关闭转场期间渲染，关闭后绝不残留在首页顶部
@@ -744,6 +751,33 @@ struct LibraryView: View {
             }
             if let f = cellFrames[key] { origin = f }
             scrollRequest = key      // 首页网格滚到该格子，关闭时飞回它
+        }
+    }
+    /// t214u：从「相似专辑」换到任意专辑（可以不在首页里）：与 pageAlbum 相同的换专辑 + 自动播第一首。
+    /// 若该专辑在首页里 → 关闭时飞回它的格子；不在 → 关闭时飞回上一次的格子位置。
+    private func jumpToAlbum(_ c: MusicCollection) {
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) {
+            pull = 0
+            flip = 0
+            lyricsMode = false
+            let i = music.collections.firstIndex { $0.id == c.id }
+            if let i {
+                targetKey = 1000 + i
+                if let f = cellFrames[1000 + i] { origin = f }
+                scrollRequest = 1000 + i
+            }
+            selectedCollection = c
+            collectionSongs = nil
+        }
+        Task {
+            let songs = (try? await c.songs()) ?? []
+            guard selectedCollection?.id == c.id else { return }
+            collectionSongs = songs
+            if let first = songs.first(where: { $0.playParameters != nil }) {
+                nowPlayingCollection = c
+                await music.play(first, in: songs, fromCatalog: c.isCatalog)
+            }
         }
     }
     /// 新封套落定：0.15s 后唱片用原有弹簧抽出

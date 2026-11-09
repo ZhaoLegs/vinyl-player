@@ -44,6 +44,8 @@ struct AlbumDetailView: View {
     var onSwipeBegan: () -> Void = {}
     var onPage: (Int) -> Void = { _ in }
     var onSwipeSettled: () -> Void = {}
+    /// t214u：点「相似专辑」→ 走与横滑相同的换专辑流程（封套滑出 / 滑入、标题逐词浮起、自动播第一首）
+    var onJump: (MusicCollection) -> Void = { _ in }
 
     @State private var pageWidth: CGFloat = 402
     /// 封套跟手的横向位移（pt）
@@ -392,6 +394,28 @@ struct AlbumDetailView: View {
         }
     }
 
+    /// t214u：与 commitSwipe 同一套动画，只是目标专辑由外部给定
+    private func commitJump(to c: MusicCollection) {
+        swipeBusy = true
+        let dir = 1
+        let out = -CGFloat(dir) * (pageWidth + 40)
+        withAnimation(.easeIn(duration: 0.16), completionCriteria: .logicallyComplete) {
+            swipeX = out
+        } completion: {
+            onJump(c)
+            startReveal(delay: 0.08)
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { swipeX = -out }
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.86), completionCriteria: .logicallyComplete) {
+                swipeX = 0
+            } completion: {
+                swipeBusy = false
+                swipeSettle += 1
+                onSwipeSettled()
+            }
+        }
+    }
+
     // MARK: - 顶部栏
 
     private var header: some View {
@@ -494,6 +518,14 @@ struct AlbumDetailView: View {
                                 realRow(sideIndex[song.id] ?? 0, song, in: songs)
                                     .modifier(rowReveal((sideIndex[song.id] ?? 0) + 1))
                             }
+                            // t214u：曲目表末尾「相似专辑」（无结果整段隐藏；在 BottomFade 留白之上，不被时间条挡住）
+                            if let collection {
+                                RelatedAlbumsSection(collection: collection, ink: theme.ink, dim: theme.dim) { c in
+                                    guard !swipeBusy else { return }
+                                    commitJump(to: c)
+                                }
+                                .padding(.horizontal, -DS.contentInset)
+                            }
                         }
                         .padding(.horizontal, DS.contentInset)
                         // t166u：底部留出渐变模糊的高度，最后一行能滚到模糊之上
@@ -508,6 +540,8 @@ struct AlbumDetailView: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        // t214u：详情一打开就预取相似专辑，滚到底时已就绪
+        .task(id: collection?.id) { RelatedAlbumStore.shared.prefetch(collection) }
     }
 
     /// 歌曲 ID → 序号（只随 songs 变化，切歌不影响）
