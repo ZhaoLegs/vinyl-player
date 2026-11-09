@@ -605,49 +605,87 @@ final class OfficialCoverStore: @unchecked Sendable {
         let title = sanitize(q.title)
         let artist = sanitize(q.artist)
         guard !title.isEmpty, !artist.isEmpty else { return nil }
-        var comps = URLComponents(string: "https://musicbrainz.org/ws/2/release-group/")!
-        comps.queryItems = [
-            .init(name: "query", value: "releasegroup:\"\(title)\" AND artist:\"\(artist)\""),
-            .init(name: "fmt", value: "json"),
-            .init(name: "limit", value: "5")
-        ]
-        guard let searchURL = comps.url else { return nil }
         do {
-            let (data, resp) = try await session.data(from: searchURL)
+            let (data, resp) = try await mbSearch(title: title, artist: artist)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             guard code == 200, let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let groups = json["release-groups"] as? [[String: Any]], !groups.isEmpty else {
                 if code == 503 || code == 429 { lock.lock(); stats.error += 1; lock.unlock() }
                 return nil
             }
-            // 取最高分；若第二名也 ≥90 且不同 → 视为歧义，放弃
+            // 取最高分。同名多版本（Deluxe / nightcore 等）仍用最高分主版本；
+            // 仅当第二名分数接近（差 < 5）且标题规范化后不同 → 视为歧义
             let scored: [(String, Int, String)] = groups.compactMap { g in
                 guard let id = g["id"] as? String else { return nil }
                 let score = g["score"] as? Int ?? 0
                 let name = (g["title"] as? String) ?? ""
                 return (id, score, name)
             }.sorted { $0.1 > $1.1 }
-            guard let best = scored.first, best.1 >= 90 else { return nil }
-            if scored.count > 1, scored[1].1 >= 90, scored[1].0 != best.0 {
-                // 歧义
+            guard let best = scored.first, best.1 >= 85 else { return nil }
+            if let second = scored.dropFirst().first,
+               second.1 >= 85,
+               best.1 - second.1 < 5,
+               sanitize(best.2).caseInsensitiveCompare(sanitize(second.2)) != .orderedSame {
                 return nil
             }
-            // Cover Art Archive front-500（跟随重定向到实际图）
-            guard let caa = URL(string: "https://coverartarchive.org/release-group/\(best.0)/front-500") else { return nil }
-            await throttle()  // CAA 也温柔一点
-            var req = URLRequest(url: caa)
-            req.httpMethod = "HEAD"
-            let (_, head) = try await session.data(for: req)
-            let hc = (head as? HTTPURLResponse)?.statusCode ?? 0
-            // 200/307/302 都算有图；404 = 无封面
-            if hc == 404 { return nil }
-            if (200..<400).contains(hc) { return caa }
+            // Cover Art Archive：先试 front-500；404 再读 JSON 取任意 front
+            if let url = await coverURL(releaseGroup: best.0) { return url }
             return nil
         } catch {
             lock.lock(); stats.error += 1; lock.unlock()
             print("[t197u] MB lookup failed for \(q.title): \(error)")
             return nil
         }
+    }
+
+
+
+    private func mbSearch(title: String, artist: String) async throws -> (Data, URLResponse) {
+        func run(_ query: String) async throws -> (Data, URLResponse) {
+            await throttle()
+            var comps = URLComponents(string: "https://musicbrainz.org/ws/2/release-group/")!
+            comps.queryItems = [
+                .init(name: "query", value: query),
+                .init(name: "fmt", value: "json"),
+                .init(name: "limit", value: "5")
+            ]
+            return try await session.data(from: comps.url!)
+        }
+        // 先精确，再宽松（无引号）
+        let strict = try await run("releasegroup:\"\(title)\" AND artist:\"\(artist)\"")
+        let code = (strict.1 as? HTTPURLResponse)?.statusCode ?? 0
+        if code == 200,
+           let json = try? JSONSerialization.jsonObject(with: strict.0) as? [String: Any],
+           let groups = json["release-groups"] as? [[String: Any]], !groups.isEmpty {
+            return strict
+        }
+        return try await run("releasegroup:\(title) AND artist:\(artist)")
+    }
+
+    private func coverURL(releaseGroup mbid: String) async -> URL? {
+        await throttle()
+        if let front = URL(string: "https://coverartarchive.org/release-group/\(mbid)/front-500") {
+            var req = URLRequest(url: front); req.httpMethod = "HEAD"
+            if let (_, head) = try? await session.data(for: req) {
+                let hc = (head as? HTTPURLResponse)?.statusCode ?? 0
+                if (200..<400).contains(hc) { return front }
+            }
+        }
+        // 无 front-500 时读清单，挑第一张 front（或第一张图）
+        guard let listURL = URL(string: "https://coverartarchive.org/release-group/\(mbid)") else { return nil }
+        await throttle()
+        guard let (data, resp) = try? await session.data(from: listURL),
+              ((resp as? HTTPURLResponse)?.statusCode ?? 0) == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let images = json["images"] as? [[String: Any]] else { return nil }
+        let front = images.first(where: { ($0["front"] as? Bool) == true }) ?? images.first
+        if let thumbs = front?["thumbnails"] as? [String: Any] {
+            for key in ["500", "large", "250"] {
+                if let s = thumbs[key] as? String, let u = URL(string: s) { return u }
+            }
+        }
+        if let s = front?["image"] as? String, let u = URL(string: s) { return u }
+        return nil
     }
 
     private func sanitize(_ s: String) -> String {
