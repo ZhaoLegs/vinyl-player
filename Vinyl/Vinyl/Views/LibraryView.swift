@@ -82,7 +82,12 @@ struct LibraryView: View {
                     .accessibilityHidden(true)
             }
             .coordinateSpace(name: "library")
-            .onPreferenceChange(CoverFrameKey.self) { cellFrames = $0 }
+            .onPreferenceChange(CoverFrameKey.self) { frames in
+                cellFrames = frames
+                // 关闭飞行期间用户滚动首页：目标格子的实时 frame 每帧更新到 origin，
+                // CoverFlight 用当前弹簧进度向这个实时 frame 插值，落点永远在格子上。
+                if closing, let key = targetKey, let live = frames[key] { origin = live }
+            }
             .onPreferenceChange(SleeveFrameKey.self) { sleeveFrame = $0 }
             .toolbar(presented ? .hidden : .visible, for: .tabBar)
             .task(id: demoToken) {
@@ -107,7 +112,7 @@ struct LibraryView: View {
                     return
                 }
                 origin = measuredOrigin
-                selectedIndex = AlbumData.featuredIndex
+                selectedIndex = AlbumData.featuredIndex; targetKey = AlbumData.featuredIndex
                 recordingMarker("started")
                 open()
             }
@@ -154,7 +159,7 @@ struct LibraryView: View {
                 // safeAreaBar 会把 mini player 贴到底部安全区，并**自动把滚动边缘效果延伸到它**，
                 // 所以不需要再手写 LinearGradient mask。
                 .safeAreaBar(edge: .bottom, spacing: 0) {
-                    MiniPlayer()
+                    MiniPlayer(open: openNowPlaying)
                         .padding(.horizontal, DS.tabBarSideInset)
                         .padding(.bottom, DS.miniPlayerBottomPadding)
                 }
@@ -171,7 +176,7 @@ struct LibraryView: View {
                             .init(color: .clear, location: 1)
                         ], startPoint: .top, endPoint: .bottom)
                     )
-                MiniPlayer()
+                MiniPlayer(open: openNowPlaying)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 10)
             }
@@ -206,13 +211,16 @@ struct LibraryView: View {
     }
 
     /// 真实 Apple Music 封面格：与演示封面同尺寸、同圆角、同投影。
+    @State private var nowPlayingCollection: MusicCollection? = nil
+
     private func musicCell(_ index: Int, _ collection: MusicCollection) -> some View {
         let key = 1000 + index
         return Button {
             origin = cellFrames[key] ?? origin
+            targetKey = key
             openCollection(collection)
         } label: {
-            ArtworkFill(artwork: collection.artwork, render: 120)
+            ArtworkFill(artwork: collection.artwork)   // 与飞行封面 / 封套同一渲染尺寸，避免换分辨率
                 .clipShape(RoundedRectangle(cornerRadius: DS.corner))
                 .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
                 .background {
@@ -223,12 +231,15 @@ struct LibraryView: View {
                 }
         }
         .buttonStyle(.plain)
+        // 转场期间源格子隐藏：屏幕上始终只有一个封面
+        .opacity(presented && selectedCollection?.id == collection.id ? 0 : 1)
         .accessibilityLabel("\(collection.title)，\(collection.artist)")
     }
 
     /// 点开真实集合：沿用同一套放大转场 + 唱片自动滑出，同时读取曲目并从第一首可播放的歌开始播。
-    private func openCollection(_ collection: MusicCollection) {
+    private func openCollection(_ collection: MusicCollection, startPlayback: Bool = true) {
         selectedCollection = collection
+        nowPlayingCollection = collection
         collectionSongs = nil
         open()
         Task {
@@ -236,7 +247,7 @@ struct LibraryView: View {
                 let songs = try await collection.songs()
                 guard selectedCollection?.id == collection.id else { return }
                 collectionSongs = songs
-                if let first = songs.first(where: { $0.playParameters != nil }) {
+                if startPlayback, let first = songs.first(where: { $0.playParameters != nil }) {
                     await music.play(first, in: songs, fromCatalog: collection.isCatalog)
                 }
             } catch {
@@ -244,6 +255,25 @@ struct LibraryView: View {
                 collectionSongs = []
                 music.errorMessage = "读取曲目失败：\(error.localizedDescription)"
             }
+        }
+    }
+
+    /// 迷你播放条点击：打开正在播放的专辑（不重新开始播放）；演示模式打开演示专辑。
+    private func openNowPlaying() {
+        guard !presented else { return }
+        if music.hasCurrentTrack, let collection = nowPlayingCollection {
+            let i = music.collections.firstIndex { $0.id == collection.id }
+            origin = i.flatMap { cellFrames[1000 + $0] } ?? origin
+            targetKey = i.map { 1000 + $0 }
+            openCollection(collection, startPlayback: false)
+        } else {
+            let index = AlbumData.featuredIndex
+            origin = cellFrames[index] ?? origin
+            targetKey = index
+            selectedIndex = index
+            selectedCollection = nil
+            collectionSongs = nil
+            open()
         }
     }
 
@@ -262,6 +292,7 @@ struct LibraryView: View {
         Button {
             // 起点 = 被点击那一格在 library 坐标系里的真实 frame
             origin = cellFrames[index] ?? origin
+            targetKey = index
             selectedIndex = index
             selectedCollection = nil
             collectionSongs = nil
@@ -281,6 +312,7 @@ struct LibraryView: View {
                 }
         }
         .buttonStyle(.plain)
+        .opacity(presented && selectedCollection == nil && selectedIndex == index ? 0 : 1)
     }
 
     // MARK: - Zoom 转场中的飞行封面
@@ -299,7 +331,9 @@ struct LibraryView: View {
                 Image(DS.coverName(selectedIndex)).resizable()
             }
         }
-            .modifier(CoverFlight(progress: zoom, start: start, end: end, closing: closing))
+            .modifier(CoverFlight(progress: zoom, start: start, end: end, closing: closing,
+                                 discCover: DS.coverName(selectedIndex),
+                                 discArtwork: selectedCollection?.artwork))
             .opacity(presented && !reduceMotion ? 1 : 0)
     }
 
@@ -326,7 +360,30 @@ struct LibraryView: View {
         demoToken += 1
     }
 
+    @State private var closeQueued = false
+    /// 关闭飞行的目标格子（cellFrames 的 key），滚动时实时跟踪它的 frame
+    @State private var targetKey: Int? = nil
+
     private func close() {
+        guard presented && !closing && !closeQueued else { return }
+        // 唱片抽出时先收回封套（不旋转、不翻面），收好后再开始缩回网格，
+        // 保证飞行封面起点与静止封套完全重合。
+        if pull > 0.01 && !reduceMotion {
+            closeQueued = true
+            autoplay = false
+            demoToken += 1
+            withAnimation(Motion.animation(Motion.retract)) { pull = 0 }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(Motion.retract.duration + 0.04))
+                closeQueued = false
+                beginCloseFlight()
+            }
+            return
+        }
+        beginCloseFlight()
+    }
+
+    private func beginCloseFlight() {
         guard presented && !closing else { return }
         // 关闭时封面只做缩放 / 位移回到网格，不做任何翻转：
         // 即使用户翻到了 B 面，也先无动画地把 flip 归零。
@@ -354,10 +411,9 @@ struct LibraryView: View {
         }
     }
 
-    /// 用户点封套 = 翻面（A 面 ↔ B 面），按原片节奏分三步，期间的点击一律忽略：
-    /// ① 唱片收回封套（retract，原片 f91→97 = 0.20s）
-    /// ② 完全收回后封套绕 Y 轴翻面（flip，原片 f114→125 = 0.367s）
-    /// ③ 翻完后唱片再滑出（pull，原片 f41→55 = 0.467s），继续播放；真实专辑切到该面的第一首。
+    /// 用户点封套 = 翻过来看封套背面，纯视觉，不碰播放器（不暂停、不切歌）。期间点击一律忽略。
+    /// 正面 → 背面：① 唱片收回封套（retract，原片 f91→97 = 0.20s）→ ② 封套绕 Y 轴翻到背面（flip，原片 f114→125 = 0.367s）。
+    /// 背面 → 正面：① 封套翻回正面（0.367s）→ ② 唱片再滑出（pull，原片 f41→55 = 0.467s）。
     /// 打开详情时绝不自动翻面。
     private func toggleArtwork() {
         guard presented && !closing && !flipBusy else { return }
@@ -365,29 +421,22 @@ struct LibraryView: View {
         Task { @MainActor in
             defer { flipBusy = false }
             let animate = !reduceMotion
-            if pull > 0.01 {
-                withAnimation(animate ? Motion.animation(Motion.retract) : nil) { pull = 0 }
-                if animate { try? await Task.sleep(for: .seconds(Motion.retract.duration)) }
+            if flip < 90 {
+                if pull > 0.01 {
+                    withAnimation(animate ? Motion.animation(Motion.retract) : nil) { pull = 0 }
+                    if animate { try? await Task.sleep(for: .seconds(Motion.retract.duration)) }
+                }
+                guard presented && !closing else { return }
+                withAnimation(animate ? Motion.animation(Motion.flip) : nil) { flip = 180 }
+                if animate { try? await Task.sleep(for: .seconds(Motion.flip.duration)) }
+            } else {
+                withAnimation(animate ? Motion.animation(Motion.flip) : nil) { flip = 0 }
+                if animate { try? await Task.sleep(for: .seconds(Motion.flip.duration)) }
+                guard presented && !closing else { return }
+                withAnimation(animate ? Motion.animation(Motion.pull) : nil) { pull = 1 }
+                if animate { try? await Task.sleep(for: .seconds(Motion.pull.duration)) }
             }
-            guard presented && !closing else { return }
-            let toBack = flip < 90
-            withAnimation(animate ? Motion.animation(Motion.flip) : nil) { flip = toBack ? 180 : 0 }
-            if animate { try? await Task.sleep(for: .seconds(Motion.flip.duration)) }
-            guard presented && !closing else { return }
-            withAnimation(animate ? Motion.animation(Motion.pull) : nil) { pull = 1 }
-            await playSide(back: toBack)
-            if animate { try? await Task.sleep(for: .seconds(Motion.pull.duration)) }
         }
-    }
-
-    /// 真实专辑：A 面 = 前半曲目，B 面 = 后半；翻到哪面就从该面第一首播（与曲目表的 A/B 标记一致）。
-    /// 演示专辑没有音频，只翻面不换曲。
-    private func playSide(back: Bool) async {
-        guard let collection = selectedCollection, let songs = collectionSongs, songs.count > 1 else { return }
-        let half = (songs.count + 1) / 2
-        let side = back ? Array(songs[half...]) : Array(songs[..<half])
-        guard let first = side.first(where: { $0.playParameters != nil }) else { return }
-        await music.play(first, in: songs, fromCatalog: collection.isCatalog)
     }
 
     /// Source f5 is the opening trigger. Offsets below are relative to that trigger.
@@ -397,6 +446,8 @@ struct LibraryView: View {
         if reduceMotion && presented && !closing && autoplay && !recordingRequested { pull = 1; return }
         guard presented && !closing && autoplay && !reduceMotion else { return }
         guard await pause(1_200_000_000) else { return }
+        // 用户已翻到背面 / 正在翻：不自动抽出
+        guard flip < 90 && !flipBusy else { return }
         // 点开封面：唱片自动滑出并开始播放（唱片持续旋转）。
         withAnimation(Motion.animation(Motion.pull)) { pull = 1 }
         // 正常点击打开到此为止：不自动收回、不自动翻面、不自动关闭。
@@ -440,6 +491,8 @@ private struct CoverFlight: AnimatableModifier {
     let start: CGRect
     let end: CGRect
     var closing: Bool = false
+    var discCover: String = DS.coverName(AlbumData.featuredIndex)
+    var discArtwork: Artwork? = nil
 
     var animatableData: CGFloat {
         get { progress }
@@ -459,11 +512,38 @@ private struct CoverFlight: AnimatableModifier {
         let nativeX = start.minX + (end.minX - start.minX) * clamped
         let nativeY = start.minY + (end.minY - start.minY) * clamped
         let width = start.width + (end.width - start.width) * amount
-        let visible = closing ? 1.0 : (1 - min(1, max(0, (linear - 0.88) / 0.12)))
+        // 只有一个封面在动：打开时飞行封面一直可见，直到弹簧第一次越过 97% 才把位置交给详情页封套
+        // （此刻两者同图、同 frame、同挖孔、同投影，交接无交叉淡入）；关闭时详情页封套立刻隐藏、由它飞回。
+        let visible = closing ? 1.0 : (linear < Motion.handoff ? 1.0 : 0.0)
+        // 弹簧越过终点的部分（关闭时 progress < 0）变成封面在网格位置的轻微缩小再回弹
+        let settle = closing ? 1 + max(-0.12, min(0, progress)) : 1
+        let hole = width * DS.planet / DS.sleeve
         content
             .frame(width: width, height: width)
-            .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - clamped) + 2 * clamped))
-            .shadow(color: .black.opacity(0.25), radius: 20 * clamped, y: 8 * clamped)
+            // 封套挖孔随放大逐渐出现，与详情页封套的孔完全一致
+            .mask {
+                Rectangle()
+                    .overlay {
+                        Circle().frame(width: hole, height: hole)
+                            .opacity(Double(clamped))
+                            .blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+            }
+            .background {
+                // 孔后是与详情页同一个黑胶视图（等比缩放），交接时孔内画面一致
+                VinylDiscView(angle: .zero, pull: 0, coverName: discCover, artwork: discArtwork)
+                    .shadow(radius: 0)
+                    .scaleEffect(width / DS.sleeve)
+                    .frame(width: hole, height: hole)
+                    .clipShape(Circle())
+                    .opacity(Double(clamped))
+            }
+            // 圆角随同一弹簧进度连续变化：网格 DS.corner → 详情 0（关闭时反向）
+            .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - clamped)))
+            .scaleEffect(settle)
+            // 投影从网格封面的 (18%, r8, y4) 连续过渡到详情封套的 (12%, r8, y5)
+            .shadow(color: .black.opacity(0.18 - 0.06 * Double(clamped)), radius: 8, y: 4 + clamped)
             .offset(x: nativeX + (sample.x - refStraightX),
                     y: nativeY + (sample.y - refStraightY))
             .opacity(visible)
@@ -480,7 +560,11 @@ struct ArtworkHandoff: AnimatableModifier {
     }
 
     func body(content: Content) -> some View {
-        let shown = closing ? 0 : min(1, max(0, (progress - 0.88) / 0.12))
-        content.opacity(Double(shown))
+        let shown: Double = closing ? 0 : (progress >= Motion.handoff ? 1 : 0)
+        // 打开时弹簧越过 1 的部分 = 封套轻微放大后回弹
+        let overshoot = closing ? 0 : max(0, min(0.12, progress - 1))
+        content
+            .scaleEffect(1 + overshoot)
+            .opacity(Double(shown))
     }
 }

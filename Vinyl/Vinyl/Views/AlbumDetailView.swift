@@ -102,7 +102,8 @@ struct AlbumDetailView: View {
                     .padding(.bottom, 10)
                     .opacity(stage(0.24))
             }
-            .opacity(contentAlpha)
+            // 不再给整列加 contentAlpha：封套只受 ArtworkHandoff 控制（全显 / 全隐），
+            // 不会出现半透明封套透出唱片的「鬼影」帧；其余内容各自按 stage() 淡入。
         }
         .task {
             guard demoLevels == nil,
@@ -182,12 +183,14 @@ struct AlbumDetailView: View {
             WaveformBar(progress: music.duration > 0 ? music.position / music.duration : 0,
                         levels: Waveform.seeded(id.rawValue),
                         isPlaying: music.isPlaying,
-                        toggle: { Task { await music.togglePlayback() } })
+                        toggle: { Task { await music.togglePlayback() } },
+                        seek: { music.seek(to: $0 * music.duration) })
         } else {
             WaveformBar(progress: music.demoElapsed / AppleMusicStore.demoDuration,
                         levels: demoLevels,
                         isPlaying: music.demoPlaying,
-                        toggle: { music.selectDemo(music.demoTrack) })
+                        toggle: { music.selectDemo(music.demoTrack) },
+                        seek: { music.seekDemo($0) })
         }
     }
 
@@ -226,8 +229,9 @@ struct AlbumDetailView: View {
                 } else {
                     ScrollView(showsIndicators: false) {
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(songs.enumerated()), id: \.offset) { index, song in
-                                realRow(index, song, in: songs)
+                            // 行身份 = 歌曲 ID（稳定），切歌时只有两行的颜色 / 图标变化，列表本身不重建
+                            ForEach(songs, id: \.id) { song in
+                                realRow(sideIndex[song.id] ?? 0, song, in: songs)
                             }
                         }
                         .padding(.horizontal, DS.contentInset)
@@ -243,8 +247,15 @@ struct AlbumDetailView: View {
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
+    /// 歌曲 ID → 序号（只随 songs 变化，切歌不影响）
+    private var sideIndex: [MusicItemID: Int] {
+        var map: [MusicItemID: Int] = [:]
+        for (i, song) in (songs ?? []).enumerated() where map[song.id] == nil { map[song.id] = i }
+        return map
+    }
+
     private func realRow(_ index: Int, _ song: Song, in songs: [Song]) -> some View {
-        let current = music.currentSongID == song.id
+        let current = music.isCurrent(song)
         let half = (songs.count + 1) / 2
         let side = index == 0 ? "A" : (index == half && songs.count > 1 ? "B" : "")
         return Button {
@@ -277,17 +288,21 @@ struct AlbumDetailView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(song.playParameters == nil || music.isPreparing)
+        // 不再随 isPreparing 整表禁用（plain 按钮禁用会整体变淡 = 切歌时「闪一下」）；
+        // 重复点击由 AppleMusicStore.play 内的 isPreparing 守卫挡掉。
+        .disabled(song.playParameters == nil)
         .opacity(song.playParameters == nil ? 0.45 : 1)
+        .animation(.easeInOut(duration: 0.15), value: current)
+        .animation(.easeInOut(duration: 0.15), value: current && music.isPlaying)
         .accessibilityLabel("\(current && music.isPlaying ? "暂停" : "播放") \(song.title)，\(song.artistName)")
     }
 
     // 原片实测（960×720 视频，屏宽 289px ↔ 393pt）：列起点相对内容左缘
-    // Side 0 / BPM 39.5 / 图标 81.5 / 曲名 104.5pt；行距 36pt；表头 12pt，曲名 15pt，播放图标 13pt（字形高 ≈ 曲名大写高）。
+    // Side 0 / BPM 39.5 / 图标 89.5（原片 81.5，按要求右移 8pt 贴近曲名）/ 曲名 104.5pt；行距 36pt；表头 12pt，曲名 15pt，播放图标 13pt（字形高 ≈ 曲名大写高）。
     private enum TL {
         static let sideW: CGFloat  = 39.5
-        static let bpmW: CGFloat   = 42
-        static let glyphW: CGFloat = 23
+        static let bpmW: CGFloat   = 50
+        static let glyphW: CGFloat = 15
         static let header: CGFloat = 12
         static let row: CGFloat    = 15
         static let glyph: CGFloat  = 13
@@ -295,7 +310,7 @@ struct AlbumDetailView: View {
         static let headerGap: CGFloat = 16.5
         static let bpmHeader = Color(hex: 0x8F8D8E)
         static let bpm       = Color(hex: 0x7A787B)
-        static let idle      = Color(hex: 0x625F63)
+        static let idle      = DS.secondary          // 非当前曲目：灰（0x8B8783），当前曲目：DS.ink 黑
     }
 
     private var trackTable: some View {
@@ -317,7 +332,8 @@ struct AlbumDetailView: View {
             }
             .padding(.bottom, TL.headerGap)
 
-            ForEach(Array(AlbumData.tracks.enumerated()), id: \.offset) { index, track in
+            ForEach(AlbumData.tracks) { track in
+                let index = AlbumData.tracks.firstIndex { $0.id == track.id } ?? 0
                 let current = music.demoTrack == index
                 Button { music.selectDemo(index) } label: {
                     HStack(spacing: 0) {
@@ -344,6 +360,8 @@ struct AlbumDetailView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .animation(.easeInOut(duration: 0.15), value: current)
+                .animation(.easeInOut(duration: 0.15), value: current && music.demoPlaying)
                 .accessibilityLabel("\(current && music.demoPlaying ? "暂停" : "播放") \(track.title)")
             }
         }
@@ -353,8 +371,11 @@ struct AlbumDetailView: View {
 
     private var releaseCard: some View {
         HStack(spacing: 12) {
-            Image("small_art")
+            // 原来是从参考视频里截的 58pt 低清占位图 small_art（黑底白色符号），不是封面；
+            // 改为该专辑自己的封面资源（与网格 / 封套同一张图）。
+            Image(coverName == "sleeve_cutout" ? DS.coverName(AlbumData.featuredIndex) : coverName)
                 .resizable()
+                .aspectRatio(1, contentMode: .fill)
                 .frame(width: 58, height: 58)
                 .clipShape(RoundedRectangle(cornerRadius: 2))
 

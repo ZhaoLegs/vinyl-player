@@ -159,7 +159,7 @@ struct MusicSongRow: View {
                     Text(song.artistName).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if music.currentSongID == song.id {
+                if music.isCurrent(song) {
                     PlaybackSymbol(isPlaying: music.isPlaying)
                 }
                 if song.playParameters == nil {

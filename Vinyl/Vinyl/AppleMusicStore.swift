@@ -25,6 +25,8 @@ final class AppleMusicStore: ObservableObject {
     @Published private(set) var currentArtist = ""
     @Published private(set) var currentArtwork: Artwork?
     @Published private(set) var currentSongID: MusicItemID?
+    /// 队列条目自身的 ID（有时与 Song ID 不同）
+    @Published private(set) var currentCatalogID: MusicItemID?
     @Published private(set) var position: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
     @Published var errorMessage: String?
@@ -35,20 +37,19 @@ final class AppleMusicStore: ObservableObject {
     @Published private(set) var demoPlaying = true
     @Published private(set) var demoElapsed: Double = 0.18 * AppleMusicStore.demoDuration
     /// 点演示曲目：点当前行 = 暂停 / 继续；点其它行 = 切到该曲并开始播放
+    func seekDemo(_ fraction: Double) {
+        demoElapsed = min(1, max(0, fraction)) * Self.demoDuration
+    }
+
     func selectDemo(_ index: Int) {
         if index == demoTrack { demoPlaying.toggle() }
         else { demoTrack = index; demoPlaying = true; demoElapsed = 0 }
     }
+    /// 迷你播放条第一行：只显示歌名（不带 A1 · 面序前缀）
     var demoMiniTitle: String {
         let tracks = AlbumData.tracks
         guard tracks.indices.contains(demoTrack) else { return "" }
-        var side = "A", number = 0
-        for i in 0...demoTrack {
-            if !tracks[i].side.isEmpty { side = tracks[i].side; number = 0 }
-            number += 1
-        }
-        let title = tracks[demoTrack].title.components(separatedBy: " - ").last ?? tracks[demoTrack].title
-        return "\(side)\(number) · \(title)"
+        return tracks[demoTrack].title.components(separatedBy: " - ").last ?? tracks[demoTrack].title
     }
     @Published var showingPlayer = false
 
@@ -76,6 +77,16 @@ final class AppleMusicStore: ObservableObject {
         return items
     }
     var hasCurrentTrack: Bool { !currentTitle.isEmpty }
+
+    /// 这首歌是否为正在播放（或暂停中的）当前曲目。
+    /// 资料库 Song 与播放队列条目的 ID 可能不同（资料库 ID vs 曲库 ID），
+    /// 所以先比 ID，再退回比「标题 + 艺人」。
+    func isCurrent(_ song: Song) -> Bool {
+        guard hasCurrentTrack else { return false }
+        if let id = currentSongID, id == song.id { return true }
+        if let id = currentCatalogID, id == song.id { return true }
+        return song.title == currentTitle && (currentArtist.isEmpty || song.artistName == currentArtist)
+    }
 
     func connect() async {
         guard !isConnecting else { return }
@@ -279,6 +290,7 @@ final class AppleMusicStore: ObservableObject {
             currentArtist = ""
             currentArtwork = nil
             currentSongID = nil
+            currentCatalogID = nil
             position = 0
             duration = 0
             isPlaying = false
@@ -288,6 +300,7 @@ final class AppleMusicStore: ObservableObject {
         currentTitle = entry?.title ?? ""
         currentArtist = entry?.subtitle ?? ""
         currentArtwork = entry?.artwork
+        currentCatalogID = entry.map { MusicItemID($0.id) }
         if case .song(let song) = entry?.item {
             currentSongID = song.id
             duration = song.duration ?? 0

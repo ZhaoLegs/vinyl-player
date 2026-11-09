@@ -72,20 +72,32 @@ enum Motion {
         let damping: Double        // dampingFraction，<1 有过冲
         let duration: Double       // 该阶段在 30fps 下的实际秒数
         var followsMeasuredPath: Bool = false
+        var springy: Bool = false
     }
 
     /// Stage windows measured from the attached reference (30fps, frame 1 at t=0).
     /// Open is source frames 5→27, pull 41→55, retract 91→97, flip 114→125, close 165→185.
     /// These replace the earlier 8/30 and 10/30 guesses. Not a claim of pixel-perfect playback.
-    static let open    = Spring(response: 0, damping: 0, duration: 22.0 / 30, followsMeasuredPath: true)
-    static let pull    = Spring(response: 0.28, damping: 0.82, duration: 14.0 / 30)
+    /// 封面放大 / 缩回转场：弹簧，带轻微可见回弹（开与关同一组参数）。
+    /// response 0.5s、dampingFraction 0.72 ≈ 过冲 ~6%，CoverFlight / ArtworkHandoff 把过冲映射成封面的轻微放大 / 缩小。
+    static let zoomSpring: (response: Double, damping: Double) = (0.5, 0.72)
+    static let zoomDuration: Double = 0.5
+    /// 飞行封面 → 详情封套的交接点（弹簧进度首次 ≥ 0.97；0.72 阻尼下回落不会再低于它）
+    static let handoff: CGFloat = 0.97
+    /// 唱片抽出的小弹簧落定
+    static let pullSpring: (response: Double, damping: Double) = (0.42, 0.78)
+    static let open    = Spring(response: 0, damping: 0, duration: zoomDuration, followsMeasuredPath: true)
+    static let pull    = Spring(response: pullSpring.response, damping: pullSpring.damping, duration: 14.0 / 30, springy: true)
     static let retract = Spring(response: 0.22, damping: 0.92, duration: 6.0 / 30)
     static let flip    = Spring(response: 0.10, damping: 0.92, duration: 11.0 / 30)
-    static let close   = Spring(response: 0.34, damping: 0.86, duration: 20.0 / 30, followsMeasuredPath: true)
+    static let close   = Spring(response: 0, damping: 0, duration: zoomDuration, followsMeasuredPath: true)
 
     static func animation(_ s: Spring) -> Animation {
-        // Open/close progress is linear time so CoverFlight can follow OPEN_PATH / CLOSE_PATH.
-        if s.followsMeasuredPath { return .linear(duration: s.duration) }
+        // Open/close: a spring drives CoverFlight's progress along OPEN_PATH / CLOSE_PATH (overshoot = slight scale).
+        if s.followsMeasuredPath {
+            return .spring(response: zoomSpring.response, dampingFraction: zoomSpring.damping)
+        }
+        if s.springy { return .spring(response: s.response, dampingFraction: s.damping) }
         return .timingCurve(0.42, 0.0, 0.2, 1.0, duration: s.duration)
     }
 

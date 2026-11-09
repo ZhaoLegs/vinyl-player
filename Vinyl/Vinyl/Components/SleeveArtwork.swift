@@ -59,7 +59,7 @@ struct VinylDiscView: View {
         }
         .frame(width: DS.disc, height: DS.disc)
         // 抽出时唱片离开封套、投影随位移加深，制造景深
-        .shadow(color: .black.opacity(Double(0.35 + 0.12 * pull)),
+        .shadow(color: .black.opacity(Double(0.17 + 0.06 * pull)),   // 原 0.35 + 0.12·pull，减半
                 radius: 20 + 12 * pull, y: 10 + 8 * pull)
     }
 }
@@ -141,11 +141,8 @@ struct SleeveArtwork: View, Animatable {
 
             // 封套缩小 + 左移，制造景深（对应原片 f44–f51）
             ZStack(alignment: .topLeading) {
-                PlanetView(moon: pull, isBack: flip >= 90)
-                    .frame(width: DS.planet, height: DS.planet)
-                    .offset(x: (DS.sleeve - DS.planet) / 2,
-                            y: (DS.sleeve - DS.planet) / 2)
-
+                // 孔是封套的真实透明挖孔（下方 mask destinationOut），孔内不画任何独立图形：
+                // 透过孔看到的就是后面那一张完整的大黑胶在孔位置的那一部分（随抽出位置变化）。
                 Group {
                     if let artwork {
                         ArtworkFill(artwork: artwork)
