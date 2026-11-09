@@ -113,14 +113,15 @@ struct LibraryView: View {
                     let debugPlay = ProcessInfo.processInfo.arguments.contains("--debug-play")
                     openCollection(music.collections[i], startPlayback: debugPlay)
                     // t231u：诊断 —— 加 --debug-lyrics 时落定后翻到歌词页（截图顶部过渡用）
-                    if ProcessInfo.processInfo.arguments.contains("--debug-lyrics") {
+                    // 不随 .task 取消（开始播放会刷新 homePageRevision → 本 task 被取消重跑）
+                    if ProcessInfo.processInfo.arguments.contains("--debug-lyrics") { Task { @MainActor in
                         try? await Task.sleep(for: .seconds(2.5))
                         toggleArtwork()
                         if debugPlay {
                             try? await Task.sleep(for: .seconds(2))
                             if music.duration > 60 { music.seek(to: 50) }
                         }
-                    }
+                    } }
                 }
                 // t214u：诊断 —— --log-related 启动参数时，对首页前几个专辑跑一遍相似专辑查询并打印数据源
                 .task(id: music.homePageRevision) {
