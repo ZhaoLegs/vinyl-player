@@ -164,7 +164,7 @@ struct NativeGlassButtonsExample: View {
 
             // 系统 toolbar：item 自动玻璃化，显式写法仍是 .glass
             // 可配置材质用 .buttonStyle(.glass(.regular.tint(.orange).interactive()))
-            Button("收藏", systemImage: "heart") { }
+            Button("收藏", systemImage: "star") { }
                 .buttonStyle(.glass)
         }
     }
@@ -183,7 +183,7 @@ struct NativeGlassContainerExample: View {
         GlassEffectContainer(spacing: 24) {
             HStack(spacing: 16) {
                 if expanded {
-                    glassButton("收藏", symbol: "heart.fill")
+                    glassButton("收藏", symbol: "star.fill")
                     glassButton("分享", symbol: "square.and.arrow.up")
                 }
                 Button(expanded ? "收起" : "展开",

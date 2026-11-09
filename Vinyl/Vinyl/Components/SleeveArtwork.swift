@@ -12,6 +12,8 @@ struct VinylDiscView: View {
     var pull: CGFloat = 0
     var coverName: String = DS.coverName(AlbumData.featuredIndex)
     var artwork: Artwork? = nil
+    /// t204u：与首页格子 / 飞行封面同一张（官方封面优先）
+    var official: OfficialCoverQuery? = nil
 
     var body: some View {
         ZStack {
@@ -24,7 +26,7 @@ struct VinylDiscView: View {
             // ① 随盘旋转：沟槽 + 中心标签（高光不跟转）
             ZStack {
                 VinylGrooves().equatable()
-                DiscLabel(coverName: coverName, artwork: artwork, size: DS.discLabel)
+                DiscLabel(coverName: coverName, artwork: artwork, official: official, size: DS.discLabel)
                 // 小暗色主轴孔（参考图：标签正中一小颗黑点）
                 Circle()
                     .fill(Color(hex: 0x050506))
@@ -105,12 +107,14 @@ struct VinylGrooves: View, Equatable {
 struct DiscLabel: View {
     var coverName: String
     var artwork: Artwork? = nil
+    /// t204u：与首页格子 / 飞行封面同一张（官方封面优先）
+    var official: OfficialCoverQuery? = nil
     let size: CGFloat
 
     var body: some View {
         Group {
             if let artwork {
-                ArtworkFill(artwork: artwork, render: 160)
+                ArtworkFill(artwork: artwork, render: 160, official: official)
             } else {
                 Image(coverName)
                     .resizable()
@@ -153,6 +157,8 @@ struct SleeveArtwork: View, Animatable {
     var coverName: String = "sleeve_cutout"
     /// 真实 Apple Music 封面；有值时替代 coverName 位图，同一套挖孔遮罩。
     var artwork: Artwork? = nil
+    /// t204u：与首页格子 / 飞行封面同一张（官方封面优先）
+    var official: OfficialCoverQuery? = nil
     var pull: CGFloat
     var flip: Double
     let spin: Angle
@@ -173,7 +179,7 @@ struct SleeveArtwork: View, Animatable {
     var body: some View {
         ZStack(alignment: .topLeading) {
             // 唱片在封套之后，抽出时向右位移并旋转
-            VinylDiscView(angle: spin, pull: pull, coverName: coverName, artwork: artwork)
+            VinylDiscView(angle: spin, pull: pull, coverName: coverName, artwork: artwork, official: official)
                 .offset(x: discInset + discPullX * pull, y: discInset)
                 // t176u：翻到背面（过 90° 侧立的那一帧）唱片不再渲染 → 背面的孔是干净的透明挖孔，只透出页面背景；
                 // 翻回正面时（同样在 90° 处）唱片重新出现在正面孔后
@@ -185,7 +191,7 @@ struct SleeveArtwork: View, Animatable {
                 // 透过孔看到的就是后面那一张完整的大黑胶在孔位置的那一部分（随抽出位置变化）。
                 // t144u：挖孔封套是静态的（只随 pull / flip 做变换），抽成 Equatable 子视图，转盘每帧不再重算它
                 // t186u：翻过 90° 后背面 = 完整封面（无孔、无唱片）；翻回正面时恢复挖孔 + 唱片
-                SleeveCutout(coverName: coverName, artwork: artwork, solid: flip > 90).equatable()
+                SleeveCutout(coverName: coverName, artwork: artwork, official: official, solid: flip > 90).equatable()
             }
             .scaleEffect(1 - DS.pullScale * pull, anchor: .center)   // 以中心缩放，封套中线不动 → 唱片始终上下居中
             .offset(x: -sleevePullX * pull)
@@ -203,12 +209,13 @@ struct SleeveArtwork: View, Animatable {
 struct SleeveCutout: View, Equatable {
     var coverName: String
     var artwork: Artwork?
+    var official: OfficialCoverQuery? = nil
     /// t186u：true = 背面，完整封面不挖孔
     var solid: Bool = false
     var body: some View {
         Group {
             if let artwork {
-                ArtworkFill(artwork: artwork)
+                ArtworkFill(artwork: artwork, official: official)
             } else {
                 Image(coverName).resizable()
             }

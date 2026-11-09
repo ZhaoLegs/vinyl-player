@@ -416,7 +416,7 @@ struct LibraryView: View {
         }
         Section {
             let loved = music.isLoved(c)
-            Button(loved ? "取消喜欢" : "喜欢", systemImage: loved ? "star.slash" : "star") {
+            Button(loved ? "取消喜欢" : "喜欢", systemImage: loved ? "star.fill" : "star") {
                 Task { await music.toggleLove(c) }
             }
             if music.canAddToLibrary(c) {
@@ -583,6 +583,8 @@ struct LibraryView: View {
             onSwipeSettled: { swipeSettled() }
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // t203u：详情层（含顶部专辑名 / 艺人）只在打开 / 关闭转场期间渲染，关闭后绝不残留在首页顶部
+        .opacity(presented ? 1 : 0)
         // t146u：详情页整屏吃掉触摸（空白背景也算），上下滑不会穿透到首页网格
         .contentShape(Rectangle())
         .allowsHitTesting(contentAlpha > 0.5)
@@ -625,6 +627,7 @@ struct LibraryView: View {
             .modifier(CoverFlight(progress: zoom, start: start, end: end, closing: closing, landed: landed,
                                  discCover: DS.coverName(selectedIndex),
                                  discArtwork: selectedCollection?.artwork,
+                                 discOfficial: selectedCollection?.officialQuery,
                                  perAxis: Motion.zoomPerAxis && !reduceMotion,
                                  fluid: Motion.zoomFluid && !reduceMotion,
                                  shrink: zm.gridShrink))
@@ -917,6 +920,7 @@ private struct CoverFlight: AnimatableModifier {
     var landed: Bool = false
     var discCover: String = DS.coverName(AlbumData.featuredIndex)
     var discArtwork: Artwork? = nil
+    var discOfficial: OfficialCoverQuery? = nil
     var perAxis: Bool = true
     /// t147u：单一进度 + 弧线（与 perAxis 互斥）
     var fluid: Bool = false
@@ -988,7 +992,7 @@ private struct CoverFlight: AnimatableModifier {
             .background {
                 if holeOpen > 0 {
                     // 孔后是与详情页同一个黑胶视图（等比缩放），交接时孔内画面一致
-                    VinylDiscView(angle: .zero, pull: 0, coverName: discCover, artwork: discArtwork)
+                    VinylDiscView(angle: .zero, pull: 0, coverName: discCover, artwork: discArtwork, official: discOfficial)
                         .shadow(radius: 0)
                         .scaleEffect(base / DS.sleeve)
                         .frame(width: holeFull, height: holeFull)

@@ -109,14 +109,14 @@ struct AlbumDetailView: View {
                 header
                     .frame(height: 52)
                     .padding(.top, 0)
-                    .opacity(stage(0))
+                    .opacity(isPresented ? stage(0) : 0)
 
                 // 唱片角速度：0 → smoothstep 缓入 → 45°/s 匀速 → smoothstep 缓出 → 0。
                 // 累计角度由角速度解析积分得到，C¹ 连续，不再「突然开始 / 突然停住」。
                 TimelineView(.animation(paused: !isPresented || reduceMotion)) { timeline in
                     let elapsed = timeline.date.timeIntervalSince(motionStart)
                     let spin = Angle.degrees(reduceMotion ? 0 : spinDegrees(elapsed))
-                    SleeveArtwork(coverName: coverName, artwork: collection?.artwork,
+                    SleeveArtwork(coverName: coverName, artwork: collection?.artwork, official: collection?.officialQuery,
                                   pull: pull, flip: flip, spin: spin, pageWidth: pageWidth)
                         .frame(width: DS.sleeve, height: DS.sleeve)
                         .contentShape(Rectangle())
@@ -406,7 +406,7 @@ struct AlbumDetailView: View {
                 // t188u：横滑换专辑时，标题 / 艺人与迷你播放条同款逐词上飘（FloatingText，同一组参数）；
                 // 放不下时整行上飘 + 单行 … 截断；颜色跟随主题色
                 FloatingText(key: themeKey,
-                             tokens: FloatingText.words(title, font: .system(size: 14, weight: .semibold)),
+                             tokens: FloatingText.words(title, font: .system(size: 16, weight: .semibold)),   // t202u：14 → 16pt
                              color: theme.ink, alignment: .center, animateOnAppear: false)
                 FloatingText(key: themeKey,
                              tokens: FloatingText.words(artist, font: .system(size: 11)),
@@ -415,8 +415,8 @@ struct AlbumDetailView: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 10)
 
-            // 右上角：收藏当前播放的歌（无播放时 = 本专辑当前 / 第一首）。heart / heart.fill
-            GlassCircleButton(systemImage: favoriteOn ? "heart.fill" : "heart",
+            // 右上角：收藏当前播放的歌（无播放时 = 本专辑当前 / 第一首）。t205u：star / star.fill
+            GlassCircleButton(systemImage: favoriteOn ? "star.fill" : "star",
                               accessibilityText: favoriteOn ? "取消收藏" : "收藏") {
                 toggleFavorite()
             }

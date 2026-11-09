@@ -455,7 +455,9 @@ struct CachedArtwork: View {
     }
 
     var body: some View {
+        // t204u：同步读官方封面内存缓存 → 新建的视图（飞行封面 / 封套 / 标签）第一帧就和格子是同一张图，不会中途交叉淡入成「两个封面」
         let shown = officialImage
+            ?? official.flatMap { OfficialCoverStore.shared.cachedImage(for: $0.id) }
             ?? (appleURL.flatMap { appleImage ?? ArtworkCache.shared.cached($0.absoluteString) })
         ZStack {
             if let shown {
@@ -472,7 +474,7 @@ struct CachedArtwork: View {
             }
         }
         .frame(width: side, height: side)
-        .animation(.easeInOut(duration: 0.25), value: officialImage != nil)
+
         .task(id: appleURL?.absoluteString) {
             guard let appleURL else { return }
             if let i = await ArtworkCache.shared.image(for: appleURL) { appleImage = i }
@@ -483,7 +485,8 @@ struct CachedArtwork: View {
                 officialImage = cached; return
             }
             if let img = await OfficialCoverStore.shared.image(for: official) {
-                officialImage = img
+                // 首次命中才淡入（之后都同步命中缓存，无动画）
+                withAnimation(.easeInOut(duration: 0.25)) { officialImage = img }
             }
         }
     }
