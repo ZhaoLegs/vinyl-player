@@ -377,7 +377,7 @@ final class ArtworkCache: @unchecked Sendable {
 
     func cached(_ key: String) -> UIImage? { memory.object(forKey: key as NSString) }
 
-    func image(for url: URL) async -> UIImage? {
+    func image(for url: URL, official: Bool = false, downloadedData: Data? = nil) async -> UIImage? {
         let key = url.absoluteString
         if let m = cached(key) { return m }
         lock.lock()
@@ -389,8 +389,18 @@ final class ArtworkCache: @unchecked Sendable {
                 store(img, key: key, source: 1)
                 return img
             }
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let img = UIImage(data: data)?.preparingForDisplay() else { return nil }
+            let data: Data
+            if let downloadedData {
+                data = downloadedData
+            } else if official {
+                guard let (bytes, response) = try? await OfficialCoverHTTPClient.shared.request(url, accept: "image/*"),
+                      response.statusCode == 200 else { return nil }
+                data = bytes
+            } else {
+                guard let (bytes, _) = try? await URLSession.shared.data(from: url) else { return nil }
+                data = bytes
+            }
+            guard let img = UIImage(data: data)?.preparingForDisplay() else { return nil }
             try? data.write(to: f, options: .atomic)
             store(img, key: key, source: 2)
             return img
@@ -489,212 +499,37 @@ struct CachedArtwork: View {
     }
 }
 
-/// t197u：按 MusicKit 专辑 id 查官方封面（MusicBrainz Cover Art Archive，免费无需 key）
-struct OfficialCoverQuery: Hashable {
-    let id: String
-    let title: String
-    let artist: String
-}
-
 extension MusicCollection {
     var officialQuery: OfficialCoverQuery {
         .init(id: id, title: title, artist: artist)
     }
 }
 
-/// MusicBrainz + Cover Art Archive。礼貌限速 ≈1 req/s；结果（命中 URL / 未命中）按 MusicKit id 落盘。
-/// Discogs 仅在有 key 时才作后备——当前工程无 key，跳过。
-final class OfficialCoverStore: @unchecked Sendable {
+/// Keep the existing image/fallback interface while the shared resolver handles matching and persistent metadata.
+final class OfficialCoverStore: Sendable {
     static let shared = OfficialCoverStore()
-    private let mapURL: URL
-    private let session: URLSession
-    private let lock = NSLock()
-    private var map: [String: Entry] = [:]
-    private var inflight: [String: Task<UIImage?, Never>] = [:]
-    private var lastMBRequest = Date.distantPast
-    private(set) var stats = (hit: 0, miss: 0, error: 0)
-
-    private struct Entry: Codable {
-        var url: String?       // nil = 确认未命中
-        var checkedAt: Date
-    }
-
-    private init() {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("official-covers", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        mapURL = dir.appendingPathComponent("map.json")
-        if let data = try? Data(contentsOf: mapURL),
-           let decoded = try? JSONDecoder().decode([String: Entry].self, from: data) {
-            map = decoded
-        }
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.httpAdditionalHeaders = [
-            "User-Agent": "VinylPlayer/1.0 (https://github.com/zhaolegs/vinyl; contact@vinyl.local)",
-            "Accept": "application/json"
-        ]
-        cfg.timeoutIntervalForRequest = 12
-        session = URLSession(configuration: cfg)
-        // Discogs：无 token 则完全跳过
-        if ProcessInfo.processInfo.environment["DISCOGS_TOKEN"] == nil {
-            print("[t197u] Discogs skipped (no DISCOGS_TOKEN); MusicBrainz CAA only")
-        }
-    }
+    private init() {}
 
     func cachedImage(for id: String) -> UIImage? {
-        lock.lock(); let e = map[id]; lock.unlock()
-        guard let u = e?.url, let url = URL(string: u) else { return nil }
+        guard let url = OfficialCoverLookup.shared.cachedURL(for: id) else { return nil }
         return ArtworkCache.shared.cached(url.absoluteString)
     }
 
-    func image(for q: OfficialCoverQuery) async -> UIImage? {
-        lock.lock()
-        if let e = map[q.id] {
-            lock.unlock()
-            guard let u = e.url, let url = URL(string: u) else { return nil }
-            return await ArtworkCache.shared.image(for: url)
-        }
-        if let t = inflight[q.id] { lock.unlock(); return await t.value }
-        let task = Task.detached(priority: .utility) { [self] () -> UIImage? in
-            let url = await lookup(q)
-            lock.lock()
-            map[q.id] = Entry(url: url?.absoluteString, checkedAt: Date())
-            if url != nil { stats.hit += 1 } else { stats.miss += 1 }
-            let st = stats
-            saveLocked()
-            lock.unlock()
-            if (st.hit + st.miss) == 24 || (st.hit + st.miss) % 40 == 0 {
-                let total = st.hit + st.miss
-                print("[t197u] official covers: \(st.hit)/\(total) matched (\(Int(Double(st.hit)/Double(max(1,total))*100))%), miss \(st.miss), err \(st.error)")
-            }
-            guard let url else { return nil }
-            return await ArtworkCache.shared.image(for: url)
-        }
-        inflight[q.id] = task
-        lock.unlock()
-        let img = await task.value
-        lock.lock(); inflight[q.id] = nil; lock.unlock()
-        return img
-    }
-
-    /// 预取首页可见专辑的官方封面（排队，受 MB 限速约束）
-    func prefetch(_ items: [OfficialCoverQuery]) {
-        for q in items {
-            lock.lock(); let known = map[q.id] != nil; lock.unlock()
-            if known { continue }
-            Task.detached(priority: .utility) { _ = await self.image(for: q) }
-        }
-    }
-
-    private func saveLocked() {
-        if let data = try? JSONEncoder().encode(map) { try? data.write(to: mapURL, options: .atomic) }
-    }
-
-    private func throttle() async {
-        lock.lock()
-        let wait = max(0, 1.05 - Date().timeIntervalSince(lastMBRequest))
-        lastMBRequest = Date().addingTimeInterval(wait)
-        lock.unlock()
-        if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
-    }
-
-    private func lookup(_ q: OfficialCoverQuery) async -> URL? {
-        // 歌单 / 资料库歌曲集合不适合按「专辑+艺人」查
-        if q.id.hasPrefix("playlist-") || q.id.hasPrefix("library-songs") { return nil }
-        await throttle()
-        let title = sanitize(q.title)
-        let artist = sanitize(q.artist)
-        guard !title.isEmpty, !artist.isEmpty else { return nil }
+    func image(for query: OfficialCoverQuery) async -> UIImage? {
         do {
-            let (data, resp) = try await mbSearch(title: title, artist: artist)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            guard code == 200, let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let groups = json["release-groups"] as? [[String: Any]], !groups.isEmpty else {
-                if code == 503 || code == 429 { lock.lock(); stats.error += 1; lock.unlock() }
-                return nil
-            }
-            // 取最高分。同名多版本（Deluxe / nightcore 等）仍用最高分主版本；
-            // 仅当第二名分数接近（差 < 5）且标题规范化后不同 → 视为歧义
-            let scored: [(String, Int, String)] = groups.compactMap { g in
-                guard let id = g["id"] as? String else { return nil }
-                let score = g["score"] as? Int ?? 0
-                let name = (g["title"] as? String) ?? ""
-                return (id, score, name)
-            }.sorted { $0.1 > $1.1 }
-            guard let best = scored.first, best.1 >= 85 else { return nil }
-            if let second = scored.dropFirst().first,
-               second.1 >= 85,
-               best.1 - second.1 < 5,
-               sanitize(best.2).caseInsensitiveCompare(sanitize(second.2)) != .orderedSame {
-                return nil
-            }
-            // Cover Art Archive：先试 front-500；404 再读 JSON 取任意 front
-            if let url = await coverURL(releaseGroup: best.0) { return url }
-            return nil
-        } catch {
-            lock.lock(); stats.error += 1; lock.unlock()
-            print("[t197u] MB lookup failed for \(q.title): \(error)")
-            return nil
-        }
+            guard let result = try await OfficialCoverLookup.shared.resolve(query) else { return nil }
+            return await ArtworkCache.shared.image(for: result.match.url, official: true,
+                                                   downloadedData: result.imageData)
+        } catch { return nil }
     }
 
-
-
-    private func mbSearch(title: String, artist: String) async throws -> (Data, URLResponse) {
-        func run(_ query: String) async throws -> (Data, URLResponse) {
-            await throttle()
-            var comps = URLComponents(string: "https://musicbrainz.org/ws/2/release-group/")!
-            comps.queryItems = [
-                .init(name: "query", value: query),
-                .init(name: "fmt", value: "json"),
-                .init(name: "limit", value: "5")
-            ]
-            return try await session.data(from: comps.url!)
-        }
-        // 先精确，再宽松（无引号）
-        let strict = try await run("releasegroup:\"\(title)\" AND artist:\"\(artist)\"")
-        let code = (strict.1 as? HTTPURLResponse)?.statusCode ?? 0
-        if code == 200,
-           let json = try? JSONSerialization.jsonObject(with: strict.0) as? [String: Any],
-           let groups = json["release-groups"] as? [[String: Any]], !groups.isEmpty {
-            return strict
-        }
-        return try await run("releasegroup:\(title) AND artist:\(artist)")
-    }
-
-    private func coverURL(releaseGroup mbid: String) async -> URL? {
-        await throttle()
-        if let front = URL(string: "https://coverartarchive.org/release-group/\(mbid)/front-500") {
-            var req = URLRequest(url: front); req.httpMethod = "HEAD"
-            if let (_, head) = try? await session.data(for: req) {
-                let hc = (head as? HTTPURLResponse)?.statusCode ?? 0
-                if (200..<400).contains(hc) { return front }
+    /// Search work is queued by OfficialCoverLookup; UIKit image decoding stays off the main thread.
+    func prefetch(_ items: [OfficialCoverQuery]) {
+        Task.detached(priority: .utility) {
+            for query in items {
+                guard !Task.isCancelled else { return }
+                _ = await self.image(for: query)
             }
         }
-        // 无 front-500 时读清单，挑第一张 front（或第一张图）
-        guard let listURL = URL(string: "https://coverartarchive.org/release-group/\(mbid)") else { return nil }
-        await throttle()
-        guard let (data, resp) = try? await session.data(from: listURL),
-              ((resp as? HTTPURLResponse)?.statusCode ?? 0) == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let images = json["images"] as? [[String: Any]] else { return nil }
-        let front = images.first(where: { ($0["front"] as? Bool) == true }) ?? images.first
-        if let thumbs = front?["thumbnails"] as? [String: Any] {
-            for key in ["500", "large", "250"] {
-                if let s = thumbs[key] as? String, let u = URL(string: s) { return u }
-            }
-        }
-        if let s = front?["image"] as? String, let u = URL(string: s) { return u }
-        return nil
-    }
-
-    private func sanitize(_ s: String) -> String {
-        // 去掉括号附注、特征符号，便于 MB 匹配
-        var t = s
-        if let r = t.range(of: #"\s*[\(\[（].*[\)\]）]"#, options: .regularExpression) {
-            t.removeSubrange(r)
-        }
-        return t.trimmingCharacters(in: .whitespacesAndNewlines)
-            .filter { $0 != "\"" }
     }
 }
