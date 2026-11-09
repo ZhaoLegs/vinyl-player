@@ -144,7 +144,7 @@ struct LibraryView: View {
             Spacer(minLength: 0)
             GlassCircleButton(systemImage: "cube", accessibilityText: "刷新资料库") {
                 if music.authorized {
-                    Task { await music.loadLibrary(); await music.loadRecommendations() }
+                    Task { await music.refreshHome() }
                 } else { connectMusic() }
             }
         }
@@ -193,6 +193,7 @@ struct LibraryView: View {
     private var gridScroll: some View {
         ScrollViewReader { proxy in
         ScrollView(showsIndicators: false) {
+            LazyVStack(spacing: 0) {
             LazyVGrid(columns: columns, spacing: 18) {
                 let real = music.collections
                 if real.isEmpty {
@@ -204,17 +205,22 @@ struct LibraryView: View {
                     ForEach(Array(real.enumerated()), id: \.element.id) { index, collection in
                         musicCell(index, collection)
                             .id(1000 + index)
-                            .onAppear {
-                                guard index == real.count - 1 else { return }
-                                if music.hasMorePlaylists { Task { await music.loadMore(playlists: true) } }
-                                else if music.hasMoreAlbums { Task { await music.loadMore(playlists: false) } }
-                            }
                     }
                 }
             }
             .padding(.horizontal, DS.contentInset)
             .padding(.top, 12)
             .padding(.bottom, 8)
+            if music.hasMoreHome, !music.collections.isEmpty {
+                // 即使下一页只有重复封面或更多歌曲，也能继续推进；打开详情时暂停分页。
+                Color.clear
+                    .frame(height: 1)
+                    .task(id: "\(music.homePageRevision)-\(presented)") {
+                        guard !presented else { return }
+                        await music.loadMoreHome()
+                    }
+            }
+            }
         }
         .onChange(of: scrollRequest) { _, key in
             guard let key else { return }
@@ -297,7 +303,7 @@ struct LibraryView: View {
         case .denied, .restricted:
             if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
         case .authorized:
-            Task { await music.loadLibrary() }
+            Task { await music.refreshHome() }
         default:
             Task { await music.connect() }
         }
@@ -683,17 +689,20 @@ private struct CoverFlight: AnimatableModifier {
         // 原图放大：飞行全程就是格子那张图本身（同图、同裁切、方形等比），只有圆角随尺寸连续变化。
         // 封套挖孔只在尺寸最后 15% 才淡入（关闭时最先 15% 淡出），与详情封套交接处完全一致，
         // 其余 85% 的路程画面就是原图在放大 / 缩小，没有任何换图或叠影。
-        let holeAlpha: Double = Double(min(1, max(0, (clamped - 0.85) / 0.15)))
+        // t137u：挖孔不再淡入（那等于在同一位置叠第二层画面）：孔是同一张封面上的遮罩，
+        // 在尺寸进度最后 30% 由 0 直径平滑张开到封套孔径（关闭时反向收拢）；孔后的唱片始终不透明，只透过孔可见。
+        let holeT: CGFloat = min(1, max(0, (clamped - 0.70) / 0.30))
+        let holeOpen: CGFloat = holeT * holeT * (3 - 2 * holeT)
         let visible: Double = (closing || !landed) ? 1 : 0
         let hole = width * DS.planet / DS.sleeve
+        let holeNow = hole * holeOpen
         content
             .frame(width: width, height: width)
             // 封套挖孔随放大逐渐出现，与详情页封套的孔完全一致
             .mask {
                 Rectangle()
                     .overlay {
-                        Circle().frame(width: hole, height: hole)
-                            .opacity(holeAlpha)
+                        Circle().frame(width: holeNow, height: holeNow)
                             .blendMode(.destinationOut)
                     }
                     .compositingGroup()
@@ -705,7 +714,7 @@ private struct CoverFlight: AnimatableModifier {
                     .scaleEffect(width / DS.sleeve)
                     .frame(width: hole, height: hole)
                     .clipShape(Circle())
-                    .opacity(holeAlpha)
+                    .opacity(holeOpen > 0 ? 1 : 0)
             }
             // 圆角随同一弹簧进度连续变化：网格 DS.corner → 详情 0（关闭时反向）
             .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - clamped)))

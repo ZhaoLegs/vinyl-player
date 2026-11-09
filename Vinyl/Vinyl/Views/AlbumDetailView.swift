@@ -524,6 +524,10 @@ struct AlbumDetailView: View {
                 .aspectRatio(1, contentMode: .fill)
                 .frame(width: 58, height: 58)
                 .clipShape(RoundedRectangle(cornerRadius: 2))
+                // t137u：这张 58pt 缩略图与飞行封面是同一张图 —— 飞行期间（打开未落定 / 关闭中）完全隐藏，
+                // 保证转场的每一帧屏幕上只有一个封面实例；落定后才淡入。
+                .opacity(landed && !closing ? 1 : 0)
+                .animation(landed && !closing ? .easeOut(duration: 0.2) : nil, value: landed && !closing)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(AlbumData.artist)

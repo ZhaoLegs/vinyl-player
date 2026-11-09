@@ -9,14 +9,16 @@ final class AppleMusicStore: ObservableObject {
     @Published private(set) var albums: [Album] = []
     @Published private(set) var playlists: [Playlist] = []
     @Published private(set) var songs: [Song] = []
-    /// Apple Music 推荐（个性化推荐，失败 / 为空时退回曲库排行榜），排在首页网格最前面
+    @Published private(set) var recentlyPlayed: [MusicCollection] = []
+    /// Apple Music 推荐（个性化推荐，失败 / 为空时退回曲库排行榜）
     @Published private(set) var recommended: [MusicCollection] = []
+    /// 仅在数据变化时合并首页，避免播放时钟每次更新都重新排序整个资料库。
+    @Published private(set) var collections: [MusicCollection] = []
+    @Published private(set) var homePageRevision = 0
     /// 运行时实际成功的请求：MusicPersonalRecommendationsRequest / MusicCatalogChartsRequest / 空
     @Published private(set) var recommendationSource = ""
     @Published private(set) var isLoading = false
     @Published private(set) var isConnecting = false
-    @Published private(set) var hasMoreAlbums = false
-    @Published private(set) var hasMorePlaylists = false
     @Published private(set) var canPlayCatalog = false
     @Published private(set) var subscriptionKnown = false
     @Published private(set) var isPlaying = false
@@ -102,17 +104,43 @@ final class AppleMusicStore: ObservableObject {
     }
     private var libraryLoaded = false
     private let pageSize = 50
+    private var albumCursor = MusicPageCursor(pageSize: 50)
+    private var playlistCursor = MusicPageCursor(pageSize: 50)
+    private var songCursor = MusicPageCursor(pageSize: 200)
+    private var accessGeneration = 0
+    private var nextHomeSource = 0
+
+    private enum RecommendationPage {
+        case groups(MusicItemCollection<MusicPersonalRecommendation>)
+        case albums(MusicItemCollection<Album>)
+        case playlists(MusicItemCollection<Playlist>)
+    }
+    private var recommendationPages: [RecommendationPage] = []
     private let connectionKey = "appleMusicConnectionRequested"
     var authorized: Bool { authorization == .authorized }
     var connectionRequested: Bool { UserDefaults.standard.bool(forKey: connectionKey) }
-    /// 首页网格的真实内容：资料库歌曲（合成一张）→ 歌单 → 专辑。
-    var collections: [MusicCollection] {
-        guard authorized else { return [] }
-        var items: [MusicCollection] = recommended
-        if !songs.isEmpty { items.append(.librarySongs(songs)) }
-        items += playlists.map { .playlist($0) }
-        items += albums.map { .album($0, catalog: false) }
-        return items
+    var hasMoreHome: Bool {
+        authorized && (albumCursor.hasMore || playlistCursor.hasMore
+                       || songCursor.hasMore || !recommendationPages.isEmpty)
+    }
+
+    /// 最近播放 → 最近添加 → 推荐 → 资料库歌曲 → 歌单 → 专辑；跨来源只显示一次。
+    private func rebuildHome() {
+        let libraryAlbums = albums.map { MusicCollection.album($0, catalog: false) }
+        let libraryPlaylists = playlists.map { MusicCollection.playlist($0) }
+        let recentlyAdded = HomeFeed.latest(libraryAlbums + libraryPlaylists,
+                                            date: \.libraryAddedDate, limit: 24)
+        collections = HomeFeed.merged(
+            groups: [recentlyPlayed, recentlyAdded, recommended,
+                     songs.isEmpty ? [] : [.librarySongs(songs)], libraryPlaylists, libraryAlbums],
+            identityKeys: \.identityKeys
+        )
+    }
+
+    /// 授权撤销后，即使旧请求迟到，也不能重新填回个人数据。
+    private func canApply(_ generation: Int) -> Bool {
+        generation == accessGeneration && authorized
+            && MusicAuthorization.currentStatus == .authorized && !Task.isCancelled
     }
     var hasCurrentTrack: Bool { !currentTitle.isEmpty }
 
@@ -140,121 +168,249 @@ final class AppleMusicStore: ObservableObject {
         // A first launch is just onboarding. Once the user has requested a
         // connection, always consult the system again; this flag is not consent.
         guard UserDefaults.standard.bool(forKey: connectionKey) else { return }
+        let previousAuthorization = authorization
         authorization = MusicAuthorization.currentStatus
         guard authorized else {
+            accessGeneration += 1
             showingPlayer = false
             albums = []
             playlists = []
             songs = []
+            recentlyPlayed = []
             recommended = []
+            collections = []
+            recommendationPages = []
             recommendationSource = ""
             libraryLoaded = false
-            hasMoreAlbums = false
-            hasMorePlaylists = false
+            albumCursor = MusicPageCursor(pageSize: pageSize)
+            playlistCursor = MusicPageCursor(pageSize: pageSize)
+            songCursor = MusicPageCursor(pageSize: 200)
+            nextHomeSource = 0
+            isLoading = false
+            homePageRevision += 1
             canPlayCatalog = false
             subscriptionKnown = false
             existingPlayer?.stop()
             syncPlayback()
             return
         }
+        if previousAuthorization != .authorized { accessGeneration += 1 }
+        let generation = accessGeneration
         do {
-            canPlayCatalog = try await MusicSubscription.current.canPlayCatalogContent
+            let canPlay = try await MusicSubscription.current.canPlayCatalogContent
+            guard canApply(generation) else { return }
+            canPlayCatalog = canPlay
             subscriptionKnown = true
         } catch {
+            guard canApply(generation) else { return }
             subscriptionKnown = false
             // Library playback can still be available for purchased/local music.
         }
-        if !libraryLoaded { await loadLibrary() }
-        if recommended.isEmpty { await loadRecommendations() }
+        await refreshHome(reloadLibrary: !libraryLoaded, reloadRecommendations: recommended.isEmpty)
+    }
+
+    func refreshHome(reloadLibrary: Bool = true, reloadRecommendations: Bool = true) async {
+        guard authorized, !isLoading else { return }
+        let generation = accessGeneration
+        guard canApply(generation) else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { if generation == accessGeneration { isLoading = false } }
+        if reloadLibrary { await loadLibrary(generation: generation) }
+        await loadRecentlyPlayed(generation: generation)
+        if reloadRecommendations { await loadRecommendations(generation: generation) }
+        guard canApply(generation) else { return }
+        nextHomeSource = 0
+        rebuildHome()
+        homePageRevision += 1
+    }
+
+    private func loadRecentlyPlayed(generation: Int) async {
+        guard canApply(generation) else { return }
+        do {
+            var request = MusicRecentlyPlayedContainerRequest()
+            request.limit = 24
+            let response = try await request.response()
+            guard canApply(generation) else { return }
+            recentlyPlayed = HomeFeed.merged(groups: [response.items.compactMap { item in
+                switch item {
+                case .album(let album): return .album(album, catalog: true)
+                case .playlist(let playlist): return .playlist(playlist)
+                case .station: return nil
+                @unknown default: return nil
+                }
+            }], identityKeys: \.identityKeys)
+        } catch {
+            if canApply(generation) { report(error, action: "读取最近播放失败") }
+        }
+    }
+
+    private func recommendationContent(_ groups: MusicItemCollection<MusicPersonalRecommendation>)
+        -> (items: [MusicCollection], pages: [RecommendationPage]) {
+        var items: [MusicCollection] = []
+        var pages: [RecommendationPage] = []
+        for group in groups {
+            items += group.albums.map { .album($0, catalog: true) }
+            items += group.playlists.map { .playlist($0) }
+            if group.albums.hasNextBatch { pages.append(.albums(group.albums)) }
+            if group.playlists.hasNextBatch { pages.append(.playlists(group.playlists)) }
+        }
+        if groups.hasNextBatch { pages.append(.groups(groups)) }
+        return (items, pages)
     }
 
     /// 先取个性化推荐（专辑 + 歌单，去重）；失败或为空（如无订阅）时退回当前地区的排行榜。
-    func loadRecommendations() async {
-        guard authorized else { return }
-        var items: [MusicCollection] = []
-        var seen = Set<String>()
-        func add(_ item: MusicCollection) { if seen.insert(item.id).inserted { items.append(item) } }
+    private func loadRecommendations(generation: Int) async {
+        guard canApply(generation) else { return }
         do {
             var request = MusicPersonalRecommendationsRequest()
             request.limit = 12
             let response = try await request.response()
-            for recommendation in response.recommendations {
-                recommendation.albums.forEach { add(.album($0, catalog: true)) }
-                recommendation.playlists.forEach { add(.playlist($0)) }
-            }
-            if !items.isEmpty, authorized {
-                recommended = items
+            guard canApply(generation) else { return }
+            let content = recommendationContent(response.recommendations)
+            if !content.items.isEmpty {
+                recommended = HomeFeed.merged(groups: [content.items], identityKeys: \.identityKeys)
+                recommendationPages = content.pages
                 recommendationSource = "MusicPersonalRecommendationsRequest"
                 return
             }
         } catch is CancellationError { return
         } catch { /* 无订阅 / 无推荐：退回排行榜 */ }
+        guard canApply(generation) else { return }
         do {
             var request = MusicCatalogChartsRequest(kinds: [.mostPlayed], types: [Album.self, Playlist.self])
             request.limit = 24
             let response = try await request.response()
-            response.albumCharts.flatMap { $0.items }.forEach { add(.album($0, catalog: true)) }
-            response.playlistCharts.flatMap { $0.items }.forEach { add(.playlist($0)) }
-            guard authorized else { return }
-            recommended = items
+            guard canApply(generation) else { return }
+            var items: [MusicCollection] = []
+            var pages: [RecommendationPage] = []
+            for chart in response.albumCharts {
+                items += chart.items.map { .album($0, catalog: true) }
+                if chart.items.hasNextBatch { pages.append(.albums(chart.items)) }
+            }
+            for chart in response.playlistCharts {
+                items += chart.items.map { .playlist($0) }
+                if chart.items.hasNextBatch { pages.append(.playlists(chart.items)) }
+            }
+            recommended = HomeFeed.merged(groups: [items], identityKeys: \.identityKeys)
+            recommendationPages = pages
             recommendationSource = items.isEmpty ? "" : "MusicCatalogChartsRequest"
         } catch is CancellationError {
-        } catch { report(error, action: "读取推荐失败") }
+        } catch {
+            if canApply(generation) { report(error, action: "读取推荐失败") }
+        }
     }
 
-    func loadLibrary() async {
-        guard authorized, !isLoading else { return }
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
+    private func loadLibrary(generation: Int) async {
+        guard canApply(generation) else { return }
         do {
             var albumRequest = MusicLibraryRequest<Album>()
             albumRequest.limit = pageSize
+            albumRequest.sort(by: \.libraryAddedDate, ascending: false)
             var playlistRequest = MusicLibraryRequest<Playlist>()
             playlistRequest.limit = pageSize
+            playlistRequest.sort(by: \.libraryAddedDate, ascending: false)
             var songRequest = MusicLibraryRequest<Song>()
-            songRequest.limit = 200
+            songRequest.limit = songCursor.pageSize
             let albumResponse = try await albumRequest.response()
             let playlistResponse = try await playlistRequest.response()
             let songResponse = try? await songRequest.response()
-            try Task.checkCancellation()
-            guard MusicAuthorization.currentStatus == .authorized else { return }
-            albums = Array(albumResponse.items)
-            playlists = Array(playlistResponse.items)
-            songs = songResponse.map { Array($0.items) } ?? []
-            hasMoreAlbums = albums.count == pageSize
-            hasMorePlaylists = playlists.count == pageSize
+            guard canApply(generation) else { return }
+            albums = HomeFeed.merged(groups: [Array(albumResponse.items)], identityKeys: { [$0.id.rawValue] })
+            playlists = HomeFeed.merged(groups: [Array(playlistResponse.items)], identityKeys: { [$0.id.rawValue] })
+            songs = HomeFeed.merged(groups: [songResponse.map { Array($0.items) } ?? []],
+                                    identityKeys: { [$0.id.rawValue] })
+            albumCursor = MusicPageCursor(pageSize: pageSize)
+            playlistCursor = MusicPageCursor(pageSize: pageSize)
+            songCursor = MusicPageCursor(pageSize: 200)
+            albumCursor.consume(albumResponse.items.count)
+            playlistCursor.consume(playlistResponse.items.count)
+            songCursor.consume(songResponse?.items.count ?? 0)
             libraryLoaded = true
         } catch is CancellationError {
-        } catch { report(error, action: "读取资料库失败") }
+        } catch {
+            if canApply(generation) { report(error, action: "读取资料库失败") }
+        }
     }
 
-    func loadMore(playlists loadPlaylists: Bool) async {
-        guard authorized, !isLoading else { return }
+    /// 每次轮流取一个来源的一页，歌曲或重复页不会让网格底部的加载触发器停住。
+    func loadMoreHome() async {
+        guard hasMoreHome, !isLoading else { return }
+        let generation = accessGeneration
+        guard canApply(generation) else { return }
+        let available = [playlistCursor.hasMore, albumCursor.hasMore,
+                         !recommendationPages.isEmpty, songCursor.hasMore]
+        guard let source = (0..<available.count).map({ (nextHomeSource + $0) % available.count })
+            .first(where: { available[$0] }) else { return }
         isLoading = true
-        defer { isLoading = false }
+        defer { if generation == accessGeneration { isLoading = false } }
         do {
-            if loadPlaylists {
+            switch source {
+            case 0:
                 var request = MusicLibraryRequest<Playlist>()
                 request.limit = pageSize
-                request.offset = playlists.count
+                request.offset = playlistCursor.offset
+                request.sort(by: \.libraryAddedDate, ascending: false)
                 let items = try await request.response().items
-                try Task.checkCancellation()
-                guard authorized else { return }
-                playlists.append(contentsOf: items.filter { item in !playlists.contains { $0.id == item.id } })
-                hasMorePlaylists = items.count == pageSize
-            } else {
+                guard canApply(generation) else { return }
+                playlists = HomeFeed.merged(groups: [playlists, Array(items)], identityKeys: { [$0.id.rawValue] })
+                playlistCursor.consume(items.count)
+            case 1:
                 var request = MusicLibraryRequest<Album>()
                 request.limit = pageSize
-                request.offset = albums.count
+                request.offset = albumCursor.offset
+                request.sort(by: \.libraryAddedDate, ascending: false)
                 let items = try await request.response().items
-                try Task.checkCancellation()
-                guard authorized else { return }
-                albums.append(contentsOf: items.filter { item in !albums.contains { $0.id == item.id } })
-                hasMoreAlbums = items.count == pageSize
+                guard canApply(generation) else { return }
+                albums = HomeFeed.merged(groups: [albums, Array(items)], identityKeys: { [$0.id.rawValue] })
+                albumCursor.consume(items.count)
+            case 2:
+                try await loadMoreRecommendations(generation: generation)
+            default:
+                var request = MusicLibraryRequest<Song>()
+                request.limit = songCursor.pageSize
+                request.offset = songCursor.offset
+                let items = try await request.response().items
+                guard canApply(generation) else { return }
+                songs = HomeFeed.merged(groups: [songs, Array(items)], identityKeys: { [$0.id.rawValue] })
+                songCursor.consume(items.count)
             }
+            guard canApply(generation) else { return }
+            nextHomeSource = (source + 1) % available.count
+            rebuildHome()
+            homePageRevision += 1
         } catch is CancellationError {
-        } catch { report(error, action: "加载更多失败") }
+        } catch {
+            if canApply(generation) { report(error, action: "加载更多失败") }
+        }
+    }
+
+    private func loadMoreRecommendations(generation: Int) async throws {
+        guard let page = recommendationPages.first else { return }
+        var items: [MusicCollection] = []
+        var pages: [RecommendationPage] = []
+        switch page {
+        case .groups(let groups):
+            if let next = try await groups.nextBatch(limit: 12) {
+                let content = recommendationContent(next)
+                items = content.items
+                pages = content.pages
+            }
+        case .albums(let albums):
+            if let next = try await albums.nextBatch(limit: pageSize) {
+                items = next.map { .album($0, catalog: true) }
+                if next.hasNextBatch { pages.append(.albums(next)) }
+            }
+        case .playlists(let playlists):
+            if let next = try await playlists.nextBatch(limit: pageSize) {
+                items = next.map { .playlist($0) }
+                if next.hasNextBatch { pages.append(.playlists(next)) }
+            }
+        }
+        guard canApply(generation) else { return }
+        recommendationPages.removeFirst()
+        recommendationPages += pages
+        recommended = HomeFeed.merged(groups: [recommended, items], identityKeys: \.identityKeys)
     }
 
     func play(_ song: Song, in songs: [Song], fromCatalog: Bool) async {
@@ -363,9 +519,25 @@ enum MusicCollection: Identifiable {
 
     var id: String {
         switch self {
-        case .album(let album, let catalog): return "\(catalog)-album-\(album.id)"
+        case .album(let album, _): return "album-\(album.id)"
         case .playlist(let playlist): return "playlist-\(playlist.id)"
         case .librarySongs: return "library-songs"
+        }
+    }
+    var identityKeys: [String] {
+        switch self {
+        case .album(let album, _):
+            var keys = ["album-\(album.id)"]
+            if let upc = album.upc, !upc.isEmpty { keys.append("album-upc-\(upc)") }
+            return keys
+        case .playlist, .librarySongs: return [id]
+        }
+    }
+    var libraryAddedDate: Date? {
+        switch self {
+        case .album(let album, _): return album.libraryAddedDate
+        case .playlist(let playlist): return playlist.libraryAddedDate
+        case .librarySongs: return nil
         }
     }
     var title: String {

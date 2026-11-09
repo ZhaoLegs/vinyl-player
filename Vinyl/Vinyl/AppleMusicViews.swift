@@ -261,7 +261,7 @@ struct MusicAccountView: View {
                     }
                 }
                 Section {
-                    Text("首页网格显示你的资料库歌曲、歌单和专辑；点封面即开始播放。未授权时显示内置演示封面。")
+                    Text("首页按最近播放、最近添加、推荐、资料库歌曲、歌单和专辑排列；滑到底部继续加载，点封面即开始播放。未授权时显示内置演示封面。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
