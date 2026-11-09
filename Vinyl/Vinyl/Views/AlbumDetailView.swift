@@ -54,6 +54,11 @@ struct AlbumDetailView: View {
     @State private var reveal: CGFloat = Reveal.total
     /// t157u：播放条入场进度（0 = 在屏幕外，1 = 落位）
     @State private var barIn: CGFloat = 0
+    /// t219u：曲目表可视区底边 / 时间条顶边（同一坐标系实测），最后一行（或相似专辑）底 → 时间条顶 = 24pt
+    @State private var listBottomY: CGFloat = 0
+    @State private var barTopY: CGFloat = 0
+    /// t219u：曲目表滚到底的接近程度 0…1（底部模糊在时间条上方的部分随之收拢，不挡最后一行）
+    @State private var listEnd: CGFloat = 0
     /// 滑入距离 = 播放条高 42 + 底部间距 10 + 底部安全区（整条完全在屏幕外起步）
     /// （不在 body 里读 UIWindow：那会让整个详情层不渲染；底部安全区由页面 GeometryReader 写入）
     @State private var bottomSafe: CGFloat = 34
@@ -172,6 +177,7 @@ struct AlbumDetailView: View {
                     }
                     .animation(.easeOut(duration: Lyrics.fadeOut), value: lyricsMode)
                     .padding(.top, 40)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TrackInset.space)).maxY } action: { listBottomY = $0 }
                 } else {
                     trackTable
                         .padding(.horizontal, DS.contentInset)
@@ -186,6 +192,8 @@ struct AlbumDetailView: View {
                 }
 
                 waveform
+                    // t219u：时间条顶边（布局位置；滑入动画的 offset 在后面，不影响这里测得的值）
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TrackInset.space)).minY } action: { barTopY = $0 }
                     // 与首页 mini player 同宽（与系统 Tab bar 胶囊对齐）
                     .padding(.horizontal, DS.tabBarSideInset)
                     .padding(.bottom, 10)
@@ -201,6 +209,7 @@ struct AlbumDetailView: View {
                     .opacity(closing ? contentAlpha : (contentAlpha > 0.001 ? Double(barIn) : 0))
                     .offset(y: closing ? 0 : (1 - barIn) * barTravel)
             }
+            .coordinateSpace(.named(TrackInset.space))
             // 不再给整列加 contentAlpha：封套只受 ArtworkHandoff 控制（全显 / 全隐），
             // 不会出现半透明封套透出唱片的「鬼影」帧；其余内容各自按 stage() 淡入。
         }
@@ -270,9 +279,16 @@ struct AlbumDetailView: View {
             LinearGradient(stops: BottomFade.tintStops, startPoint: .top, endPoint: .bottom)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: BottomFade.height)
+        // t219u：曲目表滚到底时，时间条上方的模糊从 110pt 收到 24pt（只盖住 24pt 间距），最后一行不被模糊
+        .frame(height: BottomFade.height - (BottomFade.above - TrackInset.gap) * (lyricsMode ? 0 : listEnd))
         .ignoresSafeArea(.container, edges: .bottom)
         .allowsHitTesting(false)
+    }
+
+    /// t219u：= 24 + (列表可视区底 − 时间条顶)；两者在 VStack 里相接时就是 24pt
+    private var trackBottomInset: CGFloat {
+        guard barTopY > 0, listBottomY > 0 else { return TrackInset.gap }
+        return max(0, TrackInset.gap + listBottomY - barTopY)
     }
 
     // MARK: - t154u 逐行出现
@@ -528,9 +544,13 @@ struct AlbumDetailView: View {
                             }
                         }
                         .padding(.horizontal, DS.contentInset)
-                        // t166u：底部留出渐变模糊的高度，最后一行能滚到模糊之上
-                        .padding(.bottom, BottomFade.contentInset)
+                        // t219u：滚到底时最后一行（有相似专辑时 = 相似专辑）底边距时间条顶 24pt，
+                        // 由实测的列表底 / 时间条顶算出（不写死安全区 / 播放条高度）
+                        .padding(.bottom, trackBottomInset)
                     }
+                    .modifier(ScrollEndProximity(range: TrackInset.fadeRange) { listEnd = $0 })
+                    // t219u：诊断 —— --debug-scroll-end 时曲目表初始停在底部（设备截图量 24pt 间距）
+                    .defaultScrollAnchor(ProcessInfo.processInfo.arguments.contains("--debug-scroll-end") ? .bottom : nil)
                 }
             } else {
                 // t181u：读取中的 loading 在空列表区域上下、屏幕左右居中（不再贴在表头下面）
@@ -762,6 +782,31 @@ struct StaggerReveal: AnimatableModifier {
             // t156u：详情未打开（contentAlpha = 0：首次启动 / 关闭完成后）时整块隐藏，不透到首页
             .opacity(closing ? closeAlpha : (closeAlpha > 0.001 ? Double(e) : 0))
             .offset(y: closing ? 0 : rise * (1 - e))
+    }
+}
+
+// MARK: - t219u 曲目表底部间距
+
+enum TrackInset {
+    static let space = "detailColumn"
+    static let gap: CGFloat = 24            // 最后一行 / 相似专辑底 → 时间条顶（与歌词同一规则）
+    static let fadeRange: CGFloat = 140     // 距底部 140pt 内模糊逐步收拢
+}
+
+/// 滚动视图距离内容底部的接近程度（iOS 18 onScrollGeometryChange；iOS 17 恒为 0）
+struct ScrollEndProximity: ViewModifier {
+    let range: CGFloat
+    let action: (CGFloat) -> Void
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollGeometryChange(for: CGFloat.self) { g in
+                g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY
+            } action: { _, d in
+                action(min(1, max(0, 1 - d / range)))
+            }
+        } else {
+            content
+        }
     }
 }
 

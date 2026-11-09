@@ -83,6 +83,17 @@ struct LibraryView: View {
                     let songs = (try? await c.songs()) ?? []
                     suggestID = c.id; suggestSongs = songs
                 }
+                // t219u：诊断 —— --debug-open=<标题片段> 启动参数：首页加载后直接打开匹配的专辑 / 歌单（不播放），用于设备截图量间距
+                .task(id: music.homePageRevision) {
+                    guard let arg = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--debug-open=") }),
+                          !presented else { return }
+                    let q = String(arg.dropFirst("--debug-open=".count)).lowercased()
+                    guard let i = music.collections.firstIndex(where: { $0.title.lowercased().contains(q) }) else { return }
+                    try? await Task.sleep(for: .seconds(1))
+                    origin = cellFrames[1000 + i] ?? origin
+                    targetKey = 1000 + i
+                    openCollection(music.collections[i], startPlayback: false)
+                }
                 // t214u：诊断 —— --log-related 启动参数时，对首页前几个专辑跑一遍相似专辑查询并打印数据源
                 .task(id: music.homePageRevision) {
                     guard ProcessInfo.processInfo.arguments.contains("--log-related") else { return }
