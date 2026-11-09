@@ -1440,7 +1440,7 @@ struct LyricsPanel: View {
         @Environment(\.detailTheme) private var theme
         var body: some View {
         Text("暂无歌词")
-            .font(.system(size: Lyrics.fontSize))
+            .font(.system(size: 15))   // t249u：空状态固定 15pt regular（不跟歌词字号）
             .foregroundStyle(theme.dim)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.bottom, 80)
