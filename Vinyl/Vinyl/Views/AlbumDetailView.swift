@@ -173,6 +173,8 @@ struct AlbumDetailView: View {
                                     LyricsPanel.emptyText
                                 }
                             }
+                            // t231u：顶部高斯渐变模糊（与底部 bottomFade 同手法、方向相反）——歌词溶入封面下缘，不再硬切 + 阴影
+                            .overlay(alignment: .top) { lyricsTopFade }
                             .opacity(closing ? contentAlpha : 1)
                             .transition(.asymmetric(
                                 insertion: .opacity.animation(.easeOut(duration: Lyrics.fadeIn).delay(Lyrics.fadeInDelay)),
@@ -280,6 +282,19 @@ struct AlbumDetailView: View {
 
     /// 播放条顶部往上 BottomFade.above 起：模糊 0 → 底边最强（单层 material + 平滑多段 alpha 渐变遮罩，无色带），
     /// 叠页面底色 0 → 0.85 渐变；位于曲目表 / 歌词之上、播放条之下，不接收触摸。
+    /// t231u：歌词层顶部渐变模糊（强 → 弱），高度 LyricsTopFade.height；不挡触摸
+    private var lyricsTopFade: some View {
+        // 只用最薄的系统 material 做模糊、不叠白色底色（叠色会在渐变背景上形成一条亮带）；
+        // 真正的「溶开」由歌词内容自身的 alpha 渐变 mask 完成
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .mask(LinearGradient(stops: LyricsTopFade.blurStops, startPoint: .top, endPoint: .bottom))
+            .opacity(0.6)
+        .frame(maxWidth: .infinity)
+        .frame(height: LyricsTopFade.height)
+        .allowsHitTesting(false)
+    }
+
     private var bottomFade: some View {
         ZStack {
             Rectangle()
@@ -464,13 +479,30 @@ struct AlbumDetailView: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 10)
 
-            // 右上角：收藏当前播放的歌（无播放时 = 本专辑当前 / 第一首）。t205u：star / star.fill
-            GlassCircleButton(systemImage: favoriteOn ? "star.fill" : "star",
-                              accessibilityText: favoriteOn ? "取消收藏" : "收藏") {
-                toggleFavorite()
+            // t232u / t233u：右上角 = 一个系统玻璃横胶囊：收藏(star) + 更多(ellipsis，原生 Menu)
+            DetailActionCapsule {
+                Button { toggleFavorite() } label: {
+                    Image(systemName: favoriteOn ? "star.fill" : "star")
+                        .font(.system(size: DS.barButtonGlyph, weight: .medium))
+                        .frame(width: DS.barButtonLabel, height: DS.barButtonLabel)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .symbolEffect(.bounce, value: favoriteBounce)
+                .sensoryFeedback(.impact(weight: .light), trigger: favoriteBounce)
+                .accessibilityLabel(favoriteOn ? "取消收藏" : "收藏")
+                Menu {
+                    if let collection { detailMenu(collection) }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: DS.barButtonGlyph, weight: .medium))
+                        .frame(width: DS.barButtonLabel, height: DS.barButtonLabel)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(collection == nil)
+                .accessibilityLabel("更多")
             }
-            .symbolEffect(.bounce, value: favoriteBounce)
-            .sensoryFeedback(.impact(weight: .light), trigger: favoriteBounce)
         }
         .padding(.horizontal, DS.contentInset)
     }
@@ -481,7 +513,6 @@ struct AlbumDetailView: View {
 
     /// Apple Music 正在播放属于本集合的歌时：进度 = playbackTime / duration，
     /// 高度 = 以歌曲 ID 为种子的伪波形（DRM 拿不到采样）。否则保持演示波形。
-    @ViewBuilder
     /// t230u：唱片是否该转（以播放器 playbackStatus 为准；演示模式看演示播放状态）
     private var discSpinning: Bool {
         guard isPresented, !closing else { return false }
@@ -651,6 +682,45 @@ struct AlbumDetailView: View {
                     Label { Text("前往艺人"); Text(song.artistName) } icon: { Image(systemName: "music.microphone") }
                 }
             }
+        }
+    }
+
+    /// t233u：「更多」菜单 = 首页长按同一结构（不含从首页隐藏）
+    @ViewBuilder
+    private func detailMenu(_ c: MusicCollection) -> some View {
+        ControlGroup {
+            if music.canAddToLibrary(c) {
+                Button("添加", systemImage: "plus") { Task { await music.addToLibrary(c) } }
+            }
+            let loved = music.isLoved(c)
+            Button(loved ? "取消喜欢" : "喜欢", systemImage: loved ? "star.fill" : "star") {
+                Task { await music.toggleLove(c) }
+            }
+            if let url = c.shareURL {
+                ShareLink(item: url, subject: Text(c.title)) { Label("共享", systemImage: "square.and.arrow.up") }
+            }
+        }
+        Section {
+            if !music.editablePlaylists.isEmpty {
+                Menu {
+                    ForEach(music.editablePlaylists, id: \.id) { pl in
+                        Button(pl.name, systemImage: "music.note.list") { Task { await music.addToPlaylist(c, playlist: pl) } }
+                    }
+                } label: { Label("添加到播放列表", systemImage: "text.badge.plus") }
+            }
+            Button("播放", systemImage: "play.fill") { Task { await music.playCollection(c, shuffle: false) } }
+            Button("随机播放", systemImage: "shuffle") { Task { await music.playCollection(c, shuffle: true) } }
+        }
+        if let url = c.artistURL {
+            Section {
+                Button { openURL(url) } label: {
+                    Label { Text("前往艺人"); Text(c.artist) } icon: { Image(systemName: "music.microphone") }
+                }
+            }
+        }
+        Section {
+            Button("下一首播放", systemImage: "text.insert") { Task { await music.enqueue(c, next: true) } }
+            Button("加到队列末尾", systemImage: "text.append") { Task { await music.enqueue(c, next: false) } }
         }
     }
 
@@ -884,6 +954,27 @@ struct StaggerReveal: AnimatableModifier {
     }
 }
 
+// MARK: - t232u 右上角系统玻璃横胶囊
+
+/// 两个按钮共用一块系统 Liquid Glass 胶囊（iOS 26 glassEffect(.regular.interactive(), in: .capsule)，
+/// 与原生 toolbar 分组按钮同款）；旧系统退回 material 胶囊。
+struct DetailActionCapsule<Content: View>: View {
+    @ViewBuilder let content: Content
+    var body: some View {
+        let row = HStack(spacing: 2) { content }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .foregroundStyle(DS.ink)
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer {
+                row.glassEffect(.regular.interactive(), in: .capsule)
+            }
+        } else {
+            row.background(.ultraThinMaterial, in: Capsule())
+        }
+    }
+}
+
 // MARK: - t225u 正在播放：3 柱均衡器
 
 struct EqualizerGlyph: View {
@@ -938,6 +1029,21 @@ struct ScrollEndProximity: ViewModifier {
 // MARK: - t160u 歌词（LRCLIB）
 
 /// t166u：底部渐变模糊（不含安全区的可见高度；加上 34pt 安全区 ≈ 196pt）
+/// t231u：歌词顶部渐变模糊（封面下缘 → 歌词溶开；与 BottomFade 同手法，方向相反）
+enum LyricsTopFade {
+    static let height: CGFloat = 72
+    /// 顶部满模糊 → 底部 0（smoothstep）
+    static let blurStops: [Gradient.Stop] = (0...10).map { i in
+        let x = Double(i) / 10; let u = min(1, (1 - x) / 0.7); let y = u * u * (3 - 2 * u)
+        return .init(color: .black.opacity(y), location: x)
+    }
+    /// 页面底色：顶部 ≈0.75 → 底部 0
+    static let tintStops: [Gradient.Stop] = (0...10).map { i in
+        let x = Double(i) / 10; let u = 1 - x; let y = 0.75 * u * u * (3 - 2 * u)
+        return .init(color: Color.white.opacity(y), location: x)
+    }
+}
+
 enum BottomFade {
     static let above: CGFloat = 110                     // 播放条顶部往上延伸
     static let height: CGFloat = 42 + 10 + above        // 162 + 安全区
@@ -1058,7 +1164,7 @@ enum Lyrics {
     static let fadeInDelay: Double = 0.3   // t162u：歌词在翻转阶段（合拢 0.3s 之后）淡入
     static let anchor = UnitPoint(x: 0.5, y: 1.0 / 3)   // 当前行滚到列表高度 1/3 处
     static let lineGap: CGFloat = 14
-    static let topInset: CGFloat = 0       // t175u：和曲目表表头同一起点（封套下 20 + 40pt）
+    static let topInset: CGFloat = LyricsTopFade.height * 0.55   // t231u：首行落在顶部模糊带之下，可读；上方溶开
     static let bottomGap: CGFloat = 24     // t175u：最后一行底 → 时间条顶 = 24pt
     static let lookahead: Double = 0.15    // 播放时钟 0.25s 一跳，提前一点点亮下一行
 }
@@ -1320,7 +1426,15 @@ struct LyricsPanel: View {
                         .multilineTextAlignment(.center)   // t163u：歌词整体居中
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.horizontal, DS.contentInset)
+                        .padding(.top, Lyrics.topInset)
                         .padding(.bottom, Lyrics.bottomGap)
+                }
+                .mask {
+                    VStack(spacing: 0) {
+                        LinearGradient(stops: LyricsTopFade.blurStops, startPoint: .bottom, endPoint: .top)
+                            .frame(height: LyricsTopFade.height)
+                        Color.black
+                    }
                 }
             case .none?: Self.emptyText
             case nil:
@@ -1380,6 +1494,14 @@ struct LyricsPanel: View {
                 // t175u：歌词最后一行最多停在时间条顶部上方 24pt（不再留 260pt 空白，scrollTo 被内容边界夹住，不会把歌词推到顶部）
                 .padding(.bottom, Lyrics.bottomGap)
                 .animation(.easeOut(duration: 0.2), value: current)
+            }
+            // t231u：内容本身顶部 alpha 渐变（配合 overlay 的 material 模糊）——上滚的行溶入背景
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(stops: LyricsTopFade.blurStops, startPoint: .bottom, endPoint: .top)
+                        .frame(height: LyricsTopFade.height)
+                    Color.black
+                }
             }
             .onAppear { if current >= 0 { proxy.scrollTo(current, anchor: Lyrics.anchor) } }
             .onChange(of: current) { _, i in

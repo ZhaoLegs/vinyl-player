@@ -110,6 +110,11 @@ struct LibraryView: View {
                     origin = cellFrames[1000 + i] ?? origin
                     targetKey = 1000 + i
                     openCollection(music.collections[i], startPlayback: false)
+                    // t231u：诊断 —— 加 --debug-lyrics 时落定后翻到歌词页（截图顶部过渡用）
+                    if ProcessInfo.processInfo.arguments.contains("--debug-lyrics") {
+                        try? await Task.sleep(for: .seconds(2.5))
+                        toggleArtwork()
+                    }
                 }
                 // t214u：诊断 —— --log-related 启动参数时，对首页前几个专辑跑一遍相似专辑查询并打印数据源
                 .task(id: music.homePageRevision) {

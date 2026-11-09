@@ -242,6 +242,7 @@ struct SleeveCutout: View, Equatable {
                     .opacity(solid ? 0 : 1)
                     .allowsHitTesting(false)
             }
-            .shadow(color: .black.opacity(0.12), radius: 8, y: 5)
+            // t231u：歌词面（solid）去掉硬阴影，改由歌词层顶部的高斯渐变模糊做溶开过渡
+            .shadow(color: .black.opacity(solid ? 0 : 0.12), radius: solid ? 0 : 8, y: solid ? 0 : 5)
     }
 }
