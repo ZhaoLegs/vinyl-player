@@ -1157,14 +1157,14 @@ enum Lyrics {
     static let fadeIn: Double = 0.25       // 歌词淡入
     static let fadeInDelay: Double = merge // t245u：随合拢时长 0.3 → 0.45；t162u：歌词在翻转阶段（合拢 0.3s 之后）淡入
     static let anchor = UnitPoint(x: 0.5, y: 1.0 / 3)   // 当前行滚到列表高度 1/3 处
-    static let lineGap: CGFloat = 16      // t240u：行距 ≈ 字高（17pt 粗体）
+    static let lineGap: CGFloat = 16      // 行距与 16pt 歌词字号一致
     // t240u：Apple Music 风格
-    static let fontSize: CGFloat = 17
+    static let fontSize: CGFloat = 16
     static let activeScale: CGFloat = 1.12
     static let dimOpacity: Double = 0.42     // 非当前行（t243u：0.35 → 0.42，6–8 行可读）
     static let unsungOpacity: Double = 0.5   // 当前行未唱部分
     static let scroll = Animation.spring(duration: 0.45, bounce: 0)   // 阻尼 ease-out，整段一起走
-    /// 右侧预留放大余量：当前行以左缘为锚放大 1.12 后仍不出界，且换行位置与非当前行一致（不重排）
+    /// 两侧平分放大余量：当前行居中放大后仍不出界，且换行位置与非当前行一致（不重排）
     static let scaleRoom: CGFloat = 40
     /// t243u：非当前行模糊 1.5 / 2 / 2.5pt（最多 2.5）
     static func blur(distance d: Int) -> CGFloat { d <= 0 ? 0 : min(2.5, 1.5 + CGFloat(d - 1) * 0.5) }
@@ -1391,7 +1391,7 @@ final class LyricsStore {
     }
 }
 
-/// 歌词面板：与曲目表同字号（15pt）/ 同色（当前行 DS.ink 600，其余 DS.secondary 灰）
+/// 歌词面板：统一 16pt；普通行和逐字填色使用相同字体与居中排版。
 struct LyricsPanel: View {
     @EnvironmentObject private var music: AppleMusicStore
     @Environment(\.detailTheme) private var theme
@@ -1416,7 +1416,7 @@ struct LyricsPanel: View {
         @Environment(\.detailTheme) private var theme
         var body: some View {
         Text("暂无歌词")
-            .font(.system(size: 15))
+            .font(.system(size: Lyrics.fontSize))
             .foregroundStyle(theme.dim)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.bottom, 80)
@@ -1430,12 +1430,12 @@ struct LyricsPanel: View {
             case .plain(let text)?:
                 ScrollView(showsIndicators: false) {
                     Text(text)
-                        .font(Lyrics.font)                 // t240u：左对齐粗体
+                        .font(Lyrics.font)
                         .foregroundStyle(theme.ink.opacity(0.85))
                         .lineSpacing(Lyrics.lineGap)
-                        .multilineTextAlignment(.leading)
+                        .multilineTextAlignment(.center)
                         .shadow(color: .black.opacity(0.10), radius: 1.5, y: 0.5)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.horizontal, DS.contentInset)
                         .padding(.top, Lyrics.topInset)
                         .padding(.bottom, Lyrics.bottomGap)
@@ -1479,9 +1479,9 @@ struct LyricsPanel: View {
         let current = currentIndex(lines)
         return ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: Lyrics.lineGap) {
+                LazyVStack(alignment: .center, spacing: Lyrics.lineGap) {
                     ForEach(lines) { line in
-                        // t240u：Apple Music 风格 —— 左对齐粗体；当前行 1.12×（左缘锚点）清晰，
+                        // 当前行 1.12×（居中锚点）清晰，
                         // 其他行 0.35 + 3–5pt 模糊（离得越远越糊）；只有当前行挂 TimelineView 逐帧擦亮，其余静态
                         let isCurrent = line.id == current
                         let d = current < 0 ? 0 : abs(line.id - current)
@@ -1496,11 +1496,11 @@ struct LyricsPanel: View {
                                     .foregroundStyle(theme.ink)
                             }
                         }
-                        .multilineTextAlignment(.leading)
+                        .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.trailing, Lyrics.scaleRoom)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .scaleEffect(isCurrent ? Lyrics.activeScale : 1, anchor: .leading)
+                        .padding(.horizontal, Lyrics.scaleRoom / 2)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .scaleEffect(isCurrent ? Lyrics.activeScale : 1, anchor: .center)
                         .animation(Lyrics.scaleSpring, value: isCurrent)
                         // 未在播这首 / 尚未到第一句：全部 0.5、不模糊（可读）
                         .opacity(isCurrent ? 1 : (current < 0 ? Lyrics.unsungOpacity : Lyrics.dimOpacity))
