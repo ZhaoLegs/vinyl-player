@@ -101,7 +101,7 @@ enum Motion {
         case fluid, ref, snappy, smooth, spring
         var name: String {
             switch self {
-            case .fluid: return "Fluid · 单进度 .spring(bounce 0)，时长按距离 0.34–0.50s + 8pt 弧线"
+            case .fluid: return "Fluid · 单进度 .spring(bounce 0)，时长按距离 0.34–0.42s + 8pt 弧线"
             case .ref: return "Ref-fit · 原片逐轴拟合（x / y / 尺寸各一条贝塞尔）0.32s"
             case .snappy: return "B · .snappy(duration: 0.4, extraBounce: 0)"
             case .smooth: return "A · .smooth(duration: 0.5)"
@@ -138,10 +138,10 @@ enum Motion {
     static var fluidOpen: Double = 0.42
     static var fluidClose: Double = 0.36
     /// t149u：时长随「位移 + 0.5·尺寸差」的平方根增长（感知等速）：
-    /// open = clamp(0.05 + 0.0186·√c, 0.30, 0.55)，close = 0.85·open；c = hypot(dx, dy) + 0.5·|Δsize|（pt）
+    /// open = clamp(0.195 + 0.0093·√c, 0.30, 0.42)，close = 0.85·open；c = hypot(dx, dy) + 0.5·|Δsize|（pt）
     static func flightDurations(start: CGRect, end: CGRect) -> (open: Double, close: Double) {
         let c = Double(hypot(start.midX - end.midX, start.midY - end.midY) + 0.5 * abs(end.width - start.width))
-        let o = min(0.55, max(0.30, 0.05 + 0.0186 * c.squareRoot()))
+        let o = min(0.42, max(0.30, 0.195 + 0.0093 * c.squareRoot()))   // t152u：压缩区间 0.34–0.42s
         return (o, o * 0.85)
     }
     static func setFlight(start: CGRect, end: CGRect) {

@@ -239,7 +239,8 @@ final class AppleMusicStore: ObservableObject {
                 request.limit = 10
                 var batch = try await request.response().items
                 var all = Array(batch)
-                while all.count < 24, batch.hasNextBatch, let next = try await batch.nextBatch(limit: 10) {
+                // 翻页失败不影响已取到的第一页（try?）
+                while all.count < 24, batch.hasNextBatch, let next = try? await batch.nextBatch(limit: 10) {
                     batch = next
                     all += Array(next)
                 }
