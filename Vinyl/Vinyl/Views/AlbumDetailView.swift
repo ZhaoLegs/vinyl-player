@@ -228,13 +228,15 @@ struct AlbumDetailView: View {
                         levels: Waveform.seeded(id.rawValue),
                         isPlaying: music.isPlaying,
                         toggle: { Task { await music.togglePlayback() } },
-                        seek: { music.seek(to: $0 * music.duration) })
+                        seek: { music.seek(to: $0 * music.duration) },
+                        duration: music.duration)
         } else {
             WaveformBar(progress: music.demoElapsed / AppleMusicStore.demoDuration,
                         levels: demoLevels,
                         isPlaying: music.demoPlaying,
                         toggle: { music.selectDemo(music.demoTrack) },
-                        seek: { music.seekDemo($0) })
+                        seek: { music.seekDemo($0) },
+                        duration: AppleMusicStore.demoDuration)
         }
     }
 

@@ -122,6 +122,10 @@ struct WaveformBar: View {
     /// 擦洗时手指所在的竖条序号：每跨进一根新竖条触发一次 selection「刻度」触觉
     @State private var scrubBar: Int? = nil
     @State private var width: CGFloat = 1
+    /// 竖条区域在整条胶囊坐标系（"wave"）里的 frame：手指 x → 进度
+    @State private var barsFrame: CGRect = CGRect(x: 0, y: 0, width: 1, height: 26)
+    /// 歌曲总时长（秒），用于时间气泡
+    var duration: Double = 0
     private let count = Waveform.barCount
 
     /// 线宽 1.6pt → 3x 屏 4.8px，按整像素取整为 5px（所有竖线同一像素宽）；间距固定 2pt = 6px。
@@ -140,15 +144,41 @@ struct WaveformBar: View {
 
             bars
                 .frame(height: 26)
-                .contentShape(Rectangle())
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = max(1, $0) }
-                // t109u：没有点按跳转；只有长按后左右拖动。高优先级，激活后不会被页面滚动抢走。
-                .highPriorityGesture(scrubGesture)
-                .sensoryFeedback(.selection, trigger: scrubBar) { old, new in old != nil && new != nil }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("wave")) } action: {
+                    barsFrame = $0; width = max(1, $0.width)
+                }
                 .transaction { $0.animation = nil }   // 拖动时进度逐帧跟手，无隐式动画延迟
         }
         .padding(.horizontal, 14)
         .glassCapsule(height: 42)
+        .contentShape(Capsule())
+        .coordinateSpace(.named("wave"))
+        // t117u：整条胶囊任意位置按住 0.25s 后左右拖 = 时间擦洗；没有点按跳转（播放键照常点）
+        .gesture(scrubGesture)
+        .sensoryFeedback(.selection, trigger: scrubBar) { old, new in old != nil && new != nil }
+        // 激活时整条轻微放大
+        .scaleEffect(scrub != nil ? 1.035 : 1)
+        .animation(.spring(response: 0.28, dampingFraction: 0.72), value: scrub != nil)
+        // 时间气泡：跟随手指 / 播放头，SF Mono
+        .overlay(alignment: .topLeading) {
+            if let s = scrub {
+                Text(duration > 0 ? "\(musicTime(s * duration)) / \(musicTime(duration))" : musicTime(s * duration))
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(DS.ink)
+                    .padding(.horizontal, 9).padding(.vertical, 5)
+                    .background(.regularMaterial, in: Capsule())
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                    .fixedSize()
+                    .position(x: barsFrame.minX + CGFloat(s) * barsFrame.width, y: -20)
+                    .transaction { $0.animation = nil }
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: scrub == nil)
+        .onAppear {
+            if ProcessInfo.processInfo.arguments.contains("--demo-scrub") { scrub = 0.42 }
+        }
     }
 
     private var shown: Double { min(1, max(0, scrub ?? progress)) }
@@ -199,12 +229,14 @@ struct WaveformBar: View {
         return min(n - 1, Int(f * Double(n)))
     }
 
-    private func fraction(_ x: CGFloat) -> Double { Double(min(1, max(0, x / width))) }
+    private func fraction(_ x: CGFloat) -> Double {
+        Double(min(1, max(0, (x - barsFrame.minX) / max(1, barsFrame.width))))
+    }
 
     /// 长按 0.25s 后水平拖动 = 实时擦洗；开始时轻触觉，松手提交
     private var scrubGesture: some Gesture {
         LongPressGesture(minimumDuration: 0.25)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("wave")))
             .onChanged { value in
                 switch value {
                 case .first(true):

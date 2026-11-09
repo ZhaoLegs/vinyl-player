@@ -482,7 +482,7 @@ struct LibraryView: View {
         }
         // 原片：点击后 1.2s（f5→f41）唱片开始抽出，封面在 f22–27 落定后约停 0.47s
         let sinceTap = Date().timeIntervalSince(motionStart)
-        let wait = max(0.15, 1.2 - sinceTap)
+        let wait = max(0.15, 0.6 - sinceTap)   // t119u：点击后 0.6s（封面落定后约 0.2s）开始抽出
         guard await pause(UInt64(wait * 1_000_000_000)) else { return }
         // 用户已翻到背面 / 正在翻：不自动抽出
         guard flip < 90 && !flipBusy else { return }

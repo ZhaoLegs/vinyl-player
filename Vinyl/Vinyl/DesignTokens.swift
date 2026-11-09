@@ -85,9 +85,9 @@ enum Motion {
     /// 飞行封面 → 详情封套的交接点（弹簧进度首次 ≥ 0.97；0.72 阻尼下回落不会再低于它）
     static let handoff: CGFloat = 0.97
     /// 唱片抽出的小弹簧落定
-    static let pullSpring: (response: Double, damping: Double) = (0.42, 0.78)
+    static let pullSpring: (response: Double, damping: Double) = (0.36, 0.8)   // t119u：抽出 ≈ 0.4s
     static let open    = Spring(response: 0, damping: 0, duration: zoomDuration, followsMeasuredPath: true)
-    static let pull    = Spring(response: pullSpring.response, damping: pullSpring.damping, duration: 14.0 / 30, springy: true)
+    static let pull    = Spring(response: pullSpring.response, damping: pullSpring.damping, duration: 0.4, springy: true)
     static let retract = Spring(response: 0.22, damping: 0.92, duration: 6.0 / 30)
     static let flip    = Spring(response: 0.10, damping: 0.92, duration: 11.0 / 30)
     static let close   = Spring(response: 0, damping: 0, duration: zoomDuration, followsMeasuredPath: true)
@@ -97,19 +97,19 @@ enum Motion {
         case snappy, smooth, spring, ref
         var name: String {
             switch self {
-            case .ref: return "Ref · 原片拟合 timingCurve(0.389, 0.032, 0.701, 1.008, 0.547s)"
+            case .ref: return "Ref · 原片拟合 timingCurve(0.389, 0.032, 0.701, 1.008, 0.40s)"
             case .snappy: return "B · .snappy(duration: 0.4, extraBounce: 0)"
             case .smooth: return "A · .smooth(duration: 0.5)"
             case .spring: return "C · .spring(response: 0.45, damping: 0.76)"
             }
         }
         /// 关闭曲线：Ref 用原片关闭段拟合（0.256, 0.091, 0.141, 0.888, 0.425s），其余与打开相同
-        var closeAnimation: Animation {
-            self == .ref ? .timingCurve(0.256, 0.091, 0.141, 0.888, duration: 0.425) : animation
+        var closeAnimation: Animation {   // Ref 关闭：同比缩短 0.425 → 0.31s
+            self == .ref ? .timingCurve(0.256, 0.091, 0.141, 0.888, duration: 0.31) : animation
         }
         var animation: Animation {
             switch self {
-            case .ref: return .timingCurve(0.389, 0.032, 0.701, 1.008, duration: 0.547)
+            case .ref: return .timingCurve(0.389, 0.032, 0.701, 1.008, duration: 0.40)   // t119u：原片拟合形状，0.547s → 0.40s
             case .snappy: return .snappy(duration: 0.4, extraBounce: 0)
             case .smooth: return .smooth(duration: 0.5)
             case .spring: return .spring(response: zoomSpring.response, dampingFraction: zoomSpring.damping)
