@@ -29,6 +29,8 @@ final class AppleMusicStore: ObservableObject {
     @Published private(set) var currentTitle = ""
     @Published private(set) var currentArtist = ""
     @Published private(set) var currentArtwork: Artwork?
+    /// t226u：当前曲目所属专辑名（歌单里的歌 → mini player 显示它自己专辑的封面）
+    @Published private(set) var currentAlbumTitle = ""
     @Published private(set) var currentSongID: MusicItemID?
     /// 队列条目自身的 ID（有时与 Song ID 不同）
     @Published private(set) var currentCatalogID: MusicItemID?
@@ -535,6 +537,7 @@ final class AppleMusicStore: ObservableObject {
         if case .song(let song) = entry?.item {
             currentSongID = song.id
             duration = song.duration ?? 0
+            if currentAlbumTitle != (song.albumTitle ?? "") { currentAlbumTitle = song.albumTitle ?? "" }
         } else {
             currentSongID = nil
             duration = 0

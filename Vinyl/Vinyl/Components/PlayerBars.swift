@@ -110,6 +110,12 @@ struct MiniPlayer: View {
     var open: () -> Void = {}
     /// t184u：还没播放过时显示的默认条目（首页第一个专辑 + 它的第一首）；nil = 沿用原逻辑
     var suggestion: MiniSuggestion? = nil
+    /// t222u：详情从 mini player 打开 / 缩回期间隐藏小唱片（屏幕上只留飞行封面一个）
+    var hideDisc: Bool = false
+    var onDiscFrame: (CGRect) -> Void = { _ in }
+    /// t226u：标签封面与首页格子 / 详情封套同源（官方封面优先，否则同一个 Apple Artwork + 同一缓存尺寸）
+    var coverArtwork: Artwork? = nil
+    var coverOfficial: OfficialCoverQuery? = nil
 
     /// 没有正在播放的曲目、且不是演示模式时才用默认条目
     private var sug: MiniSuggestion? { music.hasCurrentTrack || DemoMode.enabled ? nil : suggestion }
@@ -139,9 +145,13 @@ struct MiniPlayer: View {
                 // t126u：中心标签 = 正在播放歌曲所属专辑的封面（圆形裁切），比例与详情页大唱片一致
                 // （DS.discLabel / DS.disc = 72 / 234）；主轴孔同比例（5 / 234）。换歌时交叉淡入。
                 MiniDiscLabel(coverName: music.demoCoverName,
-                              artwork: music.hasCurrentTrack ? music.currentArtwork : sug?.artwork,
-                              key: labelKey,
+                              artwork: coverArtwork ?? (music.hasCurrentTrack ? music.currentArtwork : sug?.artwork),
+                              official: coverOfficial,
+                              key: labelKey + (coverOfficial?.id ?? ""),
                               discSize: 27)
+                    // t222u：飞行起落点 = 这枚封面标签（同一张图，交接无跳变）；飞行期间只隐藏标签
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onDiscFrame($0) }
+                    .opacity(hideDisc ? 0 : 1)
             }
             .frame(width: 27, height: 27)
             // t122u：播放时小唱片匀速旋转（5s 一圈），暂停停在当前角度，继续时从该角度接着转
@@ -620,6 +630,7 @@ private struct WordFloat: AnimatableModifier {
 struct MiniDiscLabel: View {
     var coverName: String
     var artwork: Artwork?
+    var official: OfficialCoverQuery? = nil
     var key: String
     var discSize: CGFloat
 
@@ -629,9 +640,10 @@ struct MiniDiscLabel: View {
     var body: some View {
         ZStack {
             Group {
-                if let artwork {
-                    // 8.3pt @3x ≈ 25px，取 3 倍余量请求 75px 的 Artwork
-                    ArtworkImage(artwork, width: 75, height: 75)
+                if artwork != nil || official != nil {
+                    // t226u：原来是播放队列条目的 Artwork（ArtworkImage 75px，不走缓存、也不是官方封面）；
+                    // 现在用与格子同一个 ArtworkFill（同 render 尺寸 → 同一缓存键），官方封面优先
+                    ArtworkFill(artwork: artwork, official: official)
                         .frame(width: labelSize, height: labelSize)
                 } else {
                     Image(coverName).resizable().scaledToFill()

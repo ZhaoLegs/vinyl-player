@@ -473,8 +473,26 @@ struct AlbumDetailView: View {
     /// Apple Music 正在播放属于本集合的歌时：进度 = playbackTime / duration，
     /// 高度 = 以歌曲 ID 为种子的伪波形（DRM 拿不到采样）。否则保持演示波形。
     @ViewBuilder
-    private var waveform: some View {
-        if collection != nil, music.hasCurrentTrack, let id = music.currentSongID {
+    /// t223u：正在播放的是不是这张专辑（只看本专辑曲目里有没有当前曲目）
+    private var albumIsPlaying: Bool {
+        guard collection != nil, music.hasCurrentTrack, let songs else { return false }
+        return songs.contains { music.isCurrent($0) }
+    }
+
+    @ViewBuilder private var waveform: some View {
+        if collection != nil, !albumIsPlaying {
+            // t223u：显示中但没在播的专辑 → 空闲态（播放键 / 波形 / 播放头归零），不串用正在播放的那张
+            let first = songs?.first { $0.playParameters != nil }
+            WaveformBar(progress: 0,
+                        levels: Waveform.seeded(first?.id.rawValue ?? collection?.id ?? "idle"),
+                        isPlaying: false,
+                        toggle: {
+                            guard let first, let songs else { return }
+                            Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
+                        },
+                        seek: { _ in },
+                        duration: first?.duration ?? 0)
+        } else if collection != nil, music.hasCurrentTrack, let id = music.currentSongID {
             WaveformBar(progress: music.duration > 0 ? music.position / music.duration : 0,
                         levels: Waveform.seeded(id.rawValue),
                         isPlaying: music.isPlaying,
@@ -549,8 +567,6 @@ struct AlbumDetailView: View {
                         .padding(.bottom, trackBottomInset)
                     }
                     .modifier(ScrollEndProximity(range: TrackInset.fadeRange) { listEnd = $0 })
-                    // t219u：诊断 —— --debug-scroll-end 时曲目表初始停在底部（设备截图量 24pt 间距）
-                    .defaultScrollAnchor(ProcessInfo.processInfo.arguments.contains("--debug-scroll-end") ? .bottom : nil)
                 }
             } else {
                 // t181u：读取中的 loading 在空列表区域上下、屏幕左右居中（不再贴在表头下面）
@@ -572,7 +588,7 @@ struct AlbumDetailView: View {
     }
 
     private func realRow(_ index: Int, _ song: Song, in songs: [Song]) -> some View {
-        let current = music.isCurrent(song)
+        let current = albumIsPlaying && music.isCurrent(song)
         let half = (songs.count + 1) / 2
         let side = index == 0 ? "A" : (index == half && songs.count > 1 ? "B" : "")
         return Button {
@@ -591,16 +607,23 @@ struct AlbumDetailView: View {
                     .foregroundStyle(current ? theme.mid : theme.ink)   // t104u：播放中灰、其余黑
                     .frame(width: TL.bpmW, alignment: .leading)
                     .lineLimit(1)
-                Image(systemName: current && music.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: TL.glyph, weight: .regular))
-                    .foregroundStyle(current ? theme.dim : theme.ink)
-                    // 图标在列内右对齐：图标右缘 → 歌名首字母（含 D 的 ~1.5pt 字形边距）= 8pt，play / pause 一致
+                Group {
+                    if current {
+                        // t225u：正在播放的那一行 = 3 柱均衡器（同槽位、同尺寸）；暂停时定格为低位静止
+                        EqualizerGlyph(playing: music.isPlaying, color: theme.ink, height: TL.glyph * 0.85)
+                    } else {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: TL.glyph, weight: .regular))
+                            .foregroundStyle(theme.ink)
+                    }
+                }
+                    // 图标在列内右对齐：图标右缘 → 歌名首字母（含 D 的 ~1.5pt 字形边距）= 8pt
                     .frame(width: TL.glyphW - TL.glyphTrail, alignment: .center)
                     .padding(.trailing, TL.glyphTrail)
-                    .offset(x: (current && music.isPlaying ? TL.pauseNudge : 0) - TL.iconShift)
+                    .offset(x: -TL.iconShift)
                 Text("\(song.artistName) - \(song.title)")
                     .font(.system(size: TL.row, weight: .regular))
-                    .foregroundStyle(current ? theme.dim : theme.ink)   // t104u：播放中灰、其余黑
+                    .foregroundStyle(theme.ink)   // t225u：正在播放的歌名 = 主题色（不再变灰）
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -782,6 +805,32 @@ struct StaggerReveal: AnimatableModifier {
             // t156u：详情未打开（contentAlpha = 0：首次启动 / 关闭完成后）时整块隐藏，不透到首页
             .opacity(closing ? closeAlpha : (closeAlpha > 0.001 ? Double(e) : 0))
             .offset(y: closing ? 0 : rise * (1 - e))
+    }
+}
+
+// MARK: - t225u 正在播放：3 柱均衡器
+
+struct EqualizerGlyph: View {
+    let playing: Bool
+    let color: Color
+    var height: CGFloat = 11
+    private let rest: [CGFloat] = [0.35, 0.55, 0.30]
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: !playing)) { tl in
+            let t = tl.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .bottom, spacing: height * 0.16) {
+                ForEach(0..<3, id: \.self) { i in
+                    let speed = [5.1, 6.7, 4.3][i], phase = [0.0, 1.7, 3.1][i]
+                    let live = 0.25 + 0.75 * (0.5 + 0.5 * sin(t * speed + phase))
+                    RoundedRectangle(cornerRadius: height * 0.09)
+                        .fill(color)
+                        .frame(width: height * 0.2, height: height * (playing ? CGFloat(live) : rest[i]))
+                }
+            }
+            .frame(height: height, alignment: .bottom)
+        }
+        .accessibilityLabel(playing ? "正在播放" : "已暂停")
     }
 }
 

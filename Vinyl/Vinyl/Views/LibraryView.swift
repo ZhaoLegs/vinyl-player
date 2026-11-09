@@ -56,6 +56,12 @@ struct LibraryView: View {
         if overlayMode {
             detailLayer
                 .onPreferenceChange(SleeveFrameKey.self) { sleeveFrame = $0 }
+                // t223u：在详情里点了某首歌 / 播放键 → 这张专辑才成为「正在播放」的专辑（mini player 打开 / 封面来源随之更新）
+                .onChange(of: music.currentSongID) { _, _ in
+                    guard presented, let c = selectedCollection, let songs = collectionSongs,
+                          songs.contains(where: { music.isCurrent($0) }) else { return }
+                    nowPlayingCollection = c
+                }
                 .allowsHitTesting(presented)
         } else {
             homeBody
@@ -83,11 +89,22 @@ struct LibraryView: View {
                     let songs = (try? await c.songs()) ?? []
                     suggestID = c.id; suggestSongs = songs
                 }
+                // t222u：诊断 —— --debug-mini-cycle：启动 3s 后模拟点 mini player 打开详情，4s 后关闭（录屏取帧用）
+                .task {
+                    guard ProcessInfo.processInfo.arguments.contains("--debug-mini-cycle") else { return }
+                    try? await Task.sleep(for: .seconds(3))
+                    print("[t222u] mini open, disc frame \(zm.miniDiscFrame)")
+                    openNowPlaying()
+                    try? await Task.sleep(for: .seconds(4))
+                    print("[t222u] close → \(zm.openFromMini ? "mini" : "tile")")
+                    close()
+                }
                 // t219u：诊断 —— --debug-open=<标题片段> 启动参数：首页加载后直接打开匹配的专辑 / 歌单（不播放），用于设备截图量间距
                 .task(id: music.homePageRevision) {
                     guard let arg = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--debug-open=") }),
                           !presented else { return }
                     let q = String(arg.dropFirst("--debug-open=".count)).lowercased()
+                    print("[t221u] home titles: " + music.collections.map(\.title).joined(separator: " | "))
                     guard let i = music.collections.firstIndex(where: { $0.title.lowercased().contains(q) }) else { return }
                     try? await Task.sleep(for: .seconds(1))
                     origin = cellFrames[1000 + i] ?? origin
@@ -265,7 +282,10 @@ struct LibraryView: View {
                 .safeAreaBar(edge: .bottom, spacing: 0) {
                     // t158u：没有真实正在播放的曲目时不显示假的 mini player
                     if showMini {
-                        MiniPlayer(open: openNowPlaying, suggestion: miniSuggestion)
+                        MiniPlayer(open: openNowPlaying, suggestion: miniSuggestion,
+                                   hideDisc: presented && !zm.flyToTile,
+                                   onDiscFrame: { zm.miniDiscFrame = $0 },
+                                   coverArtwork: miniCover.0, coverOfficial: miniCover.1)
                             .padding(.horizontal, DS.tabBarSideInset)
                             .padding(.bottom, DS.miniPlayerBottomPadding)
                             .transition(.opacity)
@@ -285,7 +305,10 @@ struct LibraryView: View {
                         ], startPoint: .top, endPoint: .bottom)
                     )
                 if showMini {
-                    MiniPlayer(open: openNowPlaying, suggestion: miniSuggestion)
+                    MiniPlayer(open: openNowPlaying, suggestion: miniSuggestion,
+                               hideDisc: presented && !zm.flyToTile,
+                               onDiscFrame: { zm.miniDiscFrame = $0 },
+                               coverArtwork: miniCover.0, coverOfficial: miniCover.1)
                         .padding(.horizontal, 16)
                         .padding(.bottom, 10)
                 }
@@ -435,7 +458,7 @@ struct LibraryView: View {
         }
         .buttonStyle(.plain)
         // 转场期间源格子隐藏：屏幕上始终只有一个封面
-        .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection?.id == collection.id,
+        .modifier(TileReveal(progress: zoom, isTarget: presented && zm.flyToTile && selectedCollection?.id == collection.id,
                              closing: closing))
         .accessibilityLabel("\(collection.title)，\(collection.artist)")
         // t192u：长按 = 系统原生上下文菜单（抬起预览 + 玻璃材质由系统渲染）；点按仍是 Button 打开详情，滚动不受影响
@@ -493,7 +516,8 @@ struct LibraryView: View {
     /// 点开真实集合：沿用同一套放大转场 + 唱片自动滑出，同时读取曲目并从第一首可播放的歌开始播。
     private func openCollection(_ collection: MusicCollection, startPlayback: Bool = true) {
         selectedCollection = collection
-        nowPlayingCollection = collection
+        // t223u：只有真的开始播放这张时才记为 nowPlayingCollection（打开但不播放 ≠ 正在播放）
+        let startPlayback = startPlayback && shouldAutoplay(collection)
         collectionSongs = nil
         open()
         Task {
@@ -502,6 +526,7 @@ struct LibraryView: View {
                 guard selectedCollection?.id == collection.id else { return }
                 collectionSongs = songs
                 if startPlayback, let first = songs.first(where: { $0.playParameters != nil }) {
+                    nowPlayingCollection = collection
                     await music.play(first, in: songs, fromCatalog: collection.isCatalog)
                 }
             } catch {
@@ -515,21 +540,25 @@ struct LibraryView: View {
     /// 迷你播放条点击：打开正在播放的专辑（不重新开始播放）；演示模式打开演示专辑。
     private func openNowPlaying() {
         guard !presented else { return }
+        // t222u：从 mini player 打开 → 封面从 mini 唱片位置放大，关闭时缩回 mini 唱片；格子保持可见、不滚动网格
+        let fromMini = zm.miniDiscFrame != .zero
+        zm.openFromMini = fromMini
+        zm.flyToTile = !fromMini
         if !music.hasCurrentTrack, !DemoMode.enabled, let c = music.collections.first {
             // t184u：默认条目 → 打开首页第一个专辑（不自动开始播放）
-            origin = cellFrames[1000] ?? origin
+            origin = fromMini ? zm.miniDiscFrame : (cellFrames[1000] ?? origin)
             targetKey = 1000
             openCollection(c, startPlayback: false)
             return
         }
         if music.hasCurrentTrack, let collection = nowPlayingCollection {
             let i = music.collections.firstIndex { $0.id == collection.id }
-            origin = i.flatMap { cellFrames[1000 + $0] } ?? origin
+            origin = fromMini ? zm.miniDiscFrame : (i.flatMap { cellFrames[1000 + $0] } ?? origin)
             targetKey = i.map { 1000 + $0 }
             openCollection(collection, startPlayback: false)
         } else {
             let index = AlbumData.featuredIndex
-            origin = cellFrames[index] ?? origin
+            origin = fromMini ? zm.miniDiscFrame : (cellFrames[index] ?? origin)
             targetKey = index
             selectedIndex = index
             selectedCollection = nil
@@ -573,7 +602,7 @@ struct LibraryView: View {
                 }
         }
         .buttonStyle(.plain)
-        .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection == nil && selectedIndex == index,
+        .modifier(TileReveal(progress: zoom, isTarget: presented && zm.flyToTile && selectedCollection == nil && selectedIndex == index,
                              closing: closing))
     }
 
@@ -659,7 +688,8 @@ struct LibraryView: View {
                                  discOfficial: selectedCollection?.officialQuery,
                                  perAxis: Motion.zoomPerAxis && !reduceMotion,
                                  fluid: Motion.zoomFluid && !reduceMotion,
-                                 shrink: 0))   // t210u：网格不缩放 → 起落点 = 格子原位
+                                 shrink: 0,   // t210u：网格不缩放 → 起落点 = 格子原位
+                                 startCorner: zm.flyToTile ? DS.corner : start.width / 2))   // t222u：mini 端 = 圆形唱片
             .opacity(presented && !reduceMotion ? 1 : 0)
     }
 
@@ -769,8 +799,8 @@ struct LibraryView: View {
                     let songs = (try? await c.songs()) ?? []
                     guard selectedCollection?.id == c.id else { return }
                     collectionSongs = songs
-                    // t185u：换到新专辑后自动从第一首开始播放（mini player / 歌词 / 主题色随之更新）
-                    if let first = songs.first(where: { $0.playParameters != nil }) {
+                    // t185u：换到新专辑后自动从第一首开始播放；t223u：仅当当前没有在播放时（否则只展示，不打断）
+                    if shouldAutoplay(c), let first = songs.first(where: { $0.playParameters != nil }) {
                         nowPlayingCollection = c
                         await music.play(first, in: songs, fromCatalog: c.isCatalog)
                     }
@@ -781,7 +811,7 @@ struct LibraryView: View {
                 collectionSongs = nil
             }
             if let f = cellFrames[key] { origin = f }
-            scrollRequest = key      // 首页网格滚到该格子，关闭时飞回它
+            // t222u：不再滚动首页网格去找格子；关闭时格子可见就飞回它，否则飞回 mini player
         }
     }
     /// t214u：从「相似专辑」换到任意专辑（可以不在首页里）：与 pageAlbum 相同的换专辑 + 自动播第一首。
@@ -796,7 +826,6 @@ struct LibraryView: View {
             if let i {
                 targetKey = 1000 + i
                 if let f = cellFrames[1000 + i] { origin = f }
-                scrollRequest = 1000 + i
             }
             selectedCollection = c
             collectionSongs = nil
@@ -805,11 +834,37 @@ struct LibraryView: View {
             let songs = (try? await c.songs()) ?? []
             guard selectedCollection?.id == c.id else { return }
             collectionSongs = songs
-            if let first = songs.first(where: { $0.playParameters != nil }) {
+            if shouldAutoplay(c), let first = songs.first(where: { $0.playParameters != nil }) {   // t223u
                 nowPlayingCollection = c
                 await music.play(first, in: songs, fromCatalog: c.isCatalog)
             }
         }
+    }
+    /// t223u：打开 / 横滑 / 相似专辑时是否自动播第一首：
+    /// 没有在播放（从没播过 / 停止 / 暂停）且打开的不是当前这张 → 播；正在播放 → 只展示不打断；就是当前这张 → 什么都不重来
+    private func shouldAutoplay(_ c: MusicCollection) -> Bool {
+        if music.isPlaying { return false }
+        if music.hasCurrentTrack, nowPlayingCollection?.id == c.id { return false }
+        return true
+    }
+    /// t226u：mini player 封面 = 正在播放专辑在格子 / 详情里用的同一张图；歌单里的歌 → 该歌自己的专辑
+    private var miniCover: (Artwork?, OfficialCoverQuery?) {
+        guard music.hasCurrentTrack else {
+            guard let c = music.collections.first else { return (nil, nil) }
+            return (c.artwork, c.officialQuery)
+        }
+        if let c = nowPlayingCollection, case .album = c { return (c.artwork, c.officialQuery) }
+        let album = music.currentAlbumTitle
+        guard !album.isEmpty else { return (music.currentArtwork, nil) }
+        return (music.currentArtwork, OfficialCoverQuery(id: "track-album:\(album)|\(music.currentArtist)",
+                                                         title: album, artist: music.currentArtist))
+    }
+    /// t222u：格子是否在首页可见区域内（顶栏之下、mini player 之上，至少大半可见）
+    private func tileVisible(_ f: CGRect) -> Bool {
+        let screen = UIScreen.main.bounds
+        let top: CGFloat = 100
+        let bottom: CGFloat = zm.miniDiscFrame == .zero ? screen.height - 90 : zm.miniDiscFrame.minY - 12
+        return f.midY > top && f.midY < bottom && f.minX >= -1 && f.maxX <= screen.width + 1
     }
     /// 新封套落定：0.15s 后唱片用原有弹簧抽出
     private func swipeSettled() {
@@ -825,7 +880,17 @@ struct LibraryView: View {
     private func beginCloseFlight() {
         guard presented && !closing else { return }
         // t131u：飞回「当前显示的那张专辑」的格子（实时 frame）
-        if let k = targetKey, let f = cellFrames[k] { origin = f }
+        // t222u：从 mini player 打开 → 飞回 mini 唱片；从格子打开 → 当前专辑格子在屏幕上可见就飞回它，否则飞回 mini 唱片
+        let tile: CGRect? = zm.openFromMini ? nil : targetKey.flatMap { cellFrames[$0] }.flatMap { tileVisible($0) ? $0 : nil }
+        if let tile {
+            origin = tile
+            zm.flyToTile = true
+        } else if zm.miniDiscFrame != .zero {
+            origin = zm.miniDiscFrame
+            zm.flyToTile = false
+        } else if let k = targetKey, let f = cellFrames[k] {
+            origin = f; zm.flyToTile = true
+        }
         Motion.setFlight(start: flightStart, end: flightEnd)
         landed = false
         // 关闭时封面只做缩放 / 位移回到网格，不做任何翻转：
@@ -856,6 +921,8 @@ struct LibraryView: View {
             pull = 0
             flip = 0
             lyricsMode = false
+            zm.openFromMini = false
+            zm.flyToTile = true
             recordingMarker("complete")
         }
         // 曲目 / 波形等文字比背景擦除更早消失，避免叠在露出的网格上
@@ -972,6 +1039,8 @@ private struct CoverFlight: AnimatableModifier {
     var fluid: Bool = false
     /// t187u：网格整体缩小量（0 = 原尺寸，1 = GridMotion.minScale），与网格同一个动画值 → 落点永远与格子重合
     var shrink: CGFloat = 0
+    /// t222u：起落点圆角（格子 = DS.corner，mini 唱片 = 半径 → 圆形）
+    var startCorner: CGFloat = DS.corner
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(progress, shrink) }
@@ -1045,7 +1114,7 @@ private struct CoverFlight: AnimatableModifier {
                         .clipShape(Circle())
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - clamped) / k))
+            .clipShape(RoundedRectangle(cornerRadius: startCorner * (1 - clamped) / k))
             .compositingGroup()
             .scaleEffect(k, anchor: .center)
             .shadow(color: .black.opacity(0.18 - 0.06 * Double(clamped)), radius: 8, y: 4 + clamped)
@@ -1163,6 +1232,12 @@ struct TileReveal: AnimatableModifier {
 /// t125u：首页与详情层（叠在 TabView 之上）共享的转场状态
 final class LibraryZoomModel: ObservableObject {
     @Published var selectedCollection: MusicCollection?
+    /// t222u：本次详情从哪里打开（网格格子 / 底部 mini player），关闭时回到同一处
+    @Published var openFromMini = false
+    /// t222u：本次飞行的另一端是格子（隐藏该格子）还是 mini player 唱片（隐藏 mini 唱片、格子保持可见）
+    @Published var flyToTile = true
+    /// t222u：mini player 唱片（27pt）在 global 坐标里的 frame
+    @Published var miniDiscFrame: CGRect = .zero
     @Published var collectionSongs: [Song]?
     @Published var presented: Bool = false
     @Published var flipBusy: Bool = false
