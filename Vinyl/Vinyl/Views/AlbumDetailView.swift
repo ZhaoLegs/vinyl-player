@@ -1514,10 +1514,12 @@ struct LyricsPanel: View {
                                 KaraokeLine(line: line, end: lineEnd(lines, line.id),
                                             anchorPos: anchorPos, anchorDate: anchorDate,
                                             playing: music.isPlaying)
+                                    .transition(.identity)   // t248u：普通行 ⇄ 逐字行直接替换，不交叉淡化（否则换行瞬间两份字叠影）
                             } else {
                                 Text(line.text)
                                     .font(Lyrics.font)
                                     .foregroundStyle(theme.ink)
+                                    .transition(.identity)
                             }
                         }
                         .multilineTextAlignment(.center)
