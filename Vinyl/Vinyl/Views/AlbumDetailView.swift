@@ -1232,7 +1232,15 @@ enum Lyrics {
     static let activeScale: CGFloat = 1.12
     static let dimOpacity: Double = 0.42     // 非当前行（t243u：0.35 → 0.42，6–8 行可读）
     static let unsungOpacity: Double = 0.5   // 当前行未唱部分
-    static let scroll = Animation.spring(duration: 0.45, bounce: 0)   // 阻尼 ease-out，整段一起走
+    static let scroll = Animation.spring(duration: 0.45, bounce: 0)   // 阻尼 ease-out
+    /// t252u：换行上滚时，离当前行越远的行越晚起步（每步 28ms，最多 100ms）——瀑布式延迟，不是整块硬滚
+    static let staggerStep: Double = 0.028
+    static let staggerMax: Double = 0.100
+    static func staggerDelay(_ distance: Int) -> Double {
+        min(staggerMax, Double(max(0, distance)) * staggerStep)
+    }
+    /// 未量到高度时的估算（19pt 粗体单行 ≈ 26，加一点行距）
+    static let estimatedLineH: CGFloat = 28
     /// 两侧平分放大余量：当前行居中放大后仍不出界，且换行位置与非当前行一致（不重排）
     static let scaleRoom: CGFloat = 44    // t248u：40 → 44（19pt 行宽 ×1.12 仍在内容宽内，不重排）
     /// t243u：非当前行模糊 1.5 / 2 / 2.5pt（最多 2.5）
@@ -1476,6 +1484,10 @@ struct LyricsPanel: View {
     /// 播放时钟 0.25s 一跳：记下最近一次的位置与时刻，帧间按真实时间外推
     @State private var anchorPos: Double = 0
     @State private var anchorDate = Date()
+    /// t252u：自绘跟随偏移（替代 ScrollViewReader.scrollTo 的整块硬滚）；各行用不同 delay 追同一目标 → 瀑布延迟
+    @State private var followY: CGFloat = 0
+    @State private var lineHeights: [Int: CGFloat] = [:]
+    @State private var viewportH: CGFloat = 0
 
     private func lineEnd(_ lines: [LyricLine], _ i: Int) -> Double {
         let start = lines[i].time
@@ -1549,12 +1561,10 @@ struct LyricsPanel: View {
 
     private func synced(_ lines: [LyricLine]) -> some View {
         let current = currentIndex(lines)
-        return ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .center, spacing: Lyrics.lineGap) {
+        return GeometryReader { geo in
+            ZStack(alignment: .top) {
+                VStack(alignment: .center, spacing: Lyrics.lineGap) {
                     ForEach(lines) { line in
-                        // 当前行 1.12×（居中锚点）清晰，
-                        // 其他行 0.35 + 3–5pt 模糊（离得越远越糊）；只有当前行挂 TimelineView 逐帧擦亮，其余静态
                         let isCurrent = line.id == current
                         let d = current < 0 ? 0 : abs(line.id - current)
                         Group {
@@ -1562,7 +1572,7 @@ struct LyricsPanel: View {
                                 KaraokeLine(line: line, end: lineEnd(lines, line.id),
                                             anchorPos: anchorPos, anchorDate: anchorDate,
                                             playing: music.isPlaying)
-                                    .transition(.identity)   // t248u：普通行 ⇄ 逐字行直接替换，不交叉淡化（否则换行瞬间两份字叠影）
+                                    .transition(.identity)
                             } else {
                                 Text(line.text)
                                     .font(Lyrics.font)
@@ -1574,26 +1584,31 @@ struct LyricsPanel: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, Lyrics.scaleRoom / 2)
                         .frame(maxWidth: .infinity, alignment: .center)
+                        .background {
+                            GeometryReader { g in
+                                Color.clear.preference(key: LyricHeightKey.self,
+                                                       value: [line.id: g.size.height])
+                            }
+                        }
                         .scaleEffect(isCurrent ? Lyrics.activeScale : 1, anchor: .center)
                         .animation(Lyrics.scaleSpring, value: isCurrent)
-                        // 未在播这首 / 尚未到第一句：全部 0.5、不模糊（可读）
                         .opacity(isCurrent ? 1 : (current < 0 ? Lyrics.unsungOpacity : Lyrics.dimOpacity))
                         .blur(radius: Lyrics.blur(distance: d))
+                        // t252u：同一 followY，离当前行越远 delay 越大 → 上滚时逐行迟一点跟上
+                        .offset(y: followY)
+                        .animation(Lyrics.scroll.delay(Lyrics.staggerDelay(d)), value: followY)
                         .contentShape(Rectangle())
                         .onTapGesture { seek(to: line) }
-                        .id(line.id)
                     }
                 }
-                // 一点点暗色字影（整组一次，不逐行叠加）
                 .shadow(color: .black.opacity(0.10), radius: 1.5, y: 0.5)
                 .padding(.horizontal, DS.contentInset)
                 .padding(.top, Lyrics.topInset + topExtend)
-                // t175u：歌词最后一行最多停在时间条顶部上方 24pt（不再留 260pt 空白，scrollTo 被内容边界夹住，不会把歌词推到顶部）
                 .padding(.bottom, Lyrics.bottomGap)
-                // 换行：缩放 / 透明度 / 模糊 与滚动同一条阻尼曲线（出入行交叉淡化，无 stagger）
-                .animation(Lyrics.scroll, value: current)
+                .animation(Lyrics.scroll, value: current)   // 透明度 / 模糊随换行一起走
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            // t231u：内容本身顶部 alpha 渐变（配合 overlay 的 material 模糊）——上滚的行溶入背景
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .mask {
                 VStack(spacing: 0) {
                     LinearGradient(stops: LyricsTopFade.spanAlphaStops, startPoint: .bottom, endPoint: .top)
@@ -1601,11 +1616,36 @@ struct LyricsPanel: View {
                     Color.black
                 }
             }
-            .onAppear { if current >= 0 { proxy.scrollTo(current, anchor: Lyrics.anchor) } }
-            .onChange(of: current) { _, i in
-                guard i >= 0 else { return }
-                withAnimation(Lyrics.scroll) { proxy.scrollTo(i, anchor: Lyrics.anchor) }
+            .onAppear { viewportH = geo.size.height; snapFollow(current, lines: lines, animated: false) }
+            .onChange(of: geo.size.height) { _, h in viewportH = h; snapFollow(current, lines: lines, animated: false) }
+            .onPreferenceChange(LyricHeightKey.self) { lineHeights.merge($0) { _, n in n }; snapFollow(current, lines: lines, animated: false) }
+            .onChange(of: current) { _, i in snapFollow(i, lines: lines, animated: i >= 0) }
+            .onChange(of: song.id) { _, _ in
+                followY = 0; lineHeights = [:]
             }
+        }
+    }
+
+    /// 把当前行中心放到视口 1/3 处。
+    /// animated=true：裸改 followY，让各行自己的 `.animation(scroll.delay(stagger))` 接力追（外层 withAnimation 会吞掉 delay）。
+    /// animated=false：瞬间到位（首帧 / 改尺寸 / 量到高度）。
+    private func snapFollow(_ current: Int, lines: [LyricLine], animated: Bool) {
+        let target: CGFloat = {
+            guard current >= 0, viewportH > 0 else { return 0 }
+            let topPad = Lyrics.topInset + topExtend
+            var y: CGFloat = topPad
+            for i in 0..<current {
+                y += (lineHeights[i] ?? Lyrics.estimatedLineH) + Lyrics.lineGap
+            }
+            y += (lineHeights[current] ?? Lyrics.estimatedLineH) / 2
+            return viewportH * Lyrics.anchor.y - y
+        }()
+        if abs(target - followY) < 0.5 { return }
+        if animated {
+            followY = target
+        } else {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { followY = target }
         }
     }
 
@@ -1620,6 +1660,12 @@ struct LyricsPanel: View {
             }
         }
     }
+}
+
+/// t252u：各行实测高度（多行折行后）
+private struct LyricHeightKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) { value.merge(nextValue()) { _, n in n } }
 }
 
 // MARK: - t165u 逐字变黑（卡拉 OK）
