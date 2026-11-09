@@ -160,7 +160,8 @@ struct SleeveArtwork: View, Animatable {
         }
         .frame(width: DS.sleeve, height: DS.sleeve, alignment: .topLeading)
         // 原片 f116–f119 的绕 Y 轴 3D 翻转；转到侧面时受光变暗
-        .brightness(-0.16 * abs(sin(flip * .pi / 180)))
+        // t161u：静止（0° / 180°）时亮度严格为 0，不让一个 ~1e-17 的滤镜常驻在挖孔封套上
+        .brightness(abs(sin(flip * .pi / 180)) < 0.001 ? 0 : -0.16 * abs(sin(flip * .pi / 180)))
         .rotation3DEffect(.degrees(flip > 90 ? flip - 180 : flip),
                           axis: (x: 0, y: 1, z: 0), perspective: 0.55)
     }
@@ -189,6 +190,15 @@ struct SleeveCutout: View, Equatable {
                             .blendMode(.destinationOut)
                     }
                     .compositingGroup()
+            }
+            // t161u：挖孔内缘一圈细暗边 + 内阴影：唱片收进封套（标签 = 同一张封面）时孔依然清楚可见
+            .overlay {
+                Circle()
+                    .strokeBorder(.black.opacity(0.35), lineWidth: 1)
+                    .background(Circle().strokeBorder(.black.opacity(0.18), lineWidth: 4).blur(radius: 2.5))
+                    .frame(width: DS.planet, height: DS.planet)
+                    .clipShape(Circle())
+                    .allowsHitTesting(false)
             }
             .shadow(color: .black.opacity(0.12), radius: 8, y: 5)
     }

@@ -185,24 +185,10 @@ struct AlbumDetailView: View {
                     .padding(.bottom, 10)
                     // 底部渐变高斯模糊：从播放条顶部往上 24pt 处的全透明，渐变到屏幕底边最强；
                     // 与首页 mini player 下的系统 scroll-edge 模糊效果对应。
+                    // t166u：底部渐变高斯模糊改为独立的更高一层（见 bottomFade），只淡入淡出、不随播放条位移
                     .background(alignment: .bottom) {
-                        // 底部渐变毛玻璃：播放条顶部往上 48pt 起由透明渐变到屏幕底边最强，
-                        // 叠一层页面底色渐变（0 → 0.6），纯色背景上也能看出来；位于内容之上、播放条之下。
-                        ZStack {
-                            Rectangle()
-                                .fill(.regularMaterial)
-                                .mask(LinearGradient(stops: [
-                                    .init(color: .clear, location: 0),
-                                    .init(color: .black.opacity(0.85), location: 0.4),
-                                    .init(color: .black, location: 1)
-                                ], startPoint: .top, endPoint: .bottom))
-                            LinearGradient(colors: [Color.white.opacity(0), Color.white.opacity(0.6)],
-                                           startPoint: .top, endPoint: .bottom)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 42 + 10 + 48)
-                        .ignoresSafeArea(.container, edges: .bottom)
-                        .allowsHitTesting(false)
+                        bottomFade
+                            .offset(y: closing ? 0 : -(1 - barIn) * barTravel)   // 抵消播放条的滑入位移 → 模糊层本身原地淡入
                     }
                     // t157u：封面放大结束（landed）后，播放条从屏幕底边外向上滑入 + 淡入（spring 0.4s，bounce 0）；
                     // 关闭时仍随 contentAlpha 一起 0.12s 快速淡出（不位移）
@@ -218,10 +204,11 @@ struct AlbumDetailView: View {
             guard now, !closing else { return }
             withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(duration: 0.4, bounce: 0)) { barIn = 1 }
         }
-        .onChange(of: lyricsMode) { _, on in
-            // t160u：从歌词回到曲目表时重新逐行错峰出现
-            guard !on, isPresented, !closing else { return }
-            startReveal(delay: Lyrics.fadeOut * 0.5)
+        // t169u：详情页打开 / 横滑换专辑 → 预取本专辑歌词（正在播放 / 第一首优先，其余随后）
+        .task(id: "\(isPresented)-" + (songs ?? []).map(\.id.rawValue).joined(separator: ",")) {
+            guard isPresented, let songs, !songs.isEmpty else { return }
+            let first = lyricsSong.map { [$0] } ?? []
+            LyricsStore.shared.prefetch(first + songs.filter { $0.id != first.first?.id }, reason: "album")
         }
         .onChange(of: isPresented) { _, shown in
             // t156u：关闭完成后把逐行时间轴归零，下次打开从头错峰
@@ -235,6 +222,23 @@ struct AlbumDetailView: View {
                     ?? Bundle.main.url(forResource: "demo-audio", withExtension: "wav") else { return }
             demoLevels = try? await WaveformAnalyzer.shared.levels(for: url)
         }
+    }
+
+    // MARK: - t166u 底部渐变高斯模糊
+
+    /// 播放条顶部往上 BottomFade.above 起：模糊 0 → 底边最强（单层 material + 平滑多段 alpha 渐变遮罩，无色带），
+    /// 叠页面底色 0 → 0.85 渐变；位于曲目表 / 歌词之上、播放条之下，不接收触摸。
+    private var bottomFade: some View {
+        ZStack {
+            Rectangle()
+                .fill(.regularMaterial)
+                .mask(LinearGradient(stops: BottomFade.blurStops, startPoint: .top, endPoint: .bottom))
+            LinearGradient(stops: BottomFade.tintStops, startPoint: .top, endPoint: .bottom)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: BottomFade.height)
+        .ignoresSafeArea(.container, edges: .bottom)
+        .allowsHitTesting(false)
     }
 
     // MARK: - t154u 逐行出现
@@ -458,7 +462,8 @@ struct AlbumDetailView: View {
                             }
                         }
                         .padding(.horizontal, DS.contentInset)
-                        .padding(.bottom, 8)
+                        // t166u：底部留出渐变模糊的高度，最后一行能滚到模糊之上
+                        .padding(.bottom, BottomFade.contentInset)
                     }
                 }
             } else {
@@ -693,11 +698,30 @@ struct StaggerReveal: AnimatableModifier {
 
 // MARK: - t160u 歌词（LRCLIB）
 
+/// t166u：底部渐变模糊（不含安全区的可见高度；加上 34pt 安全区 ≈ 196pt）
+enum BottomFade {
+    static let above: CGFloat = 110                     // 播放条顶部往上延伸
+    static let height: CGFloat = 42 + 10 + above        // 162 + 安全区
+    static let contentInset: CGFloat = above + 16       // 列表 / 歌词底部留白
+    // 平滑 ease-in 曲线的多段 stop（smoothstep 采样），避免两段线性拐点处的色带
+    /// 模糊遮罩：顶部 0 → 60% 处满强度（smoothstep），之后保持最强
+    static let blurStops: [Gradient.Stop] = (0...10).map { i in
+        let x = Double(i) / 10; let u = min(1, x / 0.6); let y = u * u * (3 - 2 * u)
+        return .init(color: .black.opacity(y), location: x)
+    }
+    /// 页面底色：0 → 0.85（smoothstep，覆盖整段高度）
+    static let tintStops: [Gradient.Stop] = (0...10).map { i in
+        let x = Double(i) / 10; let y = 0.85 * x * x * (3 - 2 * x)
+        return .init(color: Color.white.opacity(y), location: x)
+    }
+}
+
 enum Lyrics {
+    static let merge: Double = 0.3         // t162u：封套与唱片向中间合拢：spring 0.3s，bounce 0
     static let flip: Double = 0.5          // 封套 Y 轴翻转：spring 0.5s，bounce 0
     static let fadeOut: Double = 0.2       // 曲目表淡出
     static let fadeIn: Double = 0.25       // 歌词淡入
-    static let fadeInDelay: Double = 0.12  // 歌词在曲目表淡出一半后开始淡入
+    static let fadeInDelay: Double = 0.3   // t162u：歌词在翻转阶段（合拢 0.3s 之后）淡入
     static let anchor = UnitPoint(x: 0.5, y: 1.0 / 3)   // 当前行滚到列表高度 1/3 处
     static let lineGap: CGFloat = 14
     static let lookahead: Double = 0.15    // 播放时钟 0.25s 一跳，提前一点点亮下一行
@@ -707,6 +731,9 @@ struct LyricLine: Codable, Equatable, Identifiable {
     let id: Int
     let time: Double
     let text: String
+    /// t165u：增强 LRC 的逐字时间戳 <mm:ss.xx>（字符偏移 → 时间）；没有则按字数插值
+    var marks: [Mark]? = nil
+    struct Mark: Codable, Equatable { let char: Int; let time: Double }
 }
 
 enum LyricsResult: Codable, Equatable {
@@ -715,38 +742,96 @@ enum LyricsResult: Codable, Equatable {
     case none
 }
 
-/// 每首歌只请求一次：内存 + Caches/lyrics/<sha256>.json（只落盘找到的结果；网络失败不缓存）
+/// t160u / t169u：每首歌只请求一次。内存 + Caches/lyrics/<sha256>.json；
+/// 找到的结果永久缓存，「没有歌词」缓存 7 天，网络失败不缓存；同一首歌的并发请求合并。
 @MainActor
 final class LyricsStore {
     static let shared = LyricsStore()
+    static let notFoundTTL: TimeInterval = 7 * 24 * 3600
+    static let maxConcurrent = 3
     private var memory: [String: LyricsResult] = [:]
     private var inflight: [String: Task<LyricsResult?, Never>] = [:]
-    private let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    nonisolated static let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("lyrics", isDirectory: true)
+    /// 统计（用于日志）
+    private(set) var stats = (requested: 0, cached: 0, fetched: 0, found: 0, notFound: 0, failed: 0)
+
+    private struct Entry: Codable { let result: LyricsResult; let savedAt: Date }
+
+    /// 缓存键 = 歌名 + 艺人（不含专辑：播放队列预取拿不到可靠的专辑名）
+    nonisolated static func key(_ title: String, _ artist: String) -> String {
+        title.lowercased() + "\u{1F}" + artist.lowercased()
+    }
+    nonisolated private static func file(_ key: String) -> URL {
+        let name = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return dir.appendingPathComponent(name + ".json")
+    }
+    nonisolated private static func readDisk(_ key: String) -> LyricsResult? {
+        guard let data = try? Data(contentsOf: file(key)) else { return nil }
+        if let e = try? JSONDecoder().decode(Entry.self, from: data) {
+            if e.result == .none, Date().timeIntervalSince(e.savedAt) > notFoundTTL { return nil }
+            return e.result
+        }
+        return try? JSONDecoder().decode(LyricsResult.self, from: data)   // build 143 的旧格式
+    }
+    nonisolated private static func writeDisk(_ key: String, _ r: LyricsResult) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? JSONEncoder().encode(Entry(result: r, savedAt: Date())).write(to: file(key), options: .atomic)
+    }
+
+    /// 同步查内存（歌词面板第一帧直接用，命中就不出现 loading）
+    func peek(_ title: String, _ artist: String) -> LyricsResult? { memory[Self.key(title, artist)] }
 
     func lyrics(title: String, artist: String, album: String?, duration: Double?) async -> LyricsResult {
-        let key = [title, artist, album ?? ""].joined(separator: "\u{1F}")
-        if let hit = memory[key] { return hit }
-        let name = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
-        let file = dir.appendingPathComponent(name + ".json")
-        if let data = try? Data(contentsOf: file),
-           let hit = try? JSONDecoder().decode(LyricsResult.self, from: data) {
-            memory[key] = hit
-            return hit
-        }
-        let task = inflight[key] ?? Task.detached {
-            await LyricsStore.fetch(title: title, artist: artist, album: album, duration: duration)
+        await load(title: title, artist: artist, album: album, duration: duration) ?? .none
+    }
+
+    /// 返回 nil = 网络失败
+    @discardableResult
+    private func load(title: String, artist: String, album: String?, duration: Double?) async -> LyricsResult? {
+        let key = Self.key(title, artist)
+        stats.requested += 1
+        if let hit = memory[key] { stats.cached += 1; return hit }
+        if let t = inflight[key] { return await t.value }
+        // 磁盘读取 + 网络请求都在后台低优先级执行
+        let task = Task.detached(priority: .utility) { () -> LyricsResult? in
+            if let hit = LyricsStore.readDisk(key) { return hit }
+            let r = await LyricsStore.fetch(title: title, artist: artist, album: album, duration: duration)
+            if let r { LyricsStore.writeDisk(key, r) }
+            return r
         }
         inflight[key] = task
         let result = await task.value
         inflight[key] = nil
-        guard let result else { return .none }          // 网络失败：本次显示「暂无歌词」，下次再试
+        guard let result else { stats.failed += 1; return nil }
         memory[key] = result
-        if result != .none {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try? JSONEncoder().encode(result).write(to: file, options: .atomic)
-        }
+        stats.fetched += 1
+        if result == .none { stats.notFound += 1 } else { stats.found += 1 }
         return result
+    }
+
+    /// t169u：后台预取（已缓存的跳过，最多 3 个并发）；列表顺序 = 优先级
+    func prefetch(_ songs: [Song], reason: String) {
+        let todo = songs.filter { memory[Self.key($0.title, $0.artistName)] == nil }
+        guard !todo.isEmpty else { return }
+        let skipped = songs.count - todo.count
+        Task(priority: .utility) { @MainActor in
+            var next = 0
+            await withTaskGroup(of: Void.self) { group in
+                func add() {
+                    guard next < todo.count else { return }
+                    let s = todo[next]; next += 1
+                    group.addTask { @MainActor in
+                        await LyricsStore.shared.load(title: s.title, artist: s.artistName,
+                                                      album: s.albumTitle, duration: s.duration)
+                    }
+                }
+                for _ in 0..<Self.maxConcurrent { add() }
+                while await group.next() != nil { add() }
+            }
+            let st = stats
+            print("[t169u] prefetch \(reason): \(todo.count) queued, \(skipped) already cached | total requested \(st.requested), memory hits \(st.cached), loaded \(st.fetched) (found \(st.found), none \(st.notFound)), failed \(st.failed)")
+        }
     }
 
     private struct Record: Decodable {
@@ -819,21 +904,38 @@ final class LyricsStore {
     /// LRC：一行可带多个 [mm:ss.xx] 时间戳；跳过空行与元数据标签（[ar:] 等）
     nonisolated static func parseLRC(_ text: String) -> [LyricLine] {
         let stamp = try! NSRegularExpression(pattern: #"\[(\d{1,3}):(\d{1,2}(?:[\.:]\d{1,3})?)\]"#)
-        var out: [(Double, String)] = []
+        let word = try! NSRegularExpression(pattern: #"<(\d{1,3}):(\d{1,2}(?:[\.:]\d{1,3})?)>"#)
+        var out: [(Double, String, [LyricLine.Mark]?)] = []
         for raw in text.components(separatedBy: .newlines) {
             let ns = raw as NSString
             let matches = stamp.matches(in: raw, range: NSRange(location: 0, length: ns.length))
             guard let last = matches.last else { continue }
-            let body = ns.substring(from: last.range.location + last.range.length)
-                .trimmingCharacters(in: .whitespaces)
+            let rawBody = ns.substring(from: last.range.location + last.range.length)
+            // 增强 LRC：<mm:ss.xx> 词级时间戳 → 去掉标签，记下每个标签所在的字符位置
+            var body = "", marks: [LyricLine.Mark] = []
+            let wns = rawBody as NSString
+            var cursor = 0
+            for w in word.matches(in: rawBody, range: NSRange(location: 0, length: wns.length)) {
+                body += wns.substring(with: NSRange(location: cursor, length: w.range.location - cursor))
+                let mm = Double(wns.substring(with: w.range(at: 1))) ?? 0
+                let ss = Double(wns.substring(with: w.range(at: 2)).replacingOccurrences(of: ":", with: ".")) ?? 0
+                marks.append(.init(char: body.count, time: mm * 60 + ss))
+                cursor = w.range.location + w.range.length
+            }
+            body += wns.substring(from: cursor)
+            let lead = body.prefix(while: { $0 == " " }).count
+            body = body.trimmingCharacters(in: .whitespaces)
+            marks = marks.map { .init(char: max(0, min(body.count, $0.char - lead)), time: $0.time) }
             guard !body.isEmpty else { continue }
             for m in matches {
                 let mm = Double(ns.substring(with: m.range(at: 1))) ?? 0
                 let ss = Double(ns.substring(with: m.range(at: 2)).replacingOccurrences(of: ":", with: ".")) ?? 0
-                out.append((mm * 60 + ss, body))
+                out.append((mm * 60 + ss, body, marks.isEmpty ? nil : marks))
             }
         }
-        return out.sorted { $0.0 < $1.0 }.enumerated().map { LyricLine(id: $0.offset, time: $0.element.0, text: $0.element.1) }
+        return out.sorted { $0.0 < $1.0 }.enumerated().map {
+            LyricLine(id: $0.offset, time: $0.element.0, text: $0.element.1, marks: $0.element.2)
+        }
     }
 }
 
@@ -846,6 +948,15 @@ struct LyricsPanel: View {
     let fromCatalog: Bool
     @State private var result: LyricsResult?
     @State private var loadedID: MusicItemID?
+    /// 播放时钟 0.25s 一跳：记下最近一次的位置与时刻，帧间按真实时间外推
+    @State private var anchorPos: Double = 0
+    @State private var anchorDate = Date()
+
+    private func lineEnd(_ lines: [LyricLine], _ i: Int) -> Double {
+        let start = lines[i].time
+        let next = i + 1 < lines.count ? lines[i + 1].time : start + Karaoke.maxLine
+        return start + max(0.3, min(Karaoke.maxLine, next - start))
+    }
 
     static var emptyText: some View {
         Text("暂无歌词")
@@ -857,7 +968,7 @@ struct LyricsPanel: View {
 
     var body: some View {
         Group {
-            switch loadedID == song.id ? result : nil {
+            switch loadedID == song.id ? result : LyricsStore.shared.peek(song.title, song.artistName) {
             case .synced(let lines)?: synced(lines)
             case .plain(let text)?:
                 ScrollView(showsIndicators: false) {
@@ -865,9 +976,10 @@ struct LyricsPanel: View {
                         .font(.system(size: 15))
                         .foregroundStyle(DS.ink)
                         .lineSpacing(Lyrics.lineGap)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.center)   // t163u：歌词整体居中
+                        .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.horizontal, DS.contentInset)
-                        .padding(.bottom, 120)
+                        .padding(.bottom, BottomFade.contentInset + 60)
                 }
             case .none?: Self.emptyText
             case nil:
@@ -877,7 +989,10 @@ struct LyricsPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onChange(of: music.position) { _, p in anchorPos = p; anchorDate = Date() }
+        .onAppear { anchorPos = music.position; anchorDate = Date() }
         .task(id: song.id) {
+            if let hit = LyricsStore.shared.peek(song.title, song.artistName) { result = hit; loadedID = song.id; return }
             let r = await LyricsStore.shared.lyrics(title: song.title, artist: song.artistName,
                                                     album: song.albumTitle ?? albumTitle,
                                                     duration: song.duration)
@@ -900,10 +1015,20 @@ struct LyricsPanel: View {
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: Lyrics.lineGap) {
                     ForEach(lines) { line in
-                        Text(line.text)
-                            .font(.system(size: 15, weight: line.id == current ? .semibold : .regular))
-                            .foregroundStyle(line.id == current ? DS.ink : DS.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Group {
+                            if line.id == current {
+                                // t165u：当前行按演唱进度逐字变黑（显示刷新率驱动）
+                                KaraokeLine(line: line, end: lineEnd(lines, line.id),
+                                            anchorPos: anchorPos, anchorDate: anchorDate,
+                                            playing: music.isPlaying)
+                            } else {
+                                Text(line.text)
+                                    .font(.system(size: 15, weight: .regular))
+                                    .foregroundStyle(DS.secondary)
+                            }
+                        }
+                            .multilineTextAlignment(.center)   // t163u：歌词整体居中
+                            .frame(maxWidth: .infinity, alignment: .center)
                             .contentShape(Rectangle())
                             .onTapGesture { seek(to: line) }
                             .id(line.id)
@@ -932,5 +1057,86 @@ struct LyricsPanel: View {
                 try? await Task.sleep(for: .milliseconds(50))
             }
         }
+    }
+}
+
+// MARK: - t165u 逐字变黑（卡拉 OK）
+
+enum Karaoke {
+    static let maxLine: Double = 8          // 没有下一行 / 间隔过长时，一行最多填 8s
+    static let maxExtrapolate: Double = 0.5 // 播放时钟外推上限
+}
+
+/// 当前行：灰字底 + 逐字黑色。用同一段 Text 拼接（同字重 600），换行 / 居中与普通行完全一致，
+/// 多行时自然一行一行填；边界那个字按小数进度在灰 → 黑之间插值，过渡顺滑。
+struct KaraokeLine: View {
+    let line: LyricLine
+    let end: Double
+    let anchorPos: Double
+    let anchorDate: Date
+    let playing: Bool
+
+    private var chars: [Character] { Array(line.text) }
+
+    /// 有效字：CJK / 字母 / 数字记 1，空格与标点记 0
+    private static func weight(_ c: Character) -> Double {
+        c.isLetter || c.isNumber ? 1 : 0
+    }
+
+    /// 已唱字数（含小数）
+    private func filled(at t: Double) -> Double {
+        let cs = chars
+        if let marks = line.marks, !marks.isEmpty {
+            // 词级时间戳：在相邻两个标记之间按字线性插值
+            let pts = [LyricLine.Mark(char: 0, time: line.time)] + marks + [LyricLine.Mark(char: cs.count, time: end)]
+            for k in 0..<(pts.count - 1) where t < pts[k + 1].time {
+                let a = pts[k], b = pts[k + 1]
+                let f = b.time > a.time ? max(0, (t - a.time) / (b.time - a.time)) : 1
+                return Double(a.char) + f * Double(b.char - a.char)
+            }
+            return Double(cs.count)
+        }
+        let total = cs.reduce(0) { $0 + Self.weight($1) }
+        guard total > 0 else { return Double(cs.count) }
+        var target = max(0, min(1, (t - line.time) / max(0.01, end - line.time))) * total
+        for (i, c) in cs.enumerated() {
+            let w = Self.weight(c)
+            if w == 0 { continue }
+            if target < w { return Double(i) + target / w }
+            target -= w
+        }
+        return Double(cs.count)
+    }
+
+    var body: some View {
+        TimelineView(.animation(paused: !playing)) { tl in
+            let dt = playing ? min(Karaoke.maxExtrapolate, max(0, tl.date.timeIntervalSince(anchorDate))) : 0
+            let n = filled(at: anchorPos + dt)
+            let cs = chars
+            let full = min(cs.count, Int(n))
+            let frac = n - Double(full)
+            var text = Text(verbatim: "")
+            let done = String(cs[0..<full])
+            let rest = full < cs.count ? String(cs[(full + 1)...]) : ""
+            text = Text("\(Text(verbatim: done).foregroundColor(DS.ink))")
+            if full < cs.count {
+                let edge = Text(verbatim: String(cs[full])).foregroundColor(Color.mix(DS.secondary, DS.ink, frac))
+                text = Text("\(text)\(edge)\(Text(verbatim: rest).foregroundColor(DS.secondary))")
+            }
+            return text.font(.system(size: 15, weight: .semibold))
+        }
+    }
+}
+
+extension Color {
+    /// 线性 RGB 插值（用于边界字的灰 → 黑过渡）
+    static func mix(_ a: Color, _ b: Color, _ t: Double) -> Color {
+        let ua = UIColor(a), ub = UIColor(b)
+        var (r1, g1, b1, a1): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        var (r2, g2, b2, a2): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        ua.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+        ub.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+        let k = CGFloat(max(0, min(1, t)))
+        return Color(red: r1 + (r2 - r1) * k, green: g1 + (g2 - g1) * k, blue: b1 + (b2 - b1) * k)
     }
 }

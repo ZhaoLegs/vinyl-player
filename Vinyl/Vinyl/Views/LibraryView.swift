@@ -58,6 +58,17 @@ struct LibraryView: View {
                 .allowsHitTesting(presented)
         } else {
             homeBody
+                // t169u：开始播放一首歌 → 预取它 + 队列里接下来 2 首的歌词
+                .onChange(of: music.currentSongID) { _, id in
+                    guard id != nil else { return }
+                    let entries = Array(ApplicationMusicPlayer.shared.queue.entries)
+                    let cur = ApplicationMusicPlayer.shared.queue.currentEntry
+                    let i = entries.firstIndex(where: { $0.id == cur?.id }) ?? 0
+                    let songs = entries.dropFirst(i).prefix(3).compactMap { e -> Song? in
+                        if case .song(let s) = e.item { return s } else { return nil }
+                    }
+                    LyricsStore.shared.prefetch(songs, reason: "queue")
+                }
         }
     }
 
@@ -653,13 +664,15 @@ struct LibraryView: View {
         Task { @MainActor in
             defer { flipBusy = false }
             let animate = !reduceMotion
-            // t160u：翻面 = spring 0.5s / bounce 0；曲目表 0.2s 淡出、歌词淡入（返回时反向，曲目表逐行重现）
+            // t160u / t162u：① 封套与唱片同时向中间合拢（spring 0.3s，bounce 0）→ ② 合在一起绕 Y 轴翻转（spring 0.5s，bounce 0）。
+            // 返回：先翻回，再一起分开回原位。曲目表点击即淡出 0.2s，歌词在翻转阶段淡入。
             let turn: Animation? = animate ? .spring(duration: Lyrics.flip, bounce: 0) : nil
+            let merge: Animation? = animate ? .spring(duration: Lyrics.merge, bounce: 0) : nil
             if flip < 90 {
                 lyricsMode = true
                 if pull > 0.01 {
-                    withAnimation(animate ? Motion.animation(Motion.retract) : nil) { pull = 0 }
-                    if animate { try? await Task.sleep(for: .seconds(Motion.retract.duration)) }
+                    withAnimation(merge) { pull = 0 }
+                    if animate { try? await Task.sleep(for: .seconds(Lyrics.merge)) }
                 }
                 guard presented && !closing else { return }
                 withAnimation(turn) { flip = 180 }
@@ -669,8 +682,8 @@ struct LibraryView: View {
                 withAnimation(turn) { flip = 0 }
                 if animate { try? await Task.sleep(for: .seconds(Lyrics.flip)) }
                 guard presented && !closing else { return }
-                withAnimation(animate ? Motion.animation(Motion.pull) : nil) { pull = 1 }
-                if animate { try? await Task.sleep(for: .seconds(Motion.pull.duration)) }
+                withAnimation(merge) { pull = 1 }
+                if animate { try? await Task.sleep(for: .seconds(Lyrics.merge)) }
             }
         }
     }

@@ -202,6 +202,10 @@ struct WaveformBar: View {
     @State private var scrubBar: Int? = nil
     /// t124u：直接抓住播放头拖动（不需要长按）
     @State private var grabbed = false
+    /// t167u：按下播放头 / 擦洗中 → 播放头变粗（0 = 常态，1 = 选中）
+    @State private var headDown = false
+    @State private var headGrow: CGFloat = 0
+    private var headActive: Bool { headDown || scrubBar != nil }
     @State private var width: CGFloat = 1
     /// 竖条区域在整条胶囊坐标系（"wave"）里的 frame：手指 x → 进度
     @State private var barsFrame: CGRect = CGRect(x: 0, y: 0, width: 1, height: 26)
@@ -228,7 +232,7 @@ struct WaveformBar: View {
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("wave")) } action: {
                     barsFrame = $0; width = max(1, $0.width)
                 }
-                .transaction { $0.animation = nil }   // 拖动时进度逐帧跟手，无隐式动画延迟
+                // （t167u：进度去隐式动画移到 bars 内部 transaction(value: shown)，播放头变粗动画不受影响）
         }
         .padding(.horizontal, 14)
         .glassCapsule(height: 42)
@@ -240,6 +244,10 @@ struct WaveformBar: View {
                 .frame(width: 44, height: 42)
                 .position(x: max(barsFrame.minX + 16, barsFrame.minX + CGFloat(shown) * barsFrame.width), y: 21)
                 .highPriorityGesture(handleGesture)
+                // t167u：手指一按下（还没开始拖）播放头就变粗
+                .simultaneousGesture(DragGesture(minimumDistance: 0)
+                    .onChanged { _ in if !headDown { headDown = true } }
+                    .onEnded { _ in headDown = false })
         }
         .coordinateSpace(.named("wave"))
         // t117u：整条胶囊任意位置按住 0.25s 后左右拖 = 时间擦洗；没有点按跳转（播放键照常点）
@@ -272,12 +280,31 @@ struct WaveformBar: View {
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("--demo-scrub") { scrub = 0.42 }
         }
+        .onChange(of: headActive) { _, on in
+            // t167u：选中 = 弹性 0.25s（轻微回弹）；松手 = 平滑 0.3s 回到常态
+            withAnimation(on ? .spring(duration: Head.pressDuration, bounce: Head.pressBounce)
+                             : .spring(duration: Head.releaseDuration, bounce: 0)) { headGrow = on ? 1 : 0 }
+        }
     }
 
     private var shown: Double { min(1, max(0, scrub ?? progress)) }
 
     // 所有几何都在像素网格上算：x、宽、间距都是整数像素，再除以 scale 回到 pt。
+    /// t167u：播放头选中态参数
+    enum Head {
+        static let activeWidth: CGFloat = 4.5     // 常态 = 竖条宽（3x 屏 5px ≈ 1.67pt）
+        static let restHeight: CGFloat = 24
+        static let activeHeight: CGFloat = 26.4   // ×1.1
+        static let pressDuration = 0.25, pressBounce = 0.3, releaseDuration = 0.3
+    }
+
     private var bars: some View {
+        HeadGrowLayer(grow: headGrow) { g in barsCanvas(g) }
+            // 只有进度变化时去掉隐式动画（逐帧跟手）；播放头变粗的动画照常插值
+            .transaction(value: shown) { $0.animation = nil }
+    }
+
+    private func barsCanvas(_ g: CGFloat) -> some View {
         Canvas { context, size in
             let scale = max(1, displayScale)
             let (barPx, gapPx) = Self.pixelMetrics(scale: scale)
@@ -292,12 +319,14 @@ struct WaveformBar: View {
             let headIndex = playedBars - 1
             for i in 0..<n {
                 let head = i == headIndex
-                let headH: CGFloat = grabbed ? 26 : 24      // 抓住时播放头稍微变高
-                let h = ((head ? headH : barHeight(i, of: n)) * scale).rounded() / scale
+                // t167u：播放头宽 / 高按 g 插值，以竖条中心为轴向两侧变粗（不位移、不影响其它竖条）
+                let headH = Head.restHeight + (Head.activeHeight - Head.restHeight) * g
+                let h = head ? headH : ((barHeight(i, of: n)) * scale).rounded() / scale
                 let x = CGFloat(x0Px + i * (barPx + gapPx)) / scale
-                let y = (((size.height - h) / 2) * scale).rounded() / scale
-                let rect = CGRect(x: x, y: y, width: bar, height: h)
-                let path = Path(roundedRect: rect, cornerRadius: bar / 2)
+                let w = head ? bar + (Head.activeWidth - bar) * g : bar
+                let y = head ? (size.height - h) / 2 : (((size.height - h) / 2) * scale).rounded() / scale
+                let rect = CGRect(x: x + (bar - w) / 2, y: y, width: w, height: h)
+                let path = Path(roundedRect: rect, cornerRadius: w / 2)
                 let color = i < playedBars ? DS.ink : Color(hex: 0xB9B5B1)
                 if head {
                     context.drawLayer { layer in
@@ -581,4 +610,15 @@ struct BubbleGlass: ViewModifier {
                 .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
         }
     }
+}
+
+/// t167u：让 Canvas 里的播放头粗细可以被 withAnimation 逐帧插值
+struct HeadGrowLayer<Content: View>: View, Animatable {
+    var grow: CGFloat
+    let content: (CGFloat) -> Content
+    var animatableData: CGFloat {
+        get { grow }
+        set { grow = newValue }
+    }
+    var body: some View { content(grow) }
 }
