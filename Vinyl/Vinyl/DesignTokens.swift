@@ -49,7 +49,10 @@ enum DS {
     static let miniPlayerGap: CGFloat = 4
     /// safeAreaBar 的底边比 Tab bar 玻璃胶囊的可见上缘低 5.33pt（iOS 27 模拟器 3x 截图实测，
     /// padding 每 +1pt 间距 +1pt），所以底部 padding = 间距 + 5.33（可见边缘对边缘）。
-    static let miniPlayerBottomPadding: CGFloat = miniPlayerGap + 5.33
+    /// t139u：临时隐藏底部 4 个 Tab（资料库 / 电台 / 我的 / 搜索）。改回 true 即恢复，其余代码不用动。
+    static let showTabBar = false
+    /// 有 tab bar：mini player 与 tab bar 间距；无 tab bar：贴 home indicator 上方 8pt
+    static let miniPlayerBottomPadding: CGFloat = showTabBar ? miniPlayerGap + 5.33 : 8
 
     static func coverName(_ index: Int) -> String {
         String(format: "cover_%02d", index)
@@ -531,6 +534,22 @@ enum FlightCurves {
     static let closeX: B = (0.211, -0.038, 0.229, 0.901)
     static let closeY: B = (0.245, -0.016, 0.158, 0.962)
     static let closeS: B = (0.390, 0.857, 0.000, 0.947)
+
+    // t138u：首页网格整体联动（原片逐帧仿射拟合：所有格子同一缩放、同一锚点，无逐格错峰；单仿射残差 0.2–0.8px）
+    /// 锚点（相对整屏）：x 46.5%、y 68%
+    static let gridAnchor = CGPoint(x: 0.465, y: 0.68)
+    static let gridMin: Double = 0.955
+    /// 打开：u∈[0, 0.25] 缩到 0.955（原片 f5→f9）
+    static let gridOpen: B = (0.556, -0.094, 0.592, 1.094)
+    /// 关闭：u∈[0.40, 0.95] 从 0.955 回到 1（原片 f173→f184，关闭段 40%→95%）
+    static let gridClose: B = (0.293, 0.305, 0.470, 0.829)
+    static func gridScale(_ u: Double, closing: Bool) -> Double {
+        if closing {
+            let t = (u - 0.40) / 0.55
+            return gridMin + (1 - gridMin) * value(gridClose, t)
+        }
+        return 1 - (1 - gridMin) * value(gridOpen, u / 0.25)
+    }
 
     /// CSS 同款 cubic-bezier：给定时间 u∈[0,1] 求输出
     static func value(_ b: B, _ u: Double) -> Double {

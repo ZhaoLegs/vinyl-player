@@ -227,7 +227,29 @@ struct LibraryView: View {
             proxy.scrollTo(key, anchor: .center)
         }
         }
-        .blur(radius: blurRadius)
+        // t140u：不再逐帧改 blur 半径（整张网格每帧重新离屏高斯模糊 = 掉帧主因），
+        // 改为系统材质（渲染服务端 backdrop 模糊）只动不透明度。
+        .overlay {
+            Rectangle()
+                .fill(.regularMaterial)
+                .opacity(Double(min(1, blurRadius / 18)))
+                .allowsHitTesting(false)
+        }
+        // t138u：原片关闭时网格整体从 0.955 放大回 1（打开时缩到 0.955），与飞行封面同一进度驱动。
+        // 用 visualEffect（纯渲染变换，不影响布局 / 不改格子测得的 frame）。
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { gridFrame = $0 }
+        .modifier(GridRipple(progress: zoom, closing: closing,
+                             anchor: gridAnchorUnit,
+                             enabled: Motion.zoomPerAxis && !reduceMotion))
+    }
+
+    /// 屏幕锚点换算成网格自身坐标系的 UnitPoint
+    private var gridAnchorUnit: UnitPoint {
+        let a = FlightCurves.gridAnchor
+        let screen = UIScreen.main.bounds.size
+        guard gridFrame.width > 1, gridFrame.height > 1 else { return UnitPoint(x: a.x, y: a.y) }
+        return UnitPoint(x: (a.x * screen.width - gridFrame.minX) / gridFrame.width,
+                         y: (a.y * screen.height - gridFrame.minY) / gridFrame.height)
     }
 
     /// 真实 Apple Music 封面格：与演示封面同尺寸、同圆角、同投影。
@@ -447,6 +469,7 @@ struct LibraryView: View {
     /// 打开弹簧逻辑完成（已落定）→ 详情封套接手
     private var landed: Bool { get { zm.landed } nonmutating set { zm.landed = newValue } }
     /// 关闭飞行的目标格子（cellFrames 的 key），滚动时实时跟踪它的 frame
+    private var gridFrame: CGRect { get { zm.gridFrame } nonmutating set { zm.gridFrame = newValue } }
     private var scrollRequest: Int? { get { zm.scrollRequest } nonmutating set { zm.scrollRequest = newValue } }
     private var targetKey: Int? { get { zm.targetKey } nonmutating set { zm.targetKey = newValue } }
 
@@ -683,9 +706,15 @@ private struct CoverFlight: AnimatableModifier {
         let fy: CGFloat = !perAxis ? p : CGFloat(closing ? 1 - FlightCurves.value(FlightCurves.closeY, u) : FlightCurves.value(FlightCurves.openY, u))
         let fs: CGFloat = !perAxis ? p : CGFloat(closing ? 1 - FlightCurves.value(FlightCurves.closeS, u) : FlightCurves.value(FlightCurves.openS, u))
         let clamped: CGFloat = min(1, max(0, fs))
-        let width: CGFloat = start.width + (end.width - start.width) * fs
-        let midX: CGFloat = start.midX + (end.midX - start.midX) * fx
-        let midY: CGFloat = start.midY + (end.midY - start.midY) * fy
+        // t138u：起点格子跟着网格整体缩放（锚点 = 屏幕 46.5% / 68%），落点永远与正在缩放的格子重合
+        let gs: CGFloat = perAxis ? CGFloat(FlightCurves.gridScale(u, closing: closing)) : 1
+        let screen = UIScreen.main.bounds.size
+        let ax = FlightCurves.gridAnchor.x * screen.width, ay = FlightCurves.gridAnchor.y * screen.height
+        let sW = start.width * gs
+        let sX = ax + (start.midX - ax) * gs, sY = ay + (start.midY - ay) * gs
+        let width: CGFloat = sW + (end.width - sW) * fs
+        let midX: CGFloat = sX + (end.midX - sX) * fx
+        let midY: CGFloat = sY + (end.midY - sY) * fy
         // 原图放大：飞行全程就是格子那张图本身（同图、同裁切、方形等比），只有圆角随尺寸连续变化。
         // 封套挖孔只在尺寸最后 15% 才淡入（关闭时最先 15% 淡出），与详情封套交接处完全一致，
         // 其余 85% 的路程画面就是原图在放大 / 缩小，没有任何换图或叠影。
@@ -694,34 +723,56 @@ private struct CoverFlight: AnimatableModifier {
         let holeT: CGFloat = min(1, max(0, (clamped - 0.70) / 0.30))
         let holeOpen: CGFloat = holeT * holeT * (3 - 2 * holeT)
         let visible: Double = (closing || !landed) ? 1 : 0
-        let hole = width * DS.planet / DS.sleeve
-        let holeNow = hole * holeOpen
-        content
-            .frame(width: width, height: width)
-            // 封套挖孔随放大逐渐出现，与详情页封套的孔完全一致
+        // t140u：飞行全程不改布局：固定以终点尺寸（306pt）排版一次，只做 scale + offset 变换（渲染服务端插值），
+        // 圆角 / 孔径 / 投影按缩放比反算到内容坐标系，屏幕上的视觉值与之前一致。
+        let base: CGFloat = max(1, end.width)
+        let k: CGFloat = width / base
+        let holeFull: CGFloat = base * DS.planet / DS.sleeve
+        let holeNowC: CGFloat = holeFull * holeOpen
+        return content
+            .frame(width: base, height: base)
             .mask {
                 Rectangle()
                     .overlay {
-                        Circle().frame(width: holeNow, height: holeNow)
+                        Circle().frame(width: holeNowC, height: holeNowC)
                             .blendMode(.destinationOut)
                     }
                     .compositingGroup()
             }
             .background {
-                // 孔后是与详情页同一个黑胶视图（等比缩放），交接时孔内画面一致
-                VinylDiscView(angle: .zero, pull: 0, coverName: discCover, artwork: discArtwork)
-                    .shadow(radius: 0)
-                    .scaleEffect(width / DS.sleeve)
-                    .frame(width: hole, height: hole)
-                    .clipShape(Circle())
-                    .opacity(holeOpen > 0 ? 1 : 0)
+                if holeOpen > 0 {
+                    // 孔后是与详情页同一个黑胶视图（等比缩放），交接时孔内画面一致
+                    VinylDiscView(angle: .zero, pull: 0, coverName: discCover, artwork: discArtwork)
+                        .shadow(radius: 0)
+                        .scaleEffect(base / DS.sleeve)
+                        .frame(width: holeFull, height: holeFull)
+                        .clipShape(Circle())
+                }
             }
-            // 圆角随同一弹簧进度连续变化：网格 DS.corner → 详情 0（关闭时反向）
-            .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - clamped)))
-            // 投影从网格封面的 (18%, r8, y4) 连续过渡到详情封套的 (12%, r8, y5)
+            .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - clamped) / k))
+            .compositingGroup()
+            .scaleEffect(k, anchor: .center)
             .shadow(color: .black.opacity(0.18 - 0.06 * Double(clamped)), radius: 8, y: 4 + clamped)
-            .offset(x: midX - width / 2, y: midY - width / 2)
+            .offset(x: midX - base / 2, y: midY - base / 2)
             .opacity(visible)
+    }
+}
+
+/// t138u：首页网格整体缩放（与 CoverFlight 同一 progress → 同一帧同一值）
+struct GridRipple: AnimatableModifier {
+    var progress: CGFloat
+    var closing: Bool
+    var anchor: UnitPoint
+    var enabled: Bool
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+    func body(content: Content) -> some View {
+        let u = Double(min(1, max(0, closing ? 1 - progress : progress)))
+        let s = enabled ? CGFloat(FlightCurves.gridScale(u, closing: closing)) : 1
+        let a = anchor
+        content.visualEffect { c, _ in c.scaleEffect(s, anchor: a) }
     }
 }
 
@@ -790,4 +841,5 @@ final class LibraryZoomModel: ObservableObject {
     @Published var landed: Bool = false
     @Published var targetKey: Int? = nil
     @Published var scrollRequest: Int? = nil
+    @Published var gridFrame: CGRect = .zero
 }

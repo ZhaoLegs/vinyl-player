@@ -30,7 +30,10 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if #available(iOS 27.0, *) {
+            if !DS.showTabBar {
+                // t139u：暂时只有首页，不显示底部 Tab
+                LibraryView()
+            } else if #available(iOS 27.0, *) {
                 // ── iOS 27 · Xcode 27 SDK ───────────────────────────────
                 // 系统 TabView 本身就是悬浮 Liquid Glass 玻璃条，不叠任何自定义背景。
                 TabView(selection: $selection) {
