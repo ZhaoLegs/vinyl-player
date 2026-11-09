@@ -500,9 +500,10 @@ private struct CoverFlight: AnimatableModifier {
     }
 
     func body(content: Content) -> some View {
-        let linear = min(1, max(0, progress))
-        let along = closing ? (1 - linear) : linear
-        let sourceFrame = Double(closing ? (165 + along * 20) : (5 + along * 22))
+        let linear: CGFloat = min(1, max(0, progress))
+        let along: CGFloat = closing ? (1 - linear) : linear
+        let frameF: CGFloat = closing ? (165 + along * 20) : (5 + along * 22)
+        let sourceFrame = Double(frameF)
         let sample = Motion.sample(closing ? Motion.closePath : Motion.openPath, frame: sourceFrame)
         let span = Motion.referenceSleeveSize - Motion.referenceCellSize
         let amount = CGFloat((sample.size - Motion.referenceCellSize) / span)
@@ -511,7 +512,10 @@ private struct CoverFlight: AnimatableModifier {
         let refStraightY = Motion.referenceCell.y + (Motion.referenceSleeve.y - Motion.referenceCell.y) * clamped
         let nativeX = start.minX + (end.minX - start.minX) * clamped
         let nativeY = start.minY + (end.minY - start.minY) * clamped
-        let width = start.width + (end.width - start.width) * amount
+        // 尺寸直接跟随弹簧原始进度（不夹到 1、不走参考路径的提前饱和），
+        // 过冲连续地从飞行封面延续到详情封套（ArtworkHandoff 同样用 progress - 1 放大）。
+        let growth: CGFloat = closing ? amount : progress
+        let width: CGFloat = start.width + (end.width - start.width) * growth
         // 只有一个封面在动：打开时飞行封面一直可见，直到弹簧第一次越过 97% 才把位置交给详情页封套
         // （此刻两者同图、同 frame、同挖孔、同投影，交接无交叉淡入）；关闭时详情页封套立刻隐藏、由它飞回。
         let visible = closing ? 1.0 : (linear < Motion.handoff ? 1.0 : 0.0)
