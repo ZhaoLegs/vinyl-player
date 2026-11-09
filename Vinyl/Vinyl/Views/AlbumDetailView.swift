@@ -1248,9 +1248,16 @@ enum Lyrics {
     static func blur(distance d: Int) -> CGFloat { d <= 0 ? 0 : min(1.2, 0.6 + CGFloat(d - 1) * 0.3) }
     /// t244u：当前行 1.0 → 1.12 弹性放大（上一行同一弹簧缩回），明显可见的小回弹
     static let scaleSpring = Animation.spring(duration: 0.55, bounce: 0.3)
-    /// t244u：已唱字上浮 2pt；正在唱的字带柔光
-    static let lift: CGFloat = 2
-    static let glowRadius: CGFloat = 5
+    /// t244u / t253u：已唱字上浮；带轻微过冲曲线（bounce≈0.2），不要阴影（阴影会让浮动和字形对不齐）
+    static let lift: CGFloat = 2.5
+    /// 上浮进度曲线：easeOut + 轻微过冲，再落回 1（灵动，不橡皮筋）
+    static func liftProgress(_ k: Double) -> CGFloat {
+        let t = max(0, min(1, k))
+        let e = 1 - pow(1 - t, 3)                    // easeOut
+        let bounce = 0.20
+        let over = e + bounce * sin(.pi * e) * (1 - e) // 中后段略过冲再回落
+        return CGFloat(over)
+    }
     static var font: Font { .system(size: fontSize, weight: .bold) }
     static let topInset: CGFloat = LyricsTopFade.height * 0.55   // t231u：首行落在顶部模糊带之下，可读；上方溶开
     static let bottomGap: CGFloat = 24     // t175u：最后一行底 → 时间条顶 = 24pt
@@ -1518,7 +1525,6 @@ struct LyricsPanel: View {
                         .foregroundStyle(theme.ink.opacity(0.85))
                         .lineSpacing(Lyrics.lineGap)
                         .multilineTextAlignment(.center)
-                        .shadow(color: .black.opacity(0.10), radius: 1.5, y: 0.5)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.horizontal, DS.contentInset)
                         .padding(.top, Lyrics.topInset + topExtend)
@@ -1601,7 +1607,6 @@ struct LyricsPanel: View {
                         .onTapGesture { seek(to: line) }
                     }
                 }
-                .shadow(color: .black.opacity(0.10), radius: 1.5, y: 0.5)
                 .padding(.horizontal, DS.contentInset)
                 .padding(.top, Lyrics.topInset + topExtend)
                 .padding(.bottom, Lyrics.bottomGap)
@@ -1766,9 +1771,10 @@ struct KaraokeRenderer: TextRenderer {
     var n: Double
     var count: Int
     var soft: Double
-    var glow: Color
+    var glow: Color   // t253u：保留参数；浮动不再用阴影发光
 
     func draw(layout: Text.Layout, in ctx: inout GraphicsContext) {
+        _ = glow
         let slices = layout.flatMap { $0 }.flatMap { $0 }
         let scale = Double(max(1, count)) / Double(max(1, slices.count))
         for (g, slice) in slices.enumerated() {
@@ -1776,12 +1782,10 @@ struct KaraokeRenderer: TextRenderer {
             let u = max(0, min(1, (n - i) / soft))
             let k = u * u * (3 - 2 * u)
             var c = ctx
+            // t253u：上浮用曲线进度；不做 shadow（避免字形视觉中心与浮动错位）
+            let rise = Lyrics.liftProgress(k)
             c.opacity = Lyrics.unsungOpacity + (1 - Lyrics.unsungOpacity) * k
-            c.translateBy(x: 0, y: -Lyrics.lift * k)
-            let edge = k > 0 && k < 1 ? sin(.pi * k) : 0
-            if edge > 0.02 {
-                c.addFilter(.shadow(color: glow.opacity(0.5 * edge), radius: Lyrics.glowRadius))
-            }
+            c.translateBy(x: 0, y: -Lyrics.lift * rise)
             c.draw(slice)
         }
     }
