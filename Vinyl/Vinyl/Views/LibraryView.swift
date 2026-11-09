@@ -320,9 +320,7 @@ struct LibraryView: View {
         // t138u：原片关闭时网格整体从 0.955 放大回 1（打开时缩到 0.955），与飞行封面同一进度驱动。
         // 用 visualEffect（纯渲染变换，不影响布局 / 不改格子测得的 frame）。
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { gridFrame = $0 }
-        .modifier(GridRipple(shrink: zm.gridShrink,
-                             anchor: gridAnchorUnit,
-                             enabled: (Motion.zoomPerAxis || Motion.zoomFluid) && !reduceMotion))
+        // t210u：去掉网格整体缩放（open 0.95 / close 0.943→1）——网格在封面飞入飞出时始终保持 1.0 静止
     }
 
     /// t184u：真实资料加载完成后 mini player 常驻；占位阶段（还没有真实数据）隐藏
@@ -394,7 +392,6 @@ struct LibraryView: View {
         // 转场期间源格子隐藏：屏幕上始终只有一个封面
         .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection?.id == collection.id,
                              closing: closing))
-        .modifier(WaveRipple(t: zm.waveT, distance: waveDistance(1000 + index), amp: zm.waveAmp, enabled: !reduceMotion))
         .accessibilityLabel("\(collection.title)，\(collection.artist)")
         // t192u：长按 = 系统原生上下文菜单（抬起预览 + 玻璃材质由系统渲染）；点按仍是 Button 打开详情，滚动不受影响
         .contextMenu {
@@ -533,20 +530,6 @@ struct LibraryView: View {
         .buttonStyle(.plain)
         .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection == nil && selectedIndex == index,
                              closing: closing))
-        .modifier(WaveRipple(t: zm.waveT, distance: waveDistance(index), amp: zm.waveAmp, enabled: !reduceMotion))
-    }
-
-    /// t191u：格子中心到波源格子中心的欧氏距离（pt）；没有波时 −1
-    private func waveDistance(_ key: Int) -> Double {
-        guard let o = zm.waveOrigin, let a = cellFrames[key], let b = cellFrames[o] else { return -1 }
-        return Double(hypot(a.midX - b.midX, a.midY - b.midY))
-    }
-    /// t191u：从 origin 格子沿半径一圈圈向外扩散的涟漪（叠加在网格整体缩放之上）
-    private func startWave(from origin: Int?, amplitude: Double) {
-        guard let origin, !reduceMotion else { return }
-        var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { zm.waveOrigin = origin; zm.waveAmp = amplitude; zm.waveT = 0 }
-        withAnimation(.linear(duration: Wave.total)) { zm.waveT = Wave.total }
     }
 
 
@@ -630,7 +613,7 @@ struct LibraryView: View {
                                  discOfficial: selectedCollection?.officialQuery,
                                  perAxis: Motion.zoomPerAxis && !reduceMotion,
                                  fluid: Motion.zoomFluid && !reduceMotion,
-                                 shrink: zm.gridShrink))
+                                 shrink: 0))   // t210u：网格不缩放 → 起落点 = 格子原位
             .opacity(presented && !reduceMotion ? 1 : 0)
     }
 
@@ -646,9 +629,7 @@ struct LibraryView: View {
         lyricsMode = false
         motionStart = Date()
         // t187u：原片打开 = 整个网格同步缩到 0.95（f5→f9，≈0.13s，无逐格错峰），模糊在缩小之后才开始
-        if !reduceMotion { withAnimation(GridMotion.open) { zm.gridShrink = 1 } }
-        // t191u：打开时从点按的格子发出一圈较小的涟漪（模糊开始前可见）
-        startWave(from: targetKey, amplitude: Wave.openAmplitude)
+        // t210u：打开时网格不再整体缩小、不再发涟漪
         // 一条主 spring 驱动封面缩放与背景模糊（同一进度，不再各跑一条曲线）；
         // 详情文字用带 delay 的从曲线错峰淡入，形成「先放大 → 再显内容」的节奏。
         landed = false
@@ -789,15 +770,7 @@ struct LibraryView: View {
         closing = true
         autoplay = false
         // t187u：原片关闭 = 清晰网格先停在 0.95，封面快落位时整体放大回 1（f171→f184，≈0.43s，无过冲、无逐格错峰）
-        withAnimation(reduceMotion ? nil : GridMotion.close) { zm.gridShrink = 0 }
-        // t191u：飞行封面落位（关闭弹簧逻辑完成）那一刻从落点格子发出涟漪；落点格子此时仍被封面盖住，
-        // 封面移除时（再约 0.3–0.4s）它的振荡已回到 ≈1.0 → 交接无跳变
-        let landKey = targetKey
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(Motion.zoomFluid ? Motion.fluidClose : 0.31))
-            guard closing || !presented else { return }
-            startWave(from: landKey, amplitude: Wave.closeAmplitude)
-        }
+        // t210u：关闭时不再整体放大回 1、不再发涟漪
         demoToken += 1
         withAnimation(
             reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomCurve.closeAnimation,
