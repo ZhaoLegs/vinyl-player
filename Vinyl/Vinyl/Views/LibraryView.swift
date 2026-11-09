@@ -163,7 +163,7 @@ struct LibraryView: View {
                 .safeAreaBar(edge: .top, spacing: 0) {
                     header
                         .padding(.bottom, 6)
-                        .modifier(VeilFade(veil: veil, y: 0.08))
+                        .modifier(VeilFade(veil: veil, sweep: closing, y: 0.08))
                 }
                 // safeAreaBar 会把 mini player 贴到底部安全区，并**自动把滚动边缘效果延伸到它**，
                 // 所以不需要再手写 LinearGradient mask。
@@ -171,7 +171,7 @@ struct LibraryView: View {
                     MiniPlayer(open: openNowPlaying)
                         .padding(.horizontal, DS.tabBarSideInset)
                         .padding(.bottom, DS.miniPlayerBottomPadding)
-                        .modifier(VeilFade(veil: veil, y: 0.94))
+                        .modifier(VeilFade(veil: veil, sweep: closing, y: 0.94))
                 }
         } else {
             // iOS 17–25 没有该 API：退回渐变遮罩（纯外观降级）。
@@ -203,13 +203,13 @@ struct LibraryView: View {
                     // 未授权 / 资料库为空：保留内置演示封面
                     ForEach(1...AlbumData.coverCount, id: \.self) { index in
                         coverCell(index)
-                            .modifier(GridVeil(veil: veil, enabled: true))
+                            .modifier(GridVeil(veil: veil, sweep: closing, enabled: true))
                             .id(index)
                     }
                 } else {
                     ForEach(Array(real.enumerated()), id: \.element.id) { index, collection in
                         musicCell(index, collection)
-                            .modifier(GridVeil(veil: veil, enabled: true))
+                            .modifier(GridVeil(veil: veil, sweep: closing, enabled: true))
                             .id(1000 + index)
                     }
                 }
@@ -850,7 +850,9 @@ enum VeilMask {
     static let feather: CGFloat = 0.35
     static let dim: Float = 0.45
     /// 与 GridVeil.metal 的 veilAmount 完全一致（屏幕相对 y）
-    static func amount(y: CGFloat, veil: CGFloat) -> CGFloat {
+    /// t143u：sweep = false（打开）→ 全屏均匀淡入（纯不透明度）；sweep = true（关闭）→ 自上而下羽化擦除
+    static func amount(y: CGFloat, veil: CGFloat, sweep: Bool = true) -> CGFloat {
+        guard sweep else { return min(1, max(0, veil)) }
         let t = 1 - veil
         let top = t * (1 + feather) - feather
         let x = min(1, max(0, (y - top) / feather))
@@ -858,12 +860,12 @@ enum VeilMask {
     }
 }
 
-/// 网格：两遍可分离高斯（横 + 纵），逐像素半径 = 18pt × 遮罩值；veil = 0 时整体关闭（零开销）
 /// 逐格施加（ScrollView 是 UIKit 承载，整体挂不了遮罩式模糊；格子互不重叠、间隙透明，逐格 ≈ 整张）：
 /// 清晰原图 × (1 − a) + 固定半径 18pt 的高斯模糊副本 × a·(1 − dim)，a = 屏幕高度上的 smoothstep 羽化遮罩。
 /// 动画期间只有遮罩（渐变色标）在动，模糊半径恒定 → Core Animation 原生模糊，不逐帧改半径、不重排版。
 struct GridVeil: AnimatableModifier {
     var veil: CGFloat
+    var sweep: Bool
     var enabled: Bool
     var animatableData: CGFloat {
         get { veil }
@@ -873,11 +875,11 @@ struct GridVeil: AnimatableModifier {
         let v = enabled ? veil : 0
         let on = v > 0.001
         content
-            .mask { VeilGradient(veil: v, blurred: false) }
+            .mask { VeilGradient(veil: v, sweep: sweep, blurred: false) }
             .overlay {
                 content
                     .blur(radius: CGFloat(VeilMask.radius))
-                    .mask { VeilGradient(veil: v, blurred: true).padding(-28) }
+                    .mask { VeilGradient(veil: v, sweep: sweep, blurred: true).padding(-28) }
                     .opacity(on ? 1 : 0)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
@@ -888,6 +890,7 @@ struct GridVeil: AnimatableModifier {
 /// 把屏幕坐标下的遮罩换算成当前视图自身的竖向渐变（9 个色标，羽化带 ≈ 0.35 屏高，远大于格子高度）
 struct VeilGradient: View {
     var veil: CGFloat
+    var sweep: Bool
     var blurred: Bool
     var body: some View {
         GeometryReader { p in
@@ -896,7 +899,7 @@ struct VeilGradient: View {
             let n = 8
             let stops = (0...n).map { i -> Gradient.Stop in
                 let l = CGFloat(i) / CGFloat(n)
-                let a = VeilMask.amount(y: (f.minY + l * f.height) / H, veil: veil)
+                let a = VeilMask.amount(y: (f.minY + l * f.height) / H, veil: veil, sweep: sweep)
                 let o = blurred ? a * (1 - CGFloat(VeilMask.dim)) : 1 - a
                 return Gradient.Stop(color: .black.opacity(Double(o)), location: l)
             }
@@ -908,12 +911,13 @@ struct VeilGradient: View {
 /// 顶栏 / mini player：按所在屏幕高度取同一遮罩值淡出（详情页自己的顶栏 / 播放条在同位置）
 struct VeilFade: AnimatableModifier {
     var veil: CGFloat
+    var sweep: Bool
     var y: CGFloat
     var animatableData: CGFloat {
         get { veil }
         set { veil = newValue }
     }
     func body(content: Content) -> some View {
-        content.opacity(Double(1 - VeilMask.amount(y: y, veil: veil)))
+        content.opacity(Double(1 - VeilMask.amount(y: y, veil: veil, sweep: sweep)))
     }
 }
