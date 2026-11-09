@@ -19,6 +19,8 @@ struct AlbumDetailView: View {
     /// t230u：唱片角度 = 已累计角度 + 本段播放以来的角度（暂停时定格，不回 0°）
     @State private var spinBase: Double = 0
     @State private var spinFrom: Date? = nil
+    /// t236u：左上角关闭圆钮实测直径（首帧前用 44pt 兜底）
+    @State private var closeDiameter: CGFloat = 44
     var coverName: String = "sleeve_cutout"
     /// 真实 Apple Music 集合（nil = 内置演示专辑）
     var collection: MusicCollection? = nil
@@ -464,6 +466,8 @@ struct AlbumDetailView: View {
             // 形状 / 材质 / 按压高光 / 无障碍全部由系统渲染，工程内不自绘圆。
             GlassCircleButton(systemImage: "xmark",
                               accessibilityText: "关闭", action: onClose)
+                // t236u：读出系统 glass 圆钮的实际渲染直径（label 30pt + 系统玻璃内边距），右侧胶囊用同一高度
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { closeDiameter = $0 }
 
             // t129u：标题 / 艺人各限一行，超长在右侧以 … 截断；占满两按钮之间（两侧各留 10pt），绝不压到按钮
             VStack(spacing: 1) {
@@ -480,10 +484,11 @@ struct AlbumDetailView: View {
             .padding(.horizontal, 10)
 
             // t232u / t233u：右上角 = 一个系统玻璃横胶囊：收藏(star) + 更多(ellipsis，原生 Menu)
-            DetailActionCapsule {
+            DetailActionCapsule(height: closeDiameter) {
                 Button { toggleFavorite() } label: {
                     Image(systemName: favoriteOn ? "star.fill" : "star")
                         .font(.system(size: DS.barButtonGlyph, weight: .medium))
+                        .imageScale(.large)
                         .frame(width: DS.barButtonLabel, height: DS.barButtonLabel)
                         .contentShape(Rectangle())
                 }
@@ -496,6 +501,7 @@ struct AlbumDetailView: View {
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: DS.barButtonGlyph, weight: .medium))
+                        .imageScale(.large)
                         .frame(width: DS.barButtonLabel, height: DS.barButtonLabel)
                         .contentShape(Rectangle())
                 }
@@ -641,18 +647,11 @@ struct AlbumDetailView: View {
     private func songMenu(_ song: Song) -> some View {
         let catalog = collection?.isCatalog ?? false
         let key = "am:" + song.id.rawValue
-        ControlGroup {
-            if music.canAddToLibrary(song, fromCatalog: catalog) {
-                Button("添加", systemImage: "plus") { Task { await music.addToLibrary(song) } }
-            }
-            let fav = music.isFavorite(key)
-            Button(fav ? "取消喜爱" : "喜爱", systemImage: fav ? "star.fill" : "star") {
-                Task { await music.toggleFavorite(key, song: song, fromCatalog: catalog) }
-            }
-            if let url = song.url {
-                ShareLink(item: url, subject: Text(song.title)) { Label("共享", systemImage: "square.and.arrow.up") }
-            }
-        }
+        MenuTopBar(canAdd: music.canAddToLibrary(song, fromCatalog: catalog),
+                   liked: music.isFavorite(key),
+                   shareURL: song.url,
+                   add: { Task { await music.addToLibrary(song) } },
+                   like: { Task { await music.toggleFavorite(key, song: song, fromCatalog: catalog) } })
         Section {
             if !music.editablePlaylists.isEmpty {
                 Menu {
@@ -688,18 +687,11 @@ struct AlbumDetailView: View {
     /// t233u：「更多」菜单 = 首页长按同一结构（不含从首页隐藏）
     @ViewBuilder
     private func detailMenu(_ c: MusicCollection) -> some View {
-        ControlGroup {
-            if music.canAddToLibrary(c) {
-                Button("添加", systemImage: "plus") { Task { await music.addToLibrary(c) } }
-            }
-            let loved = music.isLoved(c)
-            Button(loved ? "取消喜欢" : "喜欢", systemImage: loved ? "star.fill" : "star") {
-                Task { await music.toggleLove(c) }
-            }
-            if let url = c.shareURL {
-                ShareLink(item: url, subject: Text(c.title)) { Label("共享", systemImage: "square.and.arrow.up") }
-            }
-        }
+        MenuTopBar(canAdd: music.canAddToLibrary(c),
+                   liked: music.isLoved(c),
+                   shareURL: c.shareURL,
+                   add: { Task { await music.addToLibrary(c) } },
+                   like: { Task { await music.toggleLove(c) } })
         Section {
             if !music.editablePlaylists.isEmpty {
                 Menu {
@@ -954,16 +946,55 @@ struct StaggerReveal: AnimatableModifier {
     }
 }
 
+// MARK: - t237u 菜单顶栏（添加 / 喜欢 / 共享）
+
+/// 原来的 ControlGroup 里是「if 添加 + let + 喜欢 + if ShareLink」：子项个数随条件变化，且混入 ShareLink。
+/// 系统把 ControlGroup 桥接成 UIMenu 横排时，混入 ShareLink / 可选项会让横排只渲染部分子项（真机上「喜欢」丢失）。
+/// 现在固定 3 个普通 Button（不可用的置灰而不是移除），共享改为普通按钮弹系统分享面板 → 横排稳定显示三项。
+struct MenuTopBar: View {
+    let canAdd: Bool
+    let liked: Bool
+    let shareURL: URL?
+    let add: () -> Void
+    let like: () -> Void
+    var body: some View {
+        ControlGroup {
+            Button(action: add) { Label("添加", systemImage: "plus") }
+                .disabled(!canAdd)
+            Button(action: like) { Label(liked ? "取消喜欢" : "喜欢", systemImage: liked ? "star.fill" : "star") }
+            Button { if let shareURL { ShareSheet.present(shareURL) } } label: { Label("共享", systemImage: "square.and.arrow.up") }
+                .disabled(shareURL == nil)
+        }
+    }
+}
+
+/// 系统分享面板（UIActivityViewController），从最上层 VC 弹出；菜单收起后再弹，避免与菜单动画冲突
+enum ShareSheet {
+    @MainActor static func present(_ url: URL) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
+                  var top = scene.keyWindow?.rootViewController else { return }
+            while let p = top.presentedViewController { top = p }
+            let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            vc.popoverPresentationController?.sourceView = top.view
+            top.present(vc, animated: true)
+        }
+    }
+}
+
 // MARK: - t232u 右上角系统玻璃横胶囊
 
 /// 两个按钮共用一块系统 Liquid Glass 胶囊（iOS 26 glassEffect(.regular.interactive(), in: .capsule)，
 /// 与原生 toolbar 分组按钮同款）；旧系统退回 material 胶囊。
 struct DetailActionCapsule<Content: View>: View {
+    /// t236u：= 关闭圆钮的实测直径；两端内边距 = 圆钮里图标到玻璃边的距离，端帽与圆钮一致
+    var height: CGFloat = 44
     @ViewBuilder let content: Content
     var body: some View {
-        let row = HStack(spacing: 2) { content }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+        let inset = max(0, (height - DS.barButtonLabel) / 2)
+        let row = HStack(spacing: 4) { content }
+            .padding(.horizontal, inset)
+            .frame(height: height)
             .foregroundStyle(DS.ink)
         if #available(iOS 26.0, *) {
             GlassEffectContainer {

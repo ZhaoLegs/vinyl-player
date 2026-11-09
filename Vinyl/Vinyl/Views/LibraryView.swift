@@ -479,18 +479,11 @@ struct LibraryView: View {
     // t229u：长按菜单分层对齐 Apple Music Now Playing：顶栏三图标 → 歌单 / 播放 → 前往 → 队列 → 负向（从首页隐藏）
     @ViewBuilder
     private func collectionMenu(_ c: MusicCollection) -> some View {
-        ControlGroup {
-            if music.canAddToLibrary(c) {
-                Button("添加", systemImage: "plus") { Task { await music.addToLibrary(c) } }
-            }
-            let loved = music.isLoved(c)
-            Button(loved ? "取消喜欢" : "喜欢", systemImage: loved ? "star.fill" : "star") {
-                Task { await music.toggleLove(c) }
-            }
-            if let url = c.shareURL {
-                ShareLink(item: url, subject: Text(c.title)) { Label("共享", systemImage: "square.and.arrow.up") }
-            }
-        }
+        MenuTopBar(canAdd: music.canAddToLibrary(c),
+                   liked: music.isLoved(c),
+                   shareURL: c.shareURL,
+                   add: { Task { await music.addToLibrary(c) } },
+                   like: { Task { await music.toggleLove(c) } })
         Section {
             if !music.editablePlaylists.isEmpty {
                 Menu {
