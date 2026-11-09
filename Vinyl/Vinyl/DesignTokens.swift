@@ -94,16 +94,22 @@ enum Motion {
 
     /// 封面放大 / 缩回曲线（t108u）：长按首页左上角按钮循环切换，存 UserDefaults，便于真机对比。
     enum ZoomCurve: Int, CaseIterable {
-        case snappy, smooth, spring
+        case snappy, smooth, spring, ref
         var name: String {
             switch self {
+            case .ref: return "Ref · 原片拟合 timingCurve(0.389, 0.032, 0.701, 1.008, 0.547s)"
             case .snappy: return "B · .snappy(duration: 0.4, extraBounce: 0)"
             case .smooth: return "A · .smooth(duration: 0.5)"
             case .spring: return "C · .spring(response: 0.45, damping: 0.76)"
             }
         }
+        /// 关闭曲线：Ref 用原片关闭段拟合（0.256, 0.091, 0.141, 0.888, 0.425s），其余与打开相同
+        var closeAnimation: Animation {
+            self == .ref ? .timingCurve(0.256, 0.091, 0.141, 0.888, duration: 0.425) : animation
+        }
         var animation: Animation {
             switch self {
+            case .ref: return .timingCurve(0.389, 0.032, 0.701, 1.008, duration: 0.547)
             case .snappy: return .snappy(duration: 0.4, extraBounce: 0)
             case .smooth: return .smooth(duration: 0.5)
             case .spring: return .spring(response: zoomSpring.response, dampingFraction: zoomSpring.damping)
@@ -111,8 +117,8 @@ enum Motion {
         }
     }
     static var zoomCurve: ZoomCurve {
-        get { ZoomCurve(rawValue: UserDefaults.standard.integer(forKey: "vinyl.zoomCurve")) ?? .snappy }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "vinyl.zoomCurve") }
+        get { (UserDefaults.standard.object(forKey: "vinyl.zoomCurve2") as? Int).flatMap(ZoomCurve.init(rawValue:)) ?? .ref }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "vinyl.zoomCurve2") }
     }
     @discardableResult
     static func cycleZoomCurve() -> ZoomCurve {

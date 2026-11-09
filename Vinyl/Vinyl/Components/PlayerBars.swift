@@ -77,7 +77,9 @@ struct MiniPlayer: View {
                     .foregroundStyle(DS.ink)
                     .lineLimit(1)
                 // 第二行：艺人 · 歌曲时长（灰色）
-                Text("\(music.hasCurrentTrack ? music.currentArtist : AlbumData.artist) · \(musicTime(music.hasCurrentTrack ? music.duration : AppleMusicStore.demoDuration))")
+                (Text("\(music.hasCurrentTrack ? music.currentArtist : AlbumData.artist) · ")
+                    + Text(musicTime(music.hasCurrentTrack ? music.duration : AppleMusicStore.demoDuration))
+                        .font(.system(size: 10.5, design: .monospaced)))   // 只有 m:ss 用 SF Mono
                     .font(.system(size: 10.5))
                     .foregroundStyle(DS.secondary)
                     .lineLimit(1)

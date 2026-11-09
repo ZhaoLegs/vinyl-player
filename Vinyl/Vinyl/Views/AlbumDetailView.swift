@@ -122,17 +122,23 @@ struct AlbumDetailView: View {
                     // 底部渐变高斯模糊：从播放条顶部往上 24pt 处的全透明，渐变到屏幕底边最强；
                     // 与首页 mini player 下的系统 scroll-edge 模糊效果对应。
                     .background(alignment: .bottom) {
-                        Rectangle()
-                            .fill(.ultraThinMaterial)
-                            .mask(LinearGradient(stops: [
-                                .init(color: .clear, location: 0),
-                                .init(color: .black.opacity(0.7), location: 0.45),
-                                .init(color: .black, location: 1)
-                            ], startPoint: .top, endPoint: .bottom))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 42 + 10 + 24)
-                            .ignoresSafeArea(edges: .bottom)
-                            .allowsHitTesting(false)
+                        // 底部渐变毛玻璃：播放条顶部往上 48pt 起由透明渐变到屏幕底边最强，
+                        // 叠一层页面底色渐变（0 → 0.6），纯色背景上也能看出来；位于内容之上、播放条之下。
+                        ZStack {
+                            Rectangle()
+                                .fill(.regularMaterial)
+                                .mask(LinearGradient(stops: [
+                                    .init(color: .clear, location: 0),
+                                    .init(color: .black.opacity(0.85), location: 0.4),
+                                    .init(color: .black, location: 1)
+                                ], startPoint: .top, endPoint: .bottom))
+                            LinearGradient(colors: [Color.white.opacity(0), Color.white.opacity(0.6)],
+                                           startPoint: .top, endPoint: .bottom)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 42 + 10 + 48)
+                        .ignoresSafeArea(.container, edges: .bottom)
+                        .allowsHitTesting(false)
                     }
                     .opacity(stage(0.24))
             }
@@ -308,7 +314,7 @@ struct AlbumDetailView: View {
                     .foregroundStyle(DS.ink)
                     .frame(width: TL.sideW, alignment: .leading)
                 Text(musicTime(song.duration ?? 0))
-                    .font(.system(size: TL.row, weight: .regular).monospacedDigit())
+                    .font(.system(size: TL.row, weight: .regular, design: .monospaced))   // t115u：时间用 SF Mono
                     .foregroundStyle(current ? TL.bpm : DS.ink)   // t104u：播放中灰、其余黑
                     .frame(width: TL.bpmW, alignment: .leading)
                     .lineLimit(1)
@@ -316,9 +322,9 @@ struct AlbumDetailView: View {
                     .font(.system(size: TL.glyph, weight: .regular))
                     .foregroundStyle(current ? TL.idle : DS.ink)
                     // 图标在列内右对齐：图标右缘 → 歌名首字母（含 D 的 ~1.5pt 字形边距）= 8pt，play / pause 一致
-                    .frame(width: TL.glyphW - TL.glyphTrail, alignment: .trailing)
+                    .frame(width: TL.glyphW - TL.glyphTrail, alignment: .center)
                     .padding(.trailing, TL.glyphTrail)
-                    .offset(x: current && music.isPlaying ? TL.pauseNudge : 0)
+                    .offset(x: (current && music.isPlaying ? TL.pauseNudge : 0) - TL.iconShift)
                 Text("\(song.artistName) - \(song.title)")
                     .font(.system(size: TL.row, weight: .regular))
                     .foregroundStyle(current ? TL.idle : DS.ink)   // t104u：播放中灰、其余黑
@@ -344,8 +350,9 @@ struct AlbumDetailView: View {
         static let sideW: CGFloat  = 39.5
         static let bpmW: CGFloat   = 50
         static let glyphW: CGFloat = 15
-        static let glyphTrail: CGFloat = 6.5 - 1.0 / 3   // 实测 play.fill 右缘 → 歌名首字 = 8.0pt
-        static let pauseNudge: CGFloat = 5.0 / 3        // pause.fill 字形右侧留白更大，右移 1.67pt 后同为 8.0pt
+        static let iconShift: CGFloat = 2.0 / 3   // 整列图标左移，play 墨迹右缘 → 歌名 = 8.0pt
+        static let glyphTrail: CGFloat = 7.5   // 图标列居中；实测 play.fill 墨迹右缘 → 歌名首字 = 8.0pt
+        static let pauseNudge: CGFloat = 2.0 / 3         // 居中后 pause 墨迹中心比 play 偏左 0.67pt，右移使两者墨迹中心重合
         static let header: CGFloat = 12
         static let row: CGFloat    = 15
         static let glyph: CGFloat  = 13
@@ -385,7 +392,7 @@ struct AlbumDetailView: View {
                             .foregroundStyle(DS.ink)
                             .frame(width: TL.sideW, alignment: .leading)
                         Text("\(track.bpm)")
-                            .font(.system(size: TL.row, weight: .regular))
+                            .font(.system(size: TL.row, weight: .regular, design: .monospaced))   // t115u：数字列用 SF Mono
                             .foregroundStyle(current ? TL.bpm : DS.ink)   // t104u：播放中灰、其余黑
                             .frame(width: TL.bpmW, alignment: .leading)
                         // SF Symbols：当前曲目播放中 = pause.fill，其余 / 暂停 = play.fill
@@ -393,9 +400,9 @@ struct AlbumDetailView: View {
                             .font(.system(size: TL.glyph, weight: .regular))
                             .foregroundStyle(current ? TL.idle : DS.ink)
                             // 图标在列内右对齐：图标右缘 → 歌名首字母（含 D 的 ~1.5pt 字形边距）= 8pt，play / pause 一致
-                    .frame(width: TL.glyphW - TL.glyphTrail, alignment: .trailing)
+                    .frame(width: TL.glyphW - TL.glyphTrail, alignment: .center)
                     .padding(.trailing, TL.glyphTrail)
-                            .offset(x: current && music.demoPlaying ? TL.pauseNudge : 0)
+                            .offset(x: (current && music.demoPlaying ? TL.pauseNudge : 0) - TL.iconShift)
                         Text(track.title)
                             .font(.system(size: TL.row, weight: .regular))
                             .foregroundStyle(current ? TL.idle : DS.ink)   // t104u：播放中灰、其余黑

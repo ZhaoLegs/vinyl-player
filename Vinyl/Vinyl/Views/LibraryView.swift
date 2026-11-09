@@ -143,8 +143,8 @@ struct LibraryView: View {
         HStack {
             // Assets logo mark inside system glass circle (not SF Symbol opticaldisc).
             // 左上 logo：未连接时 = 连接 Apple Music 的入口（被拒绝时打开系统设置）
-            // t107u：参考视频左上角字形 = SF Symbol square.stack.3d.down.right（原生 toolbar 尺寸）
-            GlassCircleButton(systemImage: "square.stack.3d.down.right",
+            // t107u：参考视频左上角字形 = SF Symbol square.3.layers.3d.down.right（用户 t111u 选定）（原生 toolbar 尺寸）
+            GlassCircleButton(systemImage: "square.3.layers.3d.down.right",
                               accessibilityText: music.authorized ? "Vinyl" : "连接 Apple Music") {
                 connectMusic()
             }
@@ -425,7 +425,7 @@ struct LibraryView: View {
         autoplay = false
         demoToken += 1
         withAnimation(
-            reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.close),
+            reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomCurve.closeAnimation,
             completionCriteria: .removed
         ) {
             zoom = 0
@@ -480,7 +480,10 @@ struct LibraryView: View {
         for _ in 0..<40 where !landed {
             guard await pause(50_000_000) else { return }
         }
-        guard await pause(150_000_000) else { return }
+        // 原片：点击后 1.2s（f5→f41）唱片开始抽出，封面在 f22–27 落定后约停 0.47s
+        let sinceTap = Date().timeIntervalSince(motionStart)
+        let wait = max(0.15, 1.2 - sinceTap)
+        guard await pause(UInt64(wait * 1_000_000_000)) else { return }
         // 用户已翻到背面 / 正在翻：不自动抽出
         guard flip < 90 && !flipBusy else { return }
         // 点开封面：唱片自动滑出并开始播放（唱片持续旋转）。
