@@ -37,6 +37,29 @@ final class AppleMusicStore: ObservableObject {
     @Published private(set) var demoPlaying = true
     @Published private(set) var demoElapsed: Double = 0.18 * AppleMusicStore.demoDuration
     /// 点演示曲目：点当前行 = 暂停 / 继续；点其它行 = 切到该曲并开始播放
+    // MARK: - 收藏（t105u）
+    /// 本地收藏集合（UserDefaults）。MusicKit 只能「加入资料库」不能移除，所以取消收藏只记在本地。
+    @Published private(set) var favorites: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: "vinyl.favorites") ?? [])
+
+    func isFavorite(_ key: String) -> Bool { favorites.contains(key) }
+
+    private func saveFavorites() {
+        UserDefaults.standard.set(Array(favorites), forKey: "vinyl.favorites")
+    }
+
+    /// 切换收藏；Apple Music 曲库歌曲在收藏时同时加入用户资料库，失败则静默回滚。
+    func toggleFavorite(_ key: String, song: Song? = nil, fromCatalog: Bool = false) async {
+        if favorites.contains(key) {
+            favorites.remove(key); saveFavorites()
+            return
+        }
+        favorites.insert(key); saveFavorites()
+        guard let song, fromCatalog, authorized else { return }
+        do { try await MusicLibrary.shared.add(song) }
+        catch { favorites.remove(key); saveFavorites() }
+    }
+
     func seekDemo(_ fraction: Double) {
         demoElapsed = min(1, max(0, fraction)) * Self.demoDuration
     }

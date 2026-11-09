@@ -80,7 +80,7 @@ enum Motion {
     /// These replace the earlier 8/30 and 10/30 guesses. Not a claim of pixel-perfect playback.
     /// 封面放大 / 缩回转场：弹簧，带轻微可见回弹（开与关同一组参数）。
     /// response 0.5s、dampingFraction 0.72 ≈ 过冲 ~6%，CoverFlight / ArtworkHandoff 把过冲映射成封面的轻微放大 / 缩小。
-    static let zoomSpring: (response: Double, damping: Double) = (0.55, 0.6)   // 原 (0.5, 0.72) 过冲仅 ~3.8% 看不出；0.6 阻尼 ≈ 9.5% 过冲
+    static let zoomSpring: (response: Double, damping: Double) = (0.45, 0.76)   // t101u: iOS 式快起缓停，过冲 ≈ 2.6%（原 (0.55, 0.6) ≈ 9.5%）
     static let zoomDuration: Double = 0.5
     /// 飞行封面 → 详情封套的交接点（弹簧进度首次 ≥ 0.97；0.72 阻尼下回落不会再低于它）
     static let handoff: CGFloat = 0.97
@@ -92,10 +92,40 @@ enum Motion {
     static let flip    = Spring(response: 0.10, damping: 0.92, duration: 11.0 / 30)
     static let close   = Spring(response: 0, damping: 0, duration: zoomDuration, followsMeasuredPath: true)
 
+    /// 封面放大 / 缩回曲线（t108u）：长按首页左上角按钮循环切换，存 UserDefaults，便于真机对比。
+    enum ZoomCurve: Int, CaseIterable {
+        case snappy, smooth, spring
+        var name: String {
+            switch self {
+            case .snappy: return "B · .snappy(duration: 0.4, extraBounce: 0)"
+            case .smooth: return "A · .smooth(duration: 0.5)"
+            case .spring: return "C · .spring(response: 0.45, damping: 0.76)"
+            }
+        }
+        var animation: Animation {
+            switch self {
+            case .snappy: return .snappy(duration: 0.4, extraBounce: 0)
+            case .smooth: return .smooth(duration: 0.5)
+            case .spring: return .spring(response: zoomSpring.response, dampingFraction: zoomSpring.damping)
+            }
+        }
+    }
+    static var zoomCurve: ZoomCurve {
+        get { ZoomCurve(rawValue: UserDefaults.standard.integer(forKey: "vinyl.zoomCurve")) ?? .snappy }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "vinyl.zoomCurve") }
+    }
+    @discardableResult
+    static func cycleZoomCurve() -> ZoomCurve {
+        let all = ZoomCurve.allCases
+        let next = all[(all.firstIndex(of: zoomCurve)! + 1) % all.count]
+        zoomCurve = next
+        return next
+    }
+
     static func animation(_ s: Spring) -> Animation {
         // Open/close: a spring drives CoverFlight's progress along OPEN_PATH / CLOSE_PATH (overshoot = slight scale).
         if s.followsMeasuredPath {
-            return .spring(response: zoomSpring.response, dampingFraction: zoomSpring.damping)
+            return zoomCurve.animation
         }
         if s.springy { return .spring(response: s.response, dampingFraction: s.damping) }
         return .timingCurve(0.42, 0.0, 0.2, 1.0, duration: s.duration)

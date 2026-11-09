@@ -119,7 +119,6 @@ struct WaveformBar: View {
     @State private var scrub: Double? = nil
     /// 擦洗时手指所在的竖条序号：每跨进一根新竖条触发一次 selection「刻度」触觉
     @State private var scrubBar: Int? = nil
-    @State private var taps = 0
     @State private var width: CGFloat = 1
     private let count = Waveform.barCount
 
@@ -141,10 +140,10 @@ struct WaveformBar: View {
                 .frame(height: 26)
                 .contentShape(Rectangle())
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = max(1, $0) }
-                .gesture(scrubGesture)
-                .simultaneousGesture(tapGesture)
+                // t109u：没有点按跳转；只有长按后左右拖动。高优先级，激活后不会被页面滚动抢走。
+                .highPriorityGesture(scrubGesture)
                 .sensoryFeedback(.selection, trigger: scrubBar) { old, new in old != nil && new != nil }
-                .sensoryFeedback(.impact(weight: .light), trigger: taps)
+                .transaction { $0.animation = nil }   // 拖动时进度逐帧跟手，无隐式动画延迟
         }
         .padding(.horizontal, 14)
         .glassCapsule(height: 42)
@@ -171,14 +170,20 @@ struct WaveformBar: View {
                 let y = (((size.height - h) / 2) * scale).rounded() / scale
                 let rect = CGRect(x: x, y: y, width: bar, height: h)
                 let path = Path(roundedRect: rect, cornerRadius: bar / 2)
-                let color = Double(i) < played ? DS.ink : Color(hex: 0xB9B5B1)
-                if head {
-                    context.drawLayer { layer in
-                        layer.addFilter(.shadow(color: .black.opacity(0.28), radius: 3))
-                        layer.fill(path, with: .color(color))
+                // 亚竖条精度：分界落在某根竖条内部时，这根竖条左段黑、右段灰，拖动时连续移动不跳格
+                let frac = CGFloat(min(1, max(0, played - Double(i))))
+                let gray = Color(hex: 0xB9B5B1)
+                context.drawLayer { layer in
+                    if head { layer.addFilter(.shadow(color: .black.opacity(0.28), radius: 3)) }
+                    if frac >= 1 {
+                        layer.fill(path, with: .color(DS.ink))
+                    } else {
+                        layer.fill(path, with: .color(gray))
+                        if frac > 0 {
+                            layer.clip(to: Path(CGRect(x: x, y: y, width: bar * frac, height: h)))
+                            layer.fill(path, with: .color(DS.ink))
+                        }
                     }
-                } else {
-                    context.fill(path, with: .color(color))
                 }
             }
         }
@@ -193,15 +198,6 @@ struct WaveformBar: View {
     }
 
     private func fraction(_ x: CGFloat) -> Double { Double(min(1, max(0, x / width))) }
-
-    /// 轻点 = 跳到该位置
-    private var tapGesture: some Gesture {
-        SpatialTapGesture().onEnded { value in
-            guard scrub == nil else { return }
-            taps += 1   // 轻点只给一次轻触觉
-            seek?(fraction(value.location.x))
-        }
-    }
 
     /// 长按 0.25s 后水平拖动 = 实时擦洗；开始时轻触觉，松手提交
     private var scrubGesture: some Gesture {
@@ -220,9 +216,8 @@ struct WaveformBar: View {
                     }
                     if let drag {
                         let f = fraction(drag.location.x)
-                        scrub = f
+                        scrub = f            // 只更新 UI（逐帧），松手时才 seek 一次
                         scrubBar = bar(for: f)
-                        seek?(f)
                     }
                 default: break
                 }

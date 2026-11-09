@@ -28,6 +28,7 @@ struct AlbumDetailView: View {
     let zoom: CGFloat
     let isPresented: Bool
     var closing: Bool = false
+    var landed: Bool = false
     /// 正常使用时唱片抽出后一直转（正在播放）；录屏演示按原片在 3.067s 停转。
     var keepsSpinning: Bool = true
     let motionStart: Date
@@ -35,6 +36,24 @@ struct AlbumDetailView: View {
     let onToggleArtwork: () -> Void
 
     @State private var pageWidth: CGFloat = 402
+    @State private var favoriteBounce = 0
+
+    /// 收藏目标：Apple Music = 正在播放的那首（在本专辑里），否则本专辑第一首；演示 = 当前演示曲目
+    private var favoriteTarget: (key: String, song: Song?) {
+        if collection != nil, let songs, !songs.isEmpty {
+            let song = songs.first(where: { music.isCurrent($0) }) ?? songs[0]
+            return ("am:" + song.id.rawValue, song)
+        }
+        return ("demo:\(coverName):\(music.demoTrack)", nil)
+    }
+    private var favoriteOn: Bool { music.isFavorite(favoriteTarget.key) }
+
+    private func toggleFavorite() {
+        let target = favoriteTarget
+        favoriteBounce += 1
+        Task { await music.toggleFavorite(target.key, song: target.song,
+                                          fromCatalog: collection?.isCatalog ?? false) }
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -68,7 +87,7 @@ struct AlbumDetailView: View {
                         .onTapGesture(perform: onToggleArtwork)
                 }
                 .frame(width: DS.sleeve, height: DS.sleeve)
-                .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom, closing: closing))
+                .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom, closing: closing, landed: landed || reduceMotion))
                 .background(
                     GeometryReader { geo in
                         Color.clear.preference(key: SleeveFrameKey.self,
@@ -100,6 +119,21 @@ struct AlbumDetailView: View {
                     // 与首页 mini player 同宽（与系统 Tab bar 胶囊对齐）
                     .padding(.horizontal, DS.tabBarSideInset)
                     .padding(.bottom, 10)
+                    // 底部渐变高斯模糊：从播放条顶部往上 24pt 处的全透明，渐变到屏幕底边最强；
+                    // 与首页 mini player 下的系统 scroll-edge 模糊效果对应。
+                    .background(alignment: .bottom) {
+                        Rectangle()
+                            .fill(.ultraThinMaterial)
+                            .mask(LinearGradient(stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black.opacity(0.7), location: 0.45),
+                                .init(color: .black, location: 1)
+                            ], startPoint: .top, endPoint: .bottom))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 42 + 10 + 24)
+                            .ignoresSafeArea(edges: .bottom)
+                            .allowsHitTesting(false)
+                    }
                     .opacity(stage(0.24))
             }
             // 不再给整列加 contentAlpha：封套只受 ArtworkHandoff 控制（全显 / 全隐），
@@ -164,9 +198,13 @@ struct AlbumDetailView: View {
 
             Spacer(minLength: 0)
 
-            // 右上角同样是系统玻璃圆按钮（Button + .buttonStyle(.glass) + .buttonBorderShape(.circle)）
-            GlassCircleButton(systemImage: "cube",
-                              accessibilityText: "新建") { }
+            // 右上角：收藏当前播放的歌（无播放时 = 本专辑当前 / 第一首）。heart / heart.fill
+            GlassCircleButton(systemImage: favoriteOn ? "heart.fill" : "heart",
+                              accessibilityText: favoriteOn ? "取消收藏" : "收藏") {
+                toggleFavorite()
+            }
+            .symbolEffect(.bounce, value: favoriteBounce)
+            .sensoryFeedback(.impact(weight: .light), trigger: favoriteBounce)
         }
         .padding(.horizontal, DS.contentInset)
     }
@@ -271,16 +309,19 @@ struct AlbumDetailView: View {
                     .frame(width: TL.sideW, alignment: .leading)
                 Text(musicTime(song.duration ?? 0))
                     .font(.system(size: TL.row, weight: .regular).monospacedDigit())
-                    .foregroundStyle(current ? DS.ink : TL.bpm)
+                    .foregroundStyle(current ? TL.bpm : DS.ink)   // t104u：播放中灰、其余黑
                     .frame(width: TL.bpmW, alignment: .leading)
                     .lineLimit(1)
                 Image(systemName: current && music.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: TL.glyph, weight: .regular))
-                    .foregroundStyle(DS.ink)
-                    .frame(width: TL.glyphW, alignment: .leading)
+                    .foregroundStyle(current ? TL.idle : DS.ink)
+                    // 图标在列内右对齐：图标右缘 → 歌名首字母（含 D 的 ~1.5pt 字形边距）= 8pt，play / pause 一致
+                    .frame(width: TL.glyphW - TL.glyphTrail, alignment: .trailing)
+                    .padding(.trailing, TL.glyphTrail)
+                    .offset(x: current && music.isPlaying ? TL.pauseNudge : 0)
                 Text("\(song.artistName) - \(song.title)")
                     .font(.system(size: TL.row, weight: .regular))
-                    .foregroundStyle(current ? DS.ink : TL.idle)
+                    .foregroundStyle(current ? TL.idle : DS.ink)   // t104u：播放中灰、其余黑
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -303,6 +344,8 @@ struct AlbumDetailView: View {
         static let sideW: CGFloat  = 39.5
         static let bpmW: CGFloat   = 50
         static let glyphW: CGFloat = 15
+        static let glyphTrail: CGFloat = 6.5 - 1.0 / 3   // 实测 play.fill 右缘 → 歌名首字 = 8.0pt
+        static let pauseNudge: CGFloat = 5.0 / 3        // pause.fill 字形右侧留白更大，右移 1.67pt 后同为 8.0pt
         static let header: CGFloat = 12
         static let row: CGFloat    = 15
         static let glyph: CGFloat  = 13
@@ -343,16 +386,19 @@ struct AlbumDetailView: View {
                             .frame(width: TL.sideW, alignment: .leading)
                         Text("\(track.bpm)")
                             .font(.system(size: TL.row, weight: .regular))
-                            .foregroundStyle(current ? DS.ink : TL.bpm)
+                            .foregroundStyle(current ? TL.bpm : DS.ink)   // t104u：播放中灰、其余黑
                             .frame(width: TL.bpmW, alignment: .leading)
                         // SF Symbols：当前曲目播放中 = pause.fill，其余 / 暂停 = play.fill
                         Image(systemName: current && music.demoPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: TL.glyph, weight: .regular))
-                            .foregroundStyle(DS.ink)
-                            .frame(width: TL.glyphW, alignment: .leading)
+                            .foregroundStyle(current ? TL.idle : DS.ink)
+                            // 图标在列内右对齐：图标右缘 → 歌名首字母（含 D 的 ~1.5pt 字形边距）= 8pt，play / pause 一致
+                    .frame(width: TL.glyphW - TL.glyphTrail, alignment: .trailing)
+                    .padding(.trailing, TL.glyphTrail)
+                            .offset(x: current && music.demoPlaying ? TL.pauseNudge : 0)
                         Text(track.title)
                             .font(.system(size: TL.row, weight: .regular))
-                            .foregroundStyle(current ? DS.ink : TL.idle)
+                            .foregroundStyle(current ? TL.idle : DS.ink)   // t104u：播放中灰、其余黑
                             .lineLimit(1)
                         Spacer(minLength: 0)
                     }

@@ -67,6 +67,7 @@ struct LibraryView: View {
                     zoom: zoom,
                     isPresented: presented,
                     closing: closing,
+                    landed: landed,
                     keepsSpinning: !recordingRequested,
                     motionStart: motionStart,
                     onClose: { close() },
@@ -80,6 +81,18 @@ struct LibraryView: View {
                 flyingCover
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
+            }
+            .overlay(alignment: .top) {
+                if let curveLabel {
+                    Text(curveLabel)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.black.opacity(0.75), in: Capsule())
+                        .padding(.top, 60)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
             }
             .coordinateSpace(name: "library")
             .onPreferenceChange(CoverFrameKey.self) { frames in
@@ -130,10 +143,20 @@ struct LibraryView: View {
         HStack {
             // Assets logo mark inside system glass circle (not SF Symbol opticaldisc).
             // 左上 logo：未连接时 = 连接 Apple Music 的入口（被拒绝时打开系统设置）
-            GlassCircleButton(assetImage: "logo",
+            // t107u：参考视频左上角字形 = SF Symbol square.stack.3d.down.right（原生 toolbar 尺寸）
+            GlassCircleButton(systemImage: "square.stack.3d.down.right",
                               accessibilityText: music.authorized ? "Vinyl" : "连接 Apple Music") {
                 connectMusic()
             }
+            // 隐藏调试：长按循环切换放大曲线 A/B/C，并短暂显示曲线名
+            .simultaneousGesture(LongPressGesture(minimumDuration: 0.6).onEnded { _ in
+                let curve = Motion.cycleZoomCurve()
+                withAnimation(.easeOut(duration: 0.15)) { curveLabel = curve.name }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(1))
+                    withAnimation(.easeIn(duration: 0.2)) { curveLabel = nil }
+                }
+            })
             Spacer(minLength: 0)
             GlassCircleButton(systemImage: "cube", accessibilityText: "刷新资料库") {
                 if music.authorized {
@@ -331,7 +354,7 @@ struct LibraryView: View {
                 Image(DS.coverName(selectedIndex)).resizable()
             }
         }
-            .modifier(CoverFlight(progress: zoom, start: start, end: end, closing: closing,
+            .modifier(CoverFlight(progress: zoom, start: start, end: end, closing: closing, landed: landed,
                                  discCover: DS.coverName(selectedIndex),
                                  discArtwork: selectedCollection?.artwork))
             .opacity(presented && !reduceMotion ? 1 : 0)
@@ -349,9 +372,13 @@ struct LibraryView: View {
         motionStart = Date()
         // 一条主 spring 驱动封面缩放与背景模糊（同一进度，不再各跑一条曲线）；
         // 详情文字用带 delay 的从曲线错峰淡入，形成「先放大 → 再显内容」的节奏。
-        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open)) {
+        landed = false
+        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open),
+                      completionCriteria: .logicallyComplete) {
             zoom = 1
             blurRadius = 18
+        } completion: {
+            if presented && !closing { landed = true }
         }
         // Detail copy fades in after the cover has started moving (reference frames 9–16).
         withAnimation(.easeInOut(duration: 7.0 / 30).delay(4.0 / 30)) {
@@ -361,6 +388,9 @@ struct LibraryView: View {
     }
 
     @State private var closeQueued = false
+    @State private var curveLabel: String? = nil
+    /// 打开弹簧逻辑完成（已落定）→ 详情封套接手
+    @State private var landed = false
     /// 关闭飞行的目标格子（cellFrames 的 key），滚动时实时跟踪它的 frame
     @State private var targetKey: Int? = nil
 
@@ -385,6 +415,7 @@ struct LibraryView: View {
 
     private func beginCloseFlight() {
         guard presented && !closing else { return }
+        landed = false
         // 关闭时封面只做缩放 / 位移回到网格，不做任何翻转：
         // 即使用户翻到了 B 面，也先无动画地把 flip 归零。
         var reset = Transaction()
@@ -445,7 +476,11 @@ struct LibraryView: View {
         // 减弱动态效果：唱片直接处于抽出 / 播放状态，不做位移动画。
         if reduceMotion && presented && !closing && autoplay && !recordingRequested { pull = 1; return }
         guard presented && !closing && autoplay && !reduceMotion else { return }
-        guard await pause(1_200_000_000) else { return }
+        // 等封面弹簧落定（landed）后再停 0.15s，唱片才用自己的柔和弹簧滑出
+        for _ in 0..<40 where !landed {
+            guard await pause(50_000_000) else { return }
+        }
+        guard await pause(150_000_000) else { return }
         // 用户已翻到背面 / 正在翻：不自动抽出
         guard flip < 90 && !flipBusy else { return }
         // 点开封面：唱片自动滑出并开始播放（唱片持续旋转）。
@@ -491,6 +526,7 @@ private struct CoverFlight: AnimatableModifier {
     let start: CGRect
     let end: CGRect
     var closing: Bool = false
+    var landed: Bool = false
     var discCover: String = DS.coverName(AlbumData.featuredIndex)
     var discArtwork: Artwork? = nil
 
@@ -500,27 +536,15 @@ private struct CoverFlight: AnimatableModifier {
     }
 
     func body(content: Content) -> some View {
-        let linear: CGFloat = min(1, max(0, progress))
-        let along: CGFloat = closing ? (1 - linear) : linear
-        let frameF: CGFloat = closing ? (165 + along * 20) : (5 + along * 22)
-        let sourceFrame = Double(frameF)
-        let sample = Motion.sample(closing ? Motion.closePath : Motion.openPath, frame: sourceFrame)
-        let span = Motion.referenceSleeveSize - Motion.referenceCellSize
-        let amount = CGFloat((sample.size - Motion.referenceCellSize) / span)
-        let clamped = min(1, max(0, amount))
-        let refStraightX = Motion.referenceCell.x + (Motion.referenceSleeve.x - Motion.referenceCell.x) * clamped
-        let refStraightY = Motion.referenceCell.y + (Motion.referenceSleeve.y - Motion.referenceCell.y) * clamped
-        let nativeX = start.minX + (end.minX - start.minX) * clamped
-        let nativeY = start.minY + (end.minY - start.minY) * clamped
-        // 尺寸直接跟随弹簧原始进度（不夹到 1、不走参考路径的提前饱和），
-        // 过冲连续地从飞行封面延续到详情封套（ArtworkHandoff 同样用 progress - 1 放大）。
-        let growth: CGFloat = closing ? amount : progress
-        let width: CGFloat = start.width + (end.width - start.width) * growth
-        // 只有一个封面在动：打开时飞行封面一直可见，直到弹簧第一次越过 97% 才把位置交给详情页封套
-        // （此刻两者同图、同 frame、同挖孔、同投影，交接无交叉淡入）；关闭时详情页封套立刻隐藏、由它飞回。
-        let visible = closing ? 1.0 : (linear < Motion.handoff ? 1.0 : 0.0)
-        // 弹簧越过终点的部分（关闭时 progress < 0）变成封面在网格位置的轻微缩小再回弹
-        let settle = closing ? 1 + max(-0.12, min(0, progress)) : 1
+        // 位置、尺寸、圆角、挖孔全部跟随同一个弹簧进度 p（不走参考路径、不夹断），
+        // 弹簧的轻微过冲自然体现为封面越过终点一点再落定。
+        let p: CGFloat = progress
+        let clamped: CGFloat = min(1, max(0, p))
+        let width: CGFloat = start.width + (end.width - start.width) * p
+        let midX: CGFloat = start.midX + (end.midX - start.midX) * p
+        let midY: CGFloat = start.midY + (end.midY - start.midY) * p
+        // 打开：落定（landed）前一直是飞行封面，落定后瞬间交给几何完全相同的详情封套；关闭：始终是飞行封面
+        let visible: Double = (closing || !landed) ? 1 : 0
         let hole = width * DS.planet / DS.sleeve
         content
             .frame(width: width, height: width)
@@ -545,11 +569,9 @@ private struct CoverFlight: AnimatableModifier {
             }
             // 圆角随同一弹簧进度连续变化：网格 DS.corner → 详情 0（关闭时反向）
             .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - clamped)))
-            .scaleEffect(settle)
             // 投影从网格封面的 (18%, r8, y4) 连续过渡到详情封套的 (12%, r8, y5)
             .shadow(color: .black.opacity(0.18 - 0.06 * Double(clamped)), radius: 8, y: 4 + clamped)
-            .offset(x: nativeX + (sample.x - refStraightX),
-                    y: nativeY + (sample.y - refStraightY))
+            .offset(x: midX - width / 2, y: midY - width / 2)
             .opacity(visible)
     }
 }
@@ -557,6 +579,7 @@ private struct CoverFlight: AnimatableModifier {
 struct ArtworkHandoff: AnimatableModifier {
     var progress: CGFloat
     var closing: Bool = false
+    var landed: Bool = false
 
     var animatableData: CGFloat {
         get { progress }
@@ -564,11 +587,9 @@ struct ArtworkHandoff: AnimatableModifier {
     }
 
     func body(content: Content) -> some View {
-        let shown: Double = closing ? 0 : (progress >= Motion.handoff ? 1 : 0)
-        // 打开时弹簧越过 1 的部分 = 封套轻微放大后回弹
-        let overshoot = closing ? 0 : max(0, min(0.12, progress - 1))
+        // 飞行封面落定后才显示（几何与飞行终点完全一致），关闭时立即隐藏，由飞行封面飞回
+        let shown: Double = (!closing && (landed || progress >= 1.5)) ? 1 : 0
         content
-            .scaleEffect(1 + overshoot)
-            .opacity(Double(shown))
+            .opacity(shown)
     }
 }
