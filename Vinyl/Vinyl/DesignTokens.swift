@@ -34,6 +34,22 @@ enum DS {
     static let corner: CGFloat     = 5
     static let capsule: CGFloat    = 28
 
+    /// 首页与详情页共用的左右内容边距（原片实测：网格 / 曲目表 / 发行卡左缘均为 21pt）。
+    static let contentInset: CGFloat = 21
+
+    /// 系统导航栏玻璃圆钮：在 iOS 27 模拟器里用原生 ToolbarItem 实测直径 136px@3x（≈45.3pt，含玻璃描边），
+    /// .glass 样式会在 label 外再加一圈内边距，label 取 30pt 时渲染直径与原生一致。
+    static let barButtonLabel: CGFloat = 30
+    /// 原生 toolbar 图标 = 17pt 字号 + .large imageScale（实测与原生 cube 字形同宽同高）。
+    static let barButtonGlyph: CGFloat = 17
+
+    /// 底部 mini player：与系统 Tab bar 玻璃胶囊左右对齐，且与其上缘间距 12pt。
+    static let tabBarSideInset: CGFloat = 21
+    static let miniPlayerGap: CGFloat = 12
+    /// safeAreaBar 的底边比 Tab bar 玻璃胶囊的可见上缘低 5.33pt（iOS 27 模拟器 3x 截图实测，
+    /// padding 每 +1pt 间距 +1pt），所以底部 padding = 12 + 5.33，可见边缘间距正好 12pt。
+    static let miniPlayerBottomPadding: CGFloat = miniPlayerGap + 5.33
+
     static func coverName(_ index: Int) -> String {
         String(format: "cover_%02d", index)
     }
@@ -242,16 +258,15 @@ struct SystemIconButton: View {
 struct GlassCircleButton: View {
     var systemImage: String? = nil
     var assetImage: String? = nil
-    /// Apple toolbar / glass circular control visual size (~36pt).
-    var size: CGFloat = 36
-    var iconSize: CGFloat = 15
+    /// 资产图标的边长；默认与原生 toolbar 的 cube 字形同宽（≈21pt）。
+    var iconSize: CGFloat = 21
     var accessibilityText: String = ""
     let action: () -> Void
 
     @ViewBuilder
     private var label: some View {
-        // Glyph only. The glass style supplies the circular control's own padding.
-        // A 36/44pt frame here is added on top of that padding and inflates the button.
+        // 与原生导航栏圆钮同尺寸：字形 17pt + .large，label 固定 DS.barButtonLabel，
+        // 其余内边距由系统 glass 样式提供（实测渲染直径与原生 ToolbarItem 相同）。
         Group {
             if let assetImage {
                 Image(assetImage)
@@ -260,9 +275,11 @@ struct GlassCircleButton: View {
                     .frame(width: iconSize, height: iconSize)
             } else if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.system(size: iconSize, weight: .medium))
+                    .font(.system(size: DS.barButtonGlyph, weight: .regular))
+                    .imageScale(.large)
             }
         }
+        .frame(width: DS.barButtonLabel, height: DS.barButtonLabel)
         .contentShape(.circle)
     }
 
@@ -278,6 +295,7 @@ struct GlassCircleButton: View {
         } else {
             Button(action: action) {
                 label.foregroundStyle(DS.ink)
+                    .padding(7)
                     .background(.ultraThinMaterial, in: Circle())
                     .overlay(Circle().strokeBorder(.white.opacity(0.65), lineWidth: 0.8))
             }

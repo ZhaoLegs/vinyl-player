@@ -22,6 +22,8 @@ struct AlbumDetailView: View {
     let zoom: CGFloat
     let isPresented: Bool
     var closing: Bool = false
+    /// 正常使用时唱片抽出后一直转（正在播放）；录屏演示按原片在 3.067s 停转。
+    var keepsSpinning: Bool = true
     let motionStart: Date
     let onClose: () -> Void
     let onToggleArtwork: () -> Void
@@ -63,19 +65,20 @@ struct AlbumDetailView: View {
                 .padding(.top, 20)
 
                 trackTable
-                    .padding(.horizontal, 21)
+                    .padding(.horizontal, DS.contentInset)
                     .padding(.top, 40)
                     .opacity(stage(0.09))
 
                 releaseCard
-                    .padding(.horizontal, 21)
+                    .padding(.horizontal, DS.contentInset)
                     .padding(.top, 22)
                     .opacity(stage(0.17))
 
                 Spacer(minLength: 8)
 
                 WaveformBar(progress: waveProgress)
-                    .padding(.horizontal, 16)
+                    // 与首页 mini player 同宽（与系统 Tab bar 胶囊对齐）
+                    .padding(.horizontal, DS.tabBarSideInset)
                     .padding(.bottom, 10)
                     .opacity(stage(0.24))
             }
@@ -92,7 +95,8 @@ struct AlbumDetailView: View {
     /// 缓入段 ∫peak·smoothstep = peak·ramp·S(u)；匀速段 peak·Δt；
     /// 缓出段 ∫peak·(1-smoothstep) = peak·ramp·(u - S(u))。
     private func spinDegrees(_ t: TimeInterval) -> Double {
-        let start = 1.2, end = 3.067, ramp = 0.17, peak = Motion.spinPeak
+        let start = 1.2, ramp = 0.17, peak = Motion.spinPeak
+        let end = keepsSpinning ? Double.infinity : 3.067
         guard t > start else { return 0 }
         let S = { (u: Double) -> Double in u * u * u - 0.5 * u * u * u * u }
 
@@ -117,7 +121,7 @@ struct AlbumDetailView: View {
         HStack(spacing: 0) {
             // 苹果系统控件库：GlassButtonStyle（.buttonStyle(.glass)），
             // 形状 / 材质 / 按压高光 / 无障碍全部由系统渲染，工程内不自绘圆。
-            GlassCircleButton(systemImage: "xmark", iconSize: 17,
+            GlassCircleButton(systemImage: "xmark",
                               accessibilityText: "关闭", action: onClose)
 
             Spacer(minLength: 0)
@@ -134,45 +138,72 @@ struct AlbumDetailView: View {
             Spacer(minLength: 0)
 
             // 右上角同样是系统玻璃圆按钮（Button + .buttonStyle(.glass) + .buttonBorderShape(.circle)）
-            GlassCircleButton(systemImage: "cube", iconSize: 17,
+            GlassCircleButton(systemImage: "cube",
                               accessibilityText: "新建") { }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, DS.contentInset)
     }
 
     // MARK: - 曲目表
 
+    // 原片实测（960×720 视频，屏宽 289px ↔ 393pt）：列起点相对内容左缘
+    // Side 0 / BPM 39.5 / 图标 81.5 / 曲名 104.5pt；行距 36pt；表头 12pt，曲名 15pt，播放图标 13pt（字形高 ≈ 曲名大写高）。
+    private enum TL {
+        static let sideW: CGFloat  = 39.5
+        static let bpmW: CGFloat   = 42
+        static let glyphW: CGFloat = 23
+        static let header: CGFloat = 12
+        static let row: CGFloat    = 15
+        static let glyph: CGFloat  = 13
+        static let pitch: CGFloat  = 36
+        static let headerGap: CGFloat = 16.5
+        static let bpmHeader = Color(hex: 0x8F8D8E)
+        static let bpm       = Color(hex: 0x7A787B)
+        static let idle      = Color(hex: 0x625F63)
+    }
+
     private var trackTable: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                Text("Side").frame(width: 38, alignment: .leading)
-                Text("BPM").frame(width: 46, alignment: .leading)
-                Text("").frame(width: 18)
+                Text("Side")
+                    .font(.system(size: TL.header, weight: .bold))
+                    .foregroundStyle(DS.ink)
+                    .frame(width: TL.sideW, alignment: .leading)
+                Text("BPM")
+                    .font(.system(size: TL.header, weight: .regular))
+                    .foregroundStyle(TL.bpmHeader)
+                    .frame(width: TL.bpmW, alignment: .leading)
+                Color.clear.frame(width: TL.glyphW, height: 1)
                 Text("Tracklist")
+                    .font(.system(size: TL.header, weight: .regular))
+                    .foregroundStyle(DS.ink)
                 Spacer(minLength: 0)
             }
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(DS.inkSoft)
-            .padding(.bottom, 20)
+            .padding(.bottom, TL.headerGap)
 
             ForEach(AlbumData.tracks) { track in
                 HStack(spacing: 0) {
                     Text(track.side)
-                        .frame(width: 38, alignment: .leading)
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: TL.row, weight: .bold))
                         .foregroundStyle(DS.ink)
+                        .frame(width: TL.sideW, alignment: .leading)
                     Text("\(track.bpm)")
-                        .frame(width: 46, alignment: .leading)
-                    Text(track.isPlaying ? "Ⅱ" : "▶")
-                        .frame(width: 18, alignment: .leading)
-                        .font(.system(size: 10))
-                        .foregroundStyle(track.isPlaying ? DS.ink : DS.tertiary)
+                        .font(.system(size: TL.row, weight: .regular))
+                        .foregroundStyle(TL.bpm)
+                        .frame(width: TL.bpmW, alignment: .leading)
+                    // SF Symbols：正在播放 = pause.fill，其余 = play.fill
+                    Image(systemName: track.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: TL.glyph, weight: .regular))
+                        .foregroundStyle(DS.ink)
+                        .frame(width: TL.glyphW, alignment: .leading)
+                        .accessibilityLabel(track.isPlaying ? "暂停" : "播放")
                     Text(track.title)
+                        .font(.system(size: TL.row, weight: .regular))
+                        .foregroundStyle(track.isPlaying ? DS.ink : TL.idle)
+                        .lineLimit(1)
                     Spacer(minLength: 0)
                 }
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(track.isPlaying ? DS.ink : DS.secondary)
-                .frame(height: 36)
+                .frame(height: TL.pitch)
             }
         }
     }

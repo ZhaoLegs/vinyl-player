@@ -55,6 +55,7 @@ struct LibraryView: View {
                     zoom: zoom,
                     isPresented: presented,
                     closing: closing,
+                    keepsSpinning: !recordingRequested,
                     motionStart: motionStart,
                     onClose: { close() },
                     onToggleArtwork: { toggleArtwork() }
@@ -111,11 +112,11 @@ struct LibraryView: View {
     private var header: some View {
         HStack {
             // Assets logo mark inside system glass circle (not SF Symbol opticaldisc).
-            GlassCircleButton(assetImage: "logo", iconSize: 17, accessibilityText: "Vinyl") { }
+            GlassCircleButton(assetImage: "logo", accessibilityText: "Vinyl") { }
             Spacer(minLength: 0)
-            GlassCircleButton(systemImage: "cube", iconSize: 17, accessibilityText: "新建") { }
+            GlassCircleButton(systemImage: "cube", accessibilityText: "新建") { }
         }
-        .padding(.horizontal, 27)
+        .padding(.horizontal, DS.contentInset)
         .padding(.top, 6)
     }
 
@@ -134,8 +135,8 @@ struct LibraryView: View {
                 // 所以不需要再手写 LinearGradient mask。
                 .safeAreaBar(edge: .bottom, spacing: 0) {
                     MiniPlayer()
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 6)
+                        .padding(.horizontal, DS.tabBarSideInset)
+                        .padding(.bottom, DS.miniPlayerBottomPadding)
                 }
         } else {
             // iOS 17–25 没有该 API：退回渐变遮罩（纯外观降级）。
@@ -164,7 +165,7 @@ struct LibraryView: View {
                     coverCell(index)
                 }
             }
-            .padding(.horizontal, 20.5)
+            .padding(.horizontal, DS.contentInset)
             .padding(.top, 12)
             .padding(.bottom, 8)
         }
@@ -182,6 +183,8 @@ struct LibraryView: View {
                 .resizable()
                 .aspectRatio(1, contentMode: .fill)
                 .clipShape(RoundedRectangle(cornerRadius: DS.corner))
+                // 原片首页封面带一层柔和投影（网格左右留有 21pt 边距，不会被裁切）
+                .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
                 .background {
                     GeometryReader { geo in
                         Color.clear.preference(key: CoverFrameKey.self,
@@ -253,22 +256,27 @@ struct LibraryView: View {
         }
     }
 
+    /// 用户点封套 = 翻面（A 面 ↔ B 面）。翻面只在点击时发生，打开详情时绝不自动翻；
+    /// 不取消正在进行的自动抽出，唱片照常滑出并继续播放。
     private func toggleArtwork() {
         guard presented && !closing else { return }
-        autoplay = false
-        demoToken += 1
-        let pulling = pull < 0.5
-        withAnimation(reduceMotion ? nil : Motion.animation(pulling ? Motion.pull : Motion.retract)) {
-            pull = pulling ? 1 : 0
+        withAnimation(reduceMotion ? nil : Motion.animation(Motion.flip)) {
+            flip = flip < 90 ? 180 : 0
         }
     }
 
     /// Source f5 is the opening trigger. Offsets below are relative to that trigger.
     @MainActor
     private func runDemo() async {
+        // 减弱动态效果：唱片直接处于抽出 / 播放状态，不做位移动画。
+        if reduceMotion && presented && !closing && autoplay && !recordingRequested { pull = 1; return }
         guard presented && !closing && autoplay && !reduceMotion else { return }
         guard await pause(1_200_000_000) else { return }
+        // 点开封面：唱片自动滑出并开始播放（唱片持续旋转）。
         withAnimation(Motion.animation(Motion.pull)) { pull = 1 }
+        // 正常点击打开到此为止：不自动收回、不自动翻面、不自动关闭。
+        // 只有 --record-demo 录屏启动才继续复现原片的完整演示序列。
+        guard recordingRequested else { return }
 
         guard await pause(1_666_666_667) else { return }
         withAnimation(Motion.animation(Motion.retract)) { pull = 0 }

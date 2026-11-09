@@ -58,14 +58,20 @@ struct WaveformBar: View {
         HStack(spacing: 10) {
             SystemPauseButton(size: 11)
 
-            HStack(spacing: 1.5) {
-                ForEach(0..<count, id: \.self) { i in
-                    let head = i == Int(Double(count) * progress)
-                    Capsule()
-                        .fill(Double(i) < Double(count) * progress ? DS.ink : Color(hex: 0xB9B5B1))
-                        .frame(width: 1.5, height: head ? 24 : barHeight(i))
-                        .shadow(color: head ? .black.opacity(0.28) : .clear, radius: head ? 3 : 0)
+            // 竖线间距按可用宽度自适应：固定 1.5pt 间距时 112 根线会把整页撑到 416pt，
+            // 让首页 / 详情页内容整体向右偏出屏幕（右边距只剩 ~8pt）。
+            GeometryReader { geo in
+                let gap = max(0.5, (geo.size.width - CGFloat(count) * 1.5) / CGFloat(count - 1))
+                HStack(spacing: gap) {
+                    ForEach(0..<count, id: \.self) { i in
+                        let head = i == Int(Double(count) * progress)
+                        Capsule()
+                            .fill(Double(i) < Double(count) * progress ? DS.ink : Color(hex: 0xB9B5B1))
+                            .frame(width: 1.5, height: head ? 24 : barHeight(i))
+                            .shadow(color: head ? .black.opacity(0.28) : .clear, radius: head ? 3 : 0)
+                    }
                 }
+                .frame(width: geo.size.width, height: geo.size.height)
             }
             .frame(height: 26)
         }
