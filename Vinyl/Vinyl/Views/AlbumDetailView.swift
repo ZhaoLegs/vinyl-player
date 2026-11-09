@@ -61,6 +61,10 @@ struct AlbumDetailView: View {
     @State private var barIn: CGFloat = 0
     /// t219u：曲目表可视区底边 / 时间条顶边（同一坐标系实测），最后一行（或相似专辑）底 → 时间条顶 = 24pt
     @State private var listBottomY: CGFloat = 0
+    /// t247u：封套（封面）下缘 / 歌词区顶 —— 歌词滚动区与顶部渐变模糊向上延伸到封面下缘，不再在半路硬切
+    @State private var sleeveBottomY: CGFloat = 0
+    @State private var lyricsTopY: CGFloat = 0
+    private var lyricsGap: CGFloat { sleeveBottomY > 0 && lyricsTopY > sleeveBottomY ? lyricsTopY - sleeveBottomY : 0 }
     @State private var barTopY: CGFloat = 0
     /// t219u：曲目表滚到底的接近程度 0…1（底部模糊在时间条上方的部分随之收拢，不挡最后一行）
     @State private var listEnd: CGFloat = 0
@@ -156,6 +160,7 @@ struct AlbumDetailView: View {
                         commitSwipe(dir: 1)
                     }
                 }
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TrackInset.space)).maxY } action: { sleeveBottomY = $0 }
                 // Breathing room under sleeve → track table (preview dtable gap ≈ 30pt).
                 .padding(.top, 20)
 
@@ -169,12 +174,15 @@ struct AlbumDetailView: View {
                             Group {
                                 if let songs, let song = lyricsSong {
                                     LyricsPanel(song: song, songs: songs, albumTitle: title,
-                                                fromCatalog: collection?.isCatalog ?? false)
+                                                fromCatalog: collection?.isCatalog ?? false,
+                                                topExtend: lyricsGap)
                                 } else if songs != nil {
                                     LyricsPanel.emptyText
                                 }
                             }
-                            // t231u：顶部高斯渐变模糊（与底部 bottomFade 同手法、方向相反）——歌词溶入封面下缘，不再硬切 + 阴影
+                            // t247u：歌词区向上延伸到封面下缘（滚动区不再在封面下 60pt 处被截断）
+                            .padding(.top, -lyricsGap)
+                            // t231u / t247u：顶部高斯渐变模糊从封面下缘一直铺到首行，连续无硬边
                             .overlay(alignment: .top) { lyricsTopFade }
                             .opacity(closing ? contentAlpha : 1)
                             .transition(.asymmetric(
@@ -183,6 +191,7 @@ struct AlbumDetailView: View {
                         }
                     }
                     .animation(.easeOut(duration: Lyrics.fadeOut), value: lyricsMode)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TrackInset.space)).minY } action: { lyricsTopY = $0 }
                     .padding(.top, 40)
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TrackInset.space)).maxY } action: { listBottomY = $0 }
                 } else {
@@ -289,10 +298,10 @@ struct AlbumDetailView: View {
         // 真正的「溶开」由歌词内容自身的 alpha 渐变 mask 完成
         Rectangle()
             .fill(.ultraThinMaterial)
-            .mask(LinearGradient(stops: LyricsTopFade.blurStops, startPoint: .top, endPoint: .bottom))
+            .mask(LinearGradient(stops: LyricsTopFade.materialStops, startPoint: .top, endPoint: .bottom))
             .opacity(LyricsTopFade.materialOpacity)
         .frame(maxWidth: .infinity)
-        .frame(height: LyricsTopFade.height)
+        .frame(height: lyricsGap + LyricsTopFade.height)
         .allowsHitTesting(false)
     }
 
@@ -1026,6 +1035,18 @@ enum LyricsTopFade {
         let x = Double(i) / 10; let u = min(1, (1 - x) / 0.7); let y = u * u * (3 - 2 * u)
         return .init(color: .black.opacity(1 - (1 - alphaFloor) * (1 - y)), location: x)
     }
+    /// t247u：延伸到封面下缘的内容 alpha：封面下缘 0 → 带底 1（smoothstep，startPoint .bottom）——完全溶开，没有可见边
+    static let spanAlphaStops: [Gradient.Stop] = (0...12).map { i in
+        let x = Double(i) / 12; let u = 1 - x; let y = u * u * (3 - 2 * u)
+        return .init(color: .black.opacity(y), location: x)
+    }
+    /// t247u：模糊层遮罩（startPoint .top）：上缘 0 → 25% 处最强 → 底 0，上下都不出现 material 硬边
+    static let materialStops: [Gradient.Stop] = (0...12).map { i in
+        let x = Double(i) / 12
+        let up = min(1, x / 0.25), down = min(1, (1 - x) / 0.75)
+        let y = (up * up * (3 - 2 * up)) * (down * down * (3 - 2 * down))
+        return .init(color: .black.opacity(y), location: x)
+    }
     /// 顶部满模糊 → 底部 0（smoothstep）
     static let blurStops: [Gradient.Stop] = (0...10).map { i in
         let x = Double(i) / 10; let u = min(1, (1 - x) / 0.7); let y = u * u * (3 - 2 * u)
@@ -1167,7 +1188,8 @@ enum Lyrics {
     /// 两侧平分放大余量：当前行居中放大后仍不出界，且换行位置与非当前行一致（不重排）
     static let scaleRoom: CGFloat = 40
     /// t243u：非当前行模糊 1.5 / 2 / 2.5pt（最多 2.5）
-    static func blur(distance d: Int) -> CGFloat { d <= 0 ? 0 : min(2.5, 1.5 + CGFloat(d - 1) * 0.5) }
+    /// t247u：再降 → 0.6 / 0.9 / 1.2pt（最多 1.2）
+    static func blur(distance d: Int) -> CGFloat { d <= 0 ? 0 : min(1.2, 0.6 + CGFloat(d - 1) * 0.3) }
     /// t244u：当前行 1.0 → 1.12 弹性放大（上一行同一弹簧缩回），明显可见的小回弹
     static let scaleSpring = Animation.spring(duration: 0.55, bounce: 0.3)
     /// t244u：已唱字上浮 2pt；正在唱的字带柔光
@@ -1399,6 +1421,8 @@ struct LyricsPanel: View {
     let songs: [Song]
     let albumTitle: String
     let fromCatalog: Bool
+    /// t247u：歌词区向上延伸到封面下缘的高度（内容顶部留白 + alpha 渐变带同步加高）
+    var topExtend: CGFloat = 0
     @State private var result: LyricsResult?
     @State private var loadedID: MusicItemID?
     /// 播放时钟 0.25s 一跳：记下最近一次的位置与时刻，帧间按真实时间外推
@@ -1437,13 +1461,13 @@ struct LyricsPanel: View {
                         .shadow(color: .black.opacity(0.10), radius: 1.5, y: 0.5)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.horizontal, DS.contentInset)
-                        .padding(.top, Lyrics.topInset)
+                        .padding(.top, Lyrics.topInset + topExtend)
                         .padding(.bottom, Lyrics.bottomGap)
                 }
                 .mask {
                     VStack(spacing: 0) {
-                        LinearGradient(stops: LyricsTopFade.alphaStops, startPoint: .bottom, endPoint: .top)
-                            .frame(height: LyricsTopFade.height)
+                        LinearGradient(stops: LyricsTopFade.spanAlphaStops, startPoint: .bottom, endPoint: .top)
+                            .frame(height: topExtend + LyricsTopFade.height)
                         Color.black
                     }
                 }
@@ -1513,7 +1537,7 @@ struct LyricsPanel: View {
                 // 一点点暗色字影（整组一次，不逐行叠加）
                 .shadow(color: .black.opacity(0.10), radius: 1.5, y: 0.5)
                 .padding(.horizontal, DS.contentInset)
-                .padding(.top, Lyrics.topInset)
+                .padding(.top, Lyrics.topInset + topExtend)
                 // t175u：歌词最后一行最多停在时间条顶部上方 24pt（不再留 260pt 空白，scrollTo 被内容边界夹住，不会把歌词推到顶部）
                 .padding(.bottom, Lyrics.bottomGap)
                 // 换行：缩放 / 透明度 / 模糊 与滚动同一条阻尼曲线（出入行交叉淡化，无 stagger）
@@ -1522,8 +1546,8 @@ struct LyricsPanel: View {
             // t231u：内容本身顶部 alpha 渐变（配合 overlay 的 material 模糊）——上滚的行溶入背景
             .mask {
                 VStack(spacing: 0) {
-                    LinearGradient(stops: LyricsTopFade.alphaStops, startPoint: .bottom, endPoint: .top)
-                        .frame(height: LyricsTopFade.height)
+                    LinearGradient(stops: LyricsTopFade.spanAlphaStops, startPoint: .bottom, endPoint: .top)
+                        .frame(height: topExtend + LyricsTopFade.height)
                     Color.black
                 }
             }
