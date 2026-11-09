@@ -5,70 +5,98 @@ import MusicKit
 ///
 /// 物理细节：唱片的**沟槽与中心标签**随盘转动，但**镜面反光是环境反射，方向固定**，
 /// 不能跟着转。因此把旋转层与固定高光层拆开，转起来才有真实的黑胶质感。
+/// t194u/t195u：黑胶唱片。对照参考图：密同心沟槽（亮暗交替捕光）、固定软径向高光、
+/// 软投影、封面中心标签 + 小暗色主轴孔。只优化唱片，不加唱臂；一张盘、播放时转、孔行为不变。
 struct VinylDiscView: View {
     let angle: Angle
     var pull: CGFloat = 0
-    /// 中心标签 = 该专辑自己的封面（等比 aspect-fill 进圆形标签，演示用 Assets 封面，Apple Music 用 MusicKit 封面）
     var coverName: String = DS.coverName(AlbumData.featuredIndex)
     var artwork: Artwork? = nil
 
     var body: some View {
         ZStack {
-            // 底色
+            // 底色：中心略亮 → 外缘深黑，给沟槽一个暗底
             Circle()
-                .fill(RadialGradient(colors: [Color(hex: 0x1E1E21), Color(hex: 0x0B0B0D), Color(hex: 0x151517)],
-                                    center: .center, startRadius: 8, endRadius: DS.disc / 2))
+                .fill(RadialGradient(colors: [
+                    Color(hex: 0x222226), Color(hex: 0x121214), Color(hex: 0x070708)
+                ], center: .center, startRadius: DS.discLabel / 2, endRadius: DS.disc / 2))
 
-            // ① 随盘旋转：沟槽 + 扇光 + 中心标签
+            // ① 随盘旋转：沟槽 + 中心标签（高光不跟转）
             ZStack {
-                // t144u：沟槽是静态图形，抽成 Equatable 子视图 → 唱片每帧转动（TimelineView）时不再重绘 Canvas
                 VinylGrooves().equatable()
-                Circle()
-                    .fill(AngularGradient(colors: [
-                        .white.opacity(0.10), .clear, .clear,
-                        .white.opacity(0.055), .clear, .clear
-                    ], center: .center))
-                    .blendMode(.screen)
                 DiscLabel(coverName: coverName, artwork: artwork, size: DS.discLabel)
-                    .overlay(Circle().fill(.white).frame(width: 5, height: 5))   // 主轴孔在最上层
+                // 小暗色主轴孔（参考图：标签正中一小颗黑点）
+                Circle()
+                    .fill(Color(hex: 0x050506))
+                    .frame(width: 7, height: 7)
+                    .overlay(Circle().stroke(.black.opacity(0.55), lineWidth: 0.6))
             }
             .clipShape(Circle())
             .rotationEffect(angle)
 
-            // ② 固定环境镜面反光（不随盘转）：右下主高光 + 左上弱高光
+            // ② 固定软径向高光（环境反射，不随盘转）：约 11 点 / 5 点两道锥形光带
             Circle()
                 .fill(AngularGradient(colors: [
-                    .clear, .clear, .white.opacity(0.05),
-                    .white.opacity(0.20), .clear, .white.opacity(0.11), .clear
-                ], center: .center))
+                    .clear,
+                    .white.opacity(0.03),
+                    .white.opacity(0.16),
+                    .white.opacity(0.04),
+                    .clear, .clear,
+                    .white.opacity(0.02),
+                    .white.opacity(0.10),
+                    .white.opacity(0.03),
+                    .clear, .clear, .clear
+                ], center: .center, angle: .degrees(-40)))
                 .blendMode(.screen)
-            Circle().stroke(.white.opacity(0.08), lineWidth: 1)
+                .mask(
+                    RadialGradient(colors: [.clear, .white, .white, .clear],
+                                   center: .center,
+                                   startRadius: DS.discLabel / 2 + 2,
+                                   endRadius: DS.disc / 2 - 1)
+                )
+            // 外缘细亮边 + 内缘暗晕，增加厚度
+            Circle().stroke(.white.opacity(0.10), lineWidth: 0.8)
             Circle()
-                .stroke(.black.opacity(0.55), lineWidth: 12)
-                .blur(radius: 12)
+                .stroke(.black.opacity(0.45), lineWidth: 10)
+                .blur(radius: 10)
                 .clipShape(Circle())
         }
         .frame(width: DS.disc, height: DS.disc)
-        // 抽出时唱片离开封套、投影随位移加深，制造景深
-        .shadow(color: .black.opacity(Double(0.17 + 0.06 * pull)),   // 原 0.35 + 0.12·pull，减半
-                radius: 20 + 12 * pull, y: 10 + 8 * pull)
+        // 软投影：抽出时加深
+        .shadow(color: .black.opacity(Double(0.22 + 0.10 * pull)),
+                radius: 18 + 10 * pull, y: 8 + 6 * pull)
     }
 }
 
-/// 同心沟槽（静态；外观与原 Canvas 完全一致）
+/// t194u：密同心沟槽。亮暗交替细环，捕到固定高光时像真实沟槽反光；静态 Equatable → 转盘不重绘
 struct VinylGrooves: View, Equatable {
     static func == (a: VinylGrooves, b: VinylGrooves) -> Bool { true }
     var body: some View {
         Canvas { context, size in
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            var r: CGFloat = 26
-            while r < size.width / 2 - 3 {
+            let outer = size.width / 2 - 1.5
+            let inner = DS.discLabel / 2 + 1.5
+            var r = inner
+            var i = 0
+            while r < outer {
                 let rect = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
-                context.stroke(Path(ellipseIn: rect),
-                               with: .color(.white.opacity(0.045)),
-                               lineWidth: 0.7)
-                r += 2.4
+                // 亮环 / 暗环交替；偶数为捕光细亮线，奇数为微暗槽
+                if i % 2 == 0 {
+                    context.stroke(Path(ellipseIn: rect),
+                                   with: .color(.white.opacity(0.07)),
+                                   lineWidth: 0.55)
+                } else {
+                    context.stroke(Path(ellipseIn: rect),
+                                   with: .color(.black.opacity(0.22)),
+                                   lineWidth: 0.7)
+                }
+                r += 1.15
+                i += 1
             }
+            // 标签外一圈稍粗的分隔环
+            let ring = DS.discLabel / 2 + 0.8
+            let rr = CGRect(x: center.x - ring, y: center.y - ring, width: ring * 2, height: ring * 2)
+            context.stroke(Path(ellipseIn: rr), with: .color(.white.opacity(0.12)), lineWidth: 1.1)
         }
     }
 }

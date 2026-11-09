@@ -377,6 +377,7 @@ struct LibraryView: View {
         // 转场期间源格子隐藏：屏幕上始终只有一个封面
         .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection?.id == collection.id,
                              closing: closing))
+        .modifier(WaveRipple(t: zm.waveT, distance: waveDistance(1000 + index), amp: zm.waveAmp, enabled: !reduceMotion))
         .accessibilityLabel("\(collection.title)，\(collection.artist)")
         // t192u：长按 = 系统原生上下文菜单（抬起预览 + 玻璃材质由系统渲染）；点按仍是 Button 打开详情，滚动不受影响
         .contextMenu {
@@ -515,6 +516,20 @@ struct LibraryView: View {
         .buttonStyle(.plain)
         .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection == nil && selectedIndex == index,
                              closing: closing))
+        .modifier(WaveRipple(t: zm.waveT, distance: waveDistance(index), amp: zm.waveAmp, enabled: !reduceMotion))
+    }
+
+    /// t191u：格子中心到波源格子中心的欧氏距离（pt）；没有波时 −1
+    private func waveDistance(_ key: Int) -> Double {
+        guard let o = zm.waveOrigin, let a = cellFrames[key], let b = cellFrames[o] else { return -1 }
+        return Double(hypot(a.midX - b.midX, a.midY - b.midY))
+    }
+    /// t191u：从 origin 格子沿半径一圈圈向外扩散的涟漪（叠加在网格整体缩放之上）
+    private func startWave(from origin: Int?, amplitude: Double) {
+        guard let origin, !reduceMotion else { return }
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { zm.waveOrigin = origin; zm.waveAmp = amplitude; zm.waveT = 0 }
+        withAnimation(.linear(duration: Wave.total)) { zm.waveT = Wave.total }
     }
 
 
@@ -612,6 +627,8 @@ struct LibraryView: View {
         motionStart = Date()
         // t187u：原片打开 = 整个网格同步缩到 0.95（f5→f9，≈0.13s，无逐格错峰），模糊在缩小之后才开始
         if !reduceMotion { withAnimation(GridMotion.open) { zm.gridShrink = 1 } }
+        // t191u：打开时从点按的格子发出一圈较小的涟漪（模糊开始前可见）
+        startWave(from: targetKey, amplitude: Wave.openAmplitude)
         // 一条主 spring 驱动封面缩放与背景模糊（同一进度，不再各跑一条曲线）；
         // 详情文字用带 delay 的从曲线错峰淡入，形成「先放大 → 再显内容」的节奏。
         landed = false
@@ -753,6 +770,14 @@ struct LibraryView: View {
         autoplay = false
         // t187u：原片关闭 = 清晰网格先停在 0.95，封面快落位时整体放大回 1（f171→f184，≈0.43s，无过冲、无逐格错峰）
         withAnimation(reduceMotion ? nil : GridMotion.close) { zm.gridShrink = 0 }
+        // t191u：飞行封面落位（关闭弹簧逻辑完成）那一刻从落点格子发出涟漪；落点格子此时仍被封面盖住，
+        // 封面移除时（再约 0.3–0.4s）它的振荡已回到 ≈1.0 → 交接无跳变
+        let landKey = targetKey
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Motion.zoomFluid ? Motion.fluidClose : 0.31))
+            guard closing || !presented else { return }
+            startWave(from: landKey, amplitude: Wave.closeAmplitude)
+        }
         demoToken += 1
         withAnimation(
             reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomCurve.closeAnimation,
@@ -969,9 +994,51 @@ enum GridMotion {
     /// 打开：f5→f9 缩到 0.95（≈0.13s，ease-out）
     static let open: Animation = .timingCurve(0.556, -0.094, 0.592, 1.094, duration: 0.13)
     /// 模糊 / 变暗在缩小基本完成后才开始（原片 f9→f10 起才糊）
-    static let blurDelay: Double = 0.12
+    static let blurDelay: Double = 0.16
     /// 关闭：清晰网格停在 0.95，0.12s 后用 0.43s 放大回 1（原片 f171→f184，拟合 bezier）
     static let close: Animation = .timingCurve(0.293, 0.305, 0.470, 0.829, duration: 0.43).delay(0.12)
+}
+
+/// t191u：径向涟漪。每个格子延迟 d / speed 后做一次欠阻尼弹簧振荡：
+/// s = 1 − a(d)·f(τ)/f_peak，f(τ) = e^(−ζωτ)·sin(ω_d τ)；ω = 2π/0.45s，ζ = 0.5
+/// → 1 → 下沉到 1 − a(d)（τ≈0.087s）→ 轻微回弹 ≈ 1 + 0.16·a(d)（τ≈0.35s）→ 1
+/// a(d) = A·e^(−d/350pt)；关闭 A = 0.10（中心 0.90），打开 A = 0.05
+enum Wave {
+    static let closeAmplitude = 0.10
+    static let openAmplitude = 0.05
+    static let falloff = 350.0          // pt
+    static let speed = 1400.0           // pt/s
+    static let response = 0.45
+    static let damping = 0.5
+    static let omega = 2 * Double.pi / response
+    static let omegaD = omega * (1 - damping * damping).squareRoot()
+    static let decay = damping * omega
+    static let tPeak = atan(omegaD / decay) / omegaD
+    static let fPeak = exp(-decay * tPeak) * sin(omegaD * tPeak)
+    static let settle = 0.9             // 单格振荡持续
+    static let total = 1000.0 / speed + settle
+    static func scale(t: Double, distance d: Double, amplitude A: Double) -> Double {
+        let tau = t - d / speed
+        guard tau > 0, tau < settle else { return 1 }
+        let f = exp(-decay * tau) * sin(omegaD * tau) / fPeak
+        return 1 - A * exp(-d / falloff) * f
+    }
+}
+
+struct WaveRipple: AnimatableModifier {
+    var t: CGFloat
+    let distance: Double
+    let amp: Double
+    let enabled: Bool
+    var animatableData: CGFloat {
+        get { t }
+        set { t = newValue }
+    }
+    func body(content: Content) -> some View {
+        let s: CGFloat = enabled && distance >= 0 && Double(t) < Wave.total
+            ? CGFloat(Wave.scale(t: Double(t), distance: distance, amplitude: amp)) : 1
+        return content.visualEffect { c, _ in c.scaleEffect(s, anchor: .center) }
+    }
 }
 
 struct GridRipple: AnimatableModifier {
@@ -1047,6 +1114,10 @@ final class LibraryZoomModel: ObservableObject {
     @Published var flip: Double = 0
     /// t187u：网格整体缩小量 0…1（打开 → 1，关闭 → 0）
     @Published var gridShrink: CGFloat = 0
+    /// t191u：涟漪时钟（秒）、波源格子、中心振幅
+    @Published var waveT: CGFloat = 10
+    @Published var waveOrigin: Int? = nil
+    @Published var waveAmp: Double = 0.10
     /// t160u：封面翻到背面 = 歌词模式
     @Published var lyricsMode: Bool = false
     @Published var demoToken: Int = 0
