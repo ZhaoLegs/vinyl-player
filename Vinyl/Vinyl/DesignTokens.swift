@@ -80,7 +80,7 @@ enum Motion {
     /// These replace the earlier 8/30 and 10/30 guesses. Not a claim of pixel-perfect playback.
     /// 封面放大 / 缩回转场：弹簧，带轻微可见回弹（开与关同一组参数）。
     /// response 0.5s、dampingFraction 0.72 ≈ 过冲 ~6%，CoverFlight / ArtworkHandoff 把过冲映射成封面的轻微放大 / 缩小。
-    static let zoomSpring: (response: Double, damping: Double) = (0.5, 0.72)
+    static let zoomSpring: (response: Double, damping: Double) = (0.55, 0.6)   // 原 (0.5, 0.72) 过冲仅 ~3.8% 看不出；0.6 阻尼 ≈ 9.5% 过冲
     static let zoomDuration: Double = 0.5
     /// 飞行封面 → 详情封套的交接点（弹簧进度首次 ≥ 0.97；0.72 阻尼下回落不会再低于它）
     static let handoff: CGFloat = 0.97
