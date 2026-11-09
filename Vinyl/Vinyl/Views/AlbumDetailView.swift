@@ -290,7 +290,7 @@ struct AlbumDetailView: View {
         Rectangle()
             .fill(.ultraThinMaterial)
             .mask(LinearGradient(stops: LyricsTopFade.blurStops, startPoint: .top, endPoint: .bottom))
-            .opacity(0.6)
+            .opacity(LyricsTopFade.materialOpacity)
         .frame(maxWidth: .infinity)
         .frame(height: LyricsTopFade.height)
         .allowsHitTesting(false)
@@ -301,8 +301,11 @@ struct AlbumDetailView: View {
             Rectangle()
                 .fill(.regularMaterial)
                 .mask(LinearGradient(stops: BottomFade.blurStops, startPoint: .top, endPoint: .bottom))
+                .opacity(lyricsMode ? 0.5 : 1)      // t243u：歌词页底部模糊减半
             LinearGradient(stops: BottomFade.tintStops, startPoint: .top, endPoint: .bottom)
+                .opacity(lyricsMode ? 0.5 : 1)
         }
+        .animation(.easeOut(duration: 0.25), value: lyricsMode)
         .frame(maxWidth: .infinity)
         // t219u：曲目表滚到底时，时间条上方的模糊从 110pt 收到 24pt（只盖住 24pt 间距），最后一行不被模糊
         .frame(height: BottomFade.height - (BottomFade.above - TrackInset.gap) * (lyricsMode ? 0 : listEnd))
@@ -1015,7 +1018,14 @@ struct ScrollEndProximity: ViewModifier {
 /// t166u：底部渐变模糊（不含安全区的可见高度；加上 34pt 安全区 ≈ 196pt）
 /// t231u：歌词顶部渐变模糊（封面下缘 → 歌词溶开；与 BottomFade 同手法，方向相反）
 enum LyricsTopFade {
-    static let height: CGFloat = 72
+    static let height: CGFloat = 38   // t243u：72 → 38pt，强度减半（见 materialOpacity / alphaFloor）
+    static let materialOpacity: Double = 0.3   // 0.6 → 0.3
+    /// 内容 alpha 渐变：顶边最低 0.35（原 0 → 完全溶掉），保证首行清楚
+    static let alphaFloor: Double = 0.35
+    static let alphaStops: [Gradient.Stop] = (0...10).map { i in
+        let x = Double(i) / 10; let u = min(1, (1 - x) / 0.7); let y = u * u * (3 - 2 * u)
+        return .init(color: .black.opacity(1 - (1 - alphaFloor) * (1 - y)), location: x)
+    }
     /// 顶部满模糊 → 底部 0（smoothstep）
     static let blurStops: [Gradient.Stop] = (0...10).map { i in
         let x = Double(i) / 10; let u = min(1, (1 - x) / 0.7); let y = u * u * (3 - 2 * u)
@@ -1141,22 +1151,28 @@ enum ThemeColor {
 }
 
 enum Lyrics {
-    static let merge: Double = 0.3         // t162u：封套与唱片向中间合拢：spring 0.3s，bounce 0
+    static let merge: Double = 0.45        // t245u：0.3 → 0.45（×1.5）；t162u：封套与唱片向中间合拢：spring 0.3s，bounce 0
     static let flip: Double = 0.5          // 封套 Y 轴翻转：spring 0.5s，bounce 0
     static let fadeOut: Double = 0.2       // 曲目表淡出
     static let fadeIn: Double = 0.25       // 歌词淡入
-    static let fadeInDelay: Double = 0.3   // t162u：歌词在翻转阶段（合拢 0.3s 之后）淡入
+    static let fadeInDelay: Double = merge // t245u：随合拢时长 0.3 → 0.45；t162u：歌词在翻转阶段（合拢 0.3s 之后）淡入
     static let anchor = UnitPoint(x: 0.5, y: 1.0 / 3)   // 当前行滚到列表高度 1/3 处
     static let lineGap: CGFloat = 16      // t240u：行距 ≈ 字高（17pt 粗体）
     // t240u：Apple Music 风格
     static let fontSize: CGFloat = 17
     static let activeScale: CGFloat = 1.12
-    static let dimOpacity: Double = 0.35     // 非当前行
+    static let dimOpacity: Double = 0.42     // 非当前行（t243u：0.35 → 0.42，6–8 行可读）
     static let unsungOpacity: Double = 0.5   // 当前行未唱部分
     static let scroll = Animation.spring(duration: 0.45, bounce: 0)   // 阻尼 ease-out，整段一起走
     /// 右侧预留放大余量：当前行以左缘为锚放大 1.12 后仍不出界，且换行位置与非当前行一致（不重排）
     static let scaleRoom: CGFloat = 40
-    static func blur(distance d: Int) -> CGFloat { d <= 0 ? 0 : min(5, 3 + CGFloat(d - 1) * 0.5) }
+    /// t243u：非当前行模糊 1.5 / 2 / 2.5pt（最多 2.5）
+    static func blur(distance d: Int) -> CGFloat { d <= 0 ? 0 : min(2.5, 1.5 + CGFloat(d - 1) * 0.5) }
+    /// t244u：当前行 1.0 → 1.12 弹性放大（上一行同一弹簧缩回），明显可见的小回弹
+    static let scaleSpring = Animation.spring(duration: 0.55, bounce: 0.3)
+    /// t244u：已唱字上浮 2pt；正在唱的字带柔光
+    static let lift: CGFloat = 2
+    static let glowRadius: CGFloat = 5
     static var font: Font { .system(size: fontSize, weight: .bold) }
     static let topInset: CGFloat = LyricsTopFade.height * 0.55   // t231u：首行落在顶部模糊带之下，可读；上方溶开
     static let bottomGap: CGFloat = 24     // t175u：最后一行底 → 时间条顶 = 24pt
@@ -1426,7 +1442,7 @@ struct LyricsPanel: View {
                 }
                 .mask {
                     VStack(spacing: 0) {
-                        LinearGradient(stops: LyricsTopFade.blurStops, startPoint: .bottom, endPoint: .top)
+                        LinearGradient(stops: LyricsTopFade.alphaStops, startPoint: .bottom, endPoint: .top)
                             .frame(height: LyricsTopFade.height)
                         Color.black
                     }
@@ -1485,6 +1501,7 @@ struct LyricsPanel: View {
                         .padding(.trailing, Lyrics.scaleRoom)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .scaleEffect(isCurrent ? Lyrics.activeScale : 1, anchor: .leading)
+                        .animation(Lyrics.scaleSpring, value: isCurrent)
                         // 未在播这首 / 尚未到第一句：全部 0.5、不模糊（可读）
                         .opacity(isCurrent ? 1 : (current < 0 ? Lyrics.unsungOpacity : Lyrics.dimOpacity))
                         .blur(radius: Lyrics.blur(distance: d))
@@ -1505,7 +1522,7 @@ struct LyricsPanel: View {
             // t231u：内容本身顶部 alpha 渐变（配合 overlay 的 material 模糊）——上滚的行溶入背景
             .mask {
                 VStack(spacing: 0) {
-                    LinearGradient(stops: LyricsTopFade.blurStops, startPoint: .bottom, endPoint: .top)
+                    LinearGradient(stops: LyricsTopFade.alphaStops, startPoint: .bottom, endPoint: .top)
                         .frame(height: LyricsTopFade.height)
                     Color.black
                 }
@@ -1588,6 +1605,20 @@ struct KaraokeLine: View {
         TimelineView(.animation(paused: !playing)) { tl in
             let dt = playing ? min(Karaoke.maxExtrapolate, max(0, tl.date.timeIntervalSince(anchorDate))) : 0
             let n = filled(at: anchorPos + dt)
+            if #available(iOS 18.0, *) {
+                // t244u：TextRenderer 逐字绘制 —— 擦亮 0.5 → 1.0、已唱字上浮 2pt、正在唱的字柔光（只这一行逐帧）
+                Text(verbatim: line.text)
+                    .font(Lyrics.font)
+                    .foregroundStyle(theme.ink)
+                    .textRenderer(KaraokeRenderer(n: n, count: chars.count, soft: Self.softWidth, glow: theme.ink))
+            } else {
+                legacy(n)
+            }
+        }
+    }
+
+    private func legacy(_ n: Double) -> Text {
+        do {
             let cs = chars
             let w = Self.softWidth
             // [0, lit) 全亮；[lit, dim) 渐变带；[dim, end) 未唱
@@ -1605,6 +1636,33 @@ struct KaraokeLine: View {
                 text = Text("\(text)\(Text(verbatim: String(cs[dimStart...])).foregroundColor(lo))")
             }
             return text.font(Lyrics.font)
+        }
+    }
+}
+
+/// t244u：逐字（glyph）绘制。字序按 glyph 顺序映射到字符进度（CJK 一字一 glyph；拉丁连字时按比例近似）。
+@available(iOS 18.0, *)
+struct KaraokeRenderer: TextRenderer {
+    var n: Double
+    var count: Int
+    var soft: Double
+    var glow: Color
+
+    func draw(layout: Text.Layout, in ctx: inout GraphicsContext) {
+        let slices = layout.flatMap { $0 }.flatMap { $0 }
+        let scale = Double(max(1, count)) / Double(max(1, slices.count))
+        for (g, slice) in slices.enumerated() {
+            let i = Double(g) * scale
+            let u = max(0, min(1, (n - i) / soft))
+            let k = u * u * (3 - 2 * u)
+            var c = ctx
+            c.opacity = Lyrics.unsungOpacity + (1 - Lyrics.unsungOpacity) * k
+            c.translateBy(x: 0, y: -Lyrics.lift * k)
+            let edge = k > 0 && k < 1 ? sin(.pi * k) : 0
+            if edge > 0.02 {
+                c.addFilter(.shadow(color: glow.opacity(0.5 * edge), radius: Lyrics.glowRadius))
+            }
+            c.draw(slice)
         }
     }
 }
