@@ -60,7 +60,8 @@ struct LibraryView: View {
         } else {
             homeBody
                 // t196u：原生搜索 sheet（.searchable）
-                .sheet(isPresented: $showingSearch) {
+                .sheet(isPresented: Binding(get: { Features.searchEnabled && showingSearch },
+                                            set: { showingSearch = $0 })) {
                     LibrarySearchSheet(
                         onOpen: { c in
                             showingSearch = false
@@ -209,14 +210,33 @@ struct LibraryView: View {
             }
             Spacer(minLength: 0)
             // t196u：右上角 = 搜索（同款玻璃圆按钮）；原 cube 刷新入口移到左上长按
-            GlassCircleButton(systemImage: "magnifyingglass", accessibilityText: "搜索") {
-                if music.authorized { showingSearch = true }
-                else { connectMusic() }
+            // t216u：搜索先隐藏（Features.searchEnabled）；右上角留空，不恢复 cube
+            if Features.searchEnabled {
+                GlassCircleButton(systemImage: "magnifyingglass", accessibilityText: "搜索") {
+                    if music.authorized { showingSearch = true }
+                    else { connectMusic() }
+                }
             }
+        }
+        // t217u：顶部居中显示软件名（CFBundleDisplayName，未设置则 "Vinyl"），与左右按钮垂直居中；
+        // 详情打开 / 转场期间隐藏，不会透到详情页
+        .overlay {
+            Text(Self.appName)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .opacity(presented ? 0 : 1)
+                .animation(.easeOut(duration: 0.12), value: presented)
+                .allowsHitTesting(false)
+                .accessibilityAddTraits(.isHeader)
         }
         .padding(.horizontal, DS.contentInset)
         .padding(.top, 6)
     }
+    private static let appName: String = {
+        let n = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+        return (n?.isEmpty == false) ? n! : "Vinyl"
+    }()
 
     /// Both bars belong to the scroll view, so the system can soften both edges.
     @ViewBuilder
@@ -1169,6 +1189,12 @@ final class LibraryZoomModel: ObservableObject {
 }
 
 /// t158u：演示数据只在模拟器录屏 / 调试参数下使用；正常启动永远不显示假数据
+/// t216u：功能开关（关掉的功能代码保留，只是不出现在界面上）
+enum Features {
+    /// 首页右上角搜索按钮 + 搜索面板
+    static let searchEnabled = false
+}
+
 enum DemoMode {
     static let enabled: Bool = {
         let a = ProcessInfo.processInfo.arguments
