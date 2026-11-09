@@ -237,7 +237,7 @@ struct LibraryView: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { gridFrame = $0 }
         .modifier(GridRipple(progress: zoom, closing: closing,
                              anchor: gridAnchorUnit,
-                             enabled: Motion.zoomPerAxis && !reduceMotion))
+                             enabled: (Motion.zoomPerAxis || Motion.zoomFluid) && !reduceMotion))
     }
 
     /// 屏幕锚点换算成网格自身坐标系的 UnitPoint
@@ -427,7 +427,8 @@ struct LibraryView: View {
             .modifier(CoverFlight(progress: zoom, start: start, end: end, closing: closing, landed: landed,
                                  discCover: DS.coverName(selectedIndex),
                                  discArtwork: selectedCollection?.artwork,
-                                 perAxis: Motion.zoomPerAxis && !reduceMotion))
+                                 perAxis: Motion.zoomPerAxis && !reduceMotion,
+                                 fluid: Motion.zoomFluid && !reduceMotion))
             .opacity(presented && !reduceMotion ? 1 : 0)
     }
 
@@ -589,8 +590,7 @@ struct LibraryView: View {
             contentAlpha = 0
         }
         // t121u：模糊背景自上而下渐变擦除（Ref 关闭曲线形状，0.4s）
-        withAnimation(reduceMotion ? .easeOut(duration: 0.15)
-                      : .timingCurve(0.256, 0.091, 0.141, 0.888, duration: 0.4)) {
+        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.closeBackdrop) {
             wipe = 1
         }
     }
@@ -688,6 +688,8 @@ private struct CoverFlight: AnimatableModifier {
     var discCover: String = DS.coverName(AlbumData.featuredIndex)
     var discArtwork: Artwork? = nil
     var perAxis: Bool = true
+    /// t147u：单一进度 + 弧线（与 perAxis 互斥）
+    var fluid: Bool = false
 
     var animatableData: CGFloat {
         get { progress }
@@ -701,19 +703,32 @@ private struct CoverFlight: AnimatableModifier {
         // t128u：逐轴曲线（Ref）：progress 是线性时间；x / y / 尺寸各自按原片拟合的贝塞尔取值 → 弧线轨迹。
         // 关闭时 progress 1→0，u = 已用时间 = 1 − progress，分量 = 1 − closeCurve(u)。
         let u = Double(min(1, max(0, closing ? 1 - p : p)))
-        let fx: CGFloat = !perAxis ? p : CGFloat(closing ? 1 - FlightCurves.value(FlightCurves.closeX, u) : FlightCurves.value(FlightCurves.openX, u))
+        let fluidSize: CGFloat = p - Motion.fluidSizeLag * p * (1 - p)
+        let fx: CGFloat = fluid ? p : !perAxis ? p : CGFloat(closing ? 1 - FlightCurves.value(FlightCurves.closeX, u) : FlightCurves.value(FlightCurves.openX, u))
         let fy: CGFloat = !perAxis ? p : CGFloat(closing ? 1 - FlightCurves.value(FlightCurves.closeY, u) : FlightCurves.value(FlightCurves.openY, u))
-        let fs: CGFloat = !perAxis ? p : CGFloat(closing ? 1 - FlightCurves.value(FlightCurves.closeS, u) : FlightCurves.value(FlightCurves.openS, u))
+        let fs: CGFloat = fluid ? fluidSize : !perAxis ? p : CGFloat(closing ? 1 - FlightCurves.value(FlightCurves.closeS, u) : FlightCurves.value(FlightCurves.openS, u))
         let clamped: CGFloat = min(1, max(0, fs))
         // t138u：起点格子跟着网格整体缩放（锚点 = 屏幕 46.5% / 68%），落点永远与正在缩放的格子重合
-        let gs: CGFloat = perAxis ? CGFloat(FlightCurves.gridScale(u, closing: closing)) : 1
+        let gs: CGFloat = (perAxis || fluid) ? CGFloat(FlightCurves.gridScale(u, closing: closing)) : 1
         let screen = UIScreen.main.bounds.size
         let ax = FlightCurves.gridAnchor.x * screen.width, ay = FlightCurves.gridAnchor.y * screen.height
         let sW = start.width * gs
         let sX = ax + (start.midX - ax) * gs, sY = ay + (start.midY - ay) * gs
         let width: CGFloat = sW + (end.width - sW) * fs
-        let midX: CGFloat = sX + (end.midX - sX) * fx
-        let midY: CGFloat = sY + (end.midY - sY) * fy
+        var midX: CGFloat = sX + (end.midX - sX) * fx
+        var midY: CGFloat = sY + (end.midY - sY) * fy
+        if fluid {
+            // 二次贝塞尔弧线：控制点 = 弦中点 + 法向 bow，朝 (终点 x, 起点 y) 一侧（先横后竖）
+            let dx = end.midX - sX, dy = end.midY - sY
+            let len = max(1, (dx * dx + dy * dy).squareRoot())
+            var nx = -dy / len, ny = dx / len
+            let cornerX = end.midX - (sX + dx / 2), cornerY = sY - (sY + dy / 2)
+            if nx * cornerX + ny * cornerY < 0 { nx = -nx; ny = -ny }
+            let cx = sX + dx / 2 + nx * Motion.fluidBow, cy = sY + dy / 2 + ny * Motion.fluidBow
+            let t = p, it = 1 - p
+            midX = it * it * sX + 2 * it * t * cx + t * t * end.midX
+            midY = it * it * sY + 2 * it * t * cy + t * t * end.midY
+        }
         // 原图放大：飞行全程就是格子那张图本身（同图、同裁切、方形等比），只有圆角随尺寸连续变化。
         // 封套挖孔只在尺寸最后 15% 才淡入（关闭时最先 15% 淡出），与详情封套交接处完全一致，
         // 其余 85% 的路程画面就是原图在放大 / 缩小，没有任何换图或叠影。

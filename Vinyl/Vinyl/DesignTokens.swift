@@ -97,10 +97,12 @@ enum Motion {
 
     /// 封面放大 / 缩回曲线（t108u）：长按首页左上角按钮循环切换，存 UserDefaults，便于真机对比。
     enum ZoomCurve: Int, CaseIterable {
-        case snappy, smooth, spring, ref
+        // t147u：默认 fluid（单一进度 + 无回弹弹簧，可打断、保速度）；原逐轴拟合留作调试项 Ref-fit
+        case fluid, ref, snappy, smooth, spring
         var name: String {
             switch self {
-            case .ref: return "Ref · 原片逐轴拟合（x / y / 尺寸各一条贝塞尔，弧线轨迹）0.32s"
+            case .fluid: return "Fluid · 单进度 .spring(0.42 / 0.36, bounce 0) + 8pt 弧线"
+            case .ref: return "Ref-fit · 原片逐轴拟合（x / y / 尺寸各一条贝塞尔）0.32s"
             case .snappy: return "B · .snappy(duration: 0.4, extraBounce: 0)"
             case .smooth: return "A · .smooth(duration: 0.5)"
             case .spring: return "C · .spring(response: 0.45, damping: 0.76)"
@@ -109,10 +111,15 @@ enum Motion {
         /// 关闭曲线：Ref 用原片关闭段拟合（0.256, 0.091, 0.141, 0.888, 0.425s），其余与打开相同
         var closeAnimation: Animation {   // Ref 关闭：同比缩短 0.425 → 0.31s
             // t128u：Ref 的进度是线性时间，x / y / 尺寸各自的缓动在 CoverFlight 里按原片逐轴拟合
-            self == .ref ? .linear(duration: 0.31) : animation
+            switch self {
+            case .ref: return .linear(duration: 0.31)
+            case .fluid: return .spring(duration: fluidClose, bounce: 0)
+            default: return animation
+            }
         }
         var animation: Animation {
             switch self {
+            case .fluid: return .spring(duration: fluidOpen, bounce: 0)
             case .ref: return .linear(duration: refOpen)   // t128u 线性时间轴 + 逐轴曲线；t135u 0.40 → 0.32s
             case .snappy: return .snappy(duration: 0.4, extraBounce: 0)
             case .smooth: return .smooth(duration: 0.5)
@@ -122,16 +129,28 @@ enum Motion {
     }
     /// Ref 模式下背景模糊 / 网格变暗仍用 t119u 的单条拟合曲线（封面改走逐轴曲线）
     static var zoomBackdrop: Animation {
-        zoomCurve == .ref ? .timingCurve(0.389, 0.032, 0.701, 1.008, duration: refOpen) : zoomCurve.animation
+        zoomCurve == .ref ? .timingCurve(0.389, 0.032, 0.701, 1.008, duration: refOpen) : zoomCurve.animation   // Fluid：同一条打开弹簧
     }
     /// t135u：Ref 打开时长 0.40 → 0.32s（逐轴曲线形状不变，只缩放时间）；关闭仍 0.31s
     static let refOpen: Double = 0.32
+    /// t147u：Fluid 打开 / 关闭弹簧时长（bounce 0 = 临界阻尼，无过冲）
+    static let fluidOpen: Double = 0.42
+    static let fluidClose: Double = 0.36
+    /// Fluid 轨迹弧度（二次贝塞尔控制点相对弦中点的法向偏移，pt；朝「先横后竖」一侧弯）
+    static let fluidBow: CGFloat = 8
+    /// Fluid 尺寸相对位置的轻微滞后：fs = p − lag·p·(1−p)（单调：lag < 1）
+    static let fluidSizeLag: CGFloat = 0.12
+    static var zoomFluid: Bool { zoomCurve == .fluid }
+    /// 关闭时背景擦除：Fluid 跟封面同一条关闭弹簧；其它沿用 t121u 曲线
+    static var closeBackdrop: Animation {
+        zoomCurve == .fluid ? zoomCurve.closeAnimation : .timingCurve(0.256, 0.091, 0.141, 0.888, duration: 0.4)
+    }
     /// 打开时长相对 t119u 基准 0.40s 的比例（唱片抽出延迟同比缩放）
-    static var openScale: Double { zoomCurve == .ref ? refOpen / 0.40 : 1 }
+    static var openScale: Double { zoomCurve == .ref ? refOpen / 0.40 : (zoomCurve == .fluid ? fluidOpen / 0.40 : 1) }
     static var zoomPerAxis: Bool { zoomCurve == .ref }
     static var zoomCurve: ZoomCurve {
-        get { (UserDefaults.standard.object(forKey: "vinyl.zoomCurve2") as? Int).flatMap(ZoomCurve.init(rawValue:)) ?? .ref }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "vinyl.zoomCurve2") }
+        get { (UserDefaults.standard.object(forKey: "vinyl.zoomCurve3") as? Int).flatMap(ZoomCurve.init(rawValue:)) ?? .fluid }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "vinyl.zoomCurve3") }
     }
     @discardableResult
     static func cycleZoomCurve() -> ZoomCurve {
