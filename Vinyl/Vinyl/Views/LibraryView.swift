@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import MusicKit
 
 /// 上报被点击封面在 "library" 坐标空间中的 frame，作为 zoom 转场起点。
 struct CoverFrameKey: PreferenceKey {
@@ -11,6 +12,11 @@ struct CoverFrameKey: PreferenceKey {
 
 struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openURL) private var openURL
+    @EnvironmentObject private var music: AppleMusicStore
+    /// 被点开的真实 Apple Music 集合；nil = 演示封面
+    @State private var selectedCollection: MusicCollection?
+    @State private var collectionSongs: [Song]?
     @State private var presented = false
     @State private var closing = false
     @State private var autoplay = false
@@ -44,10 +50,14 @@ struct LibraryView: View {
 
                 AlbumDetailView(
                     coverName: DS.coverName(selectedIndex),
-                    title: selectedIndex == AlbumData.featuredIndex ? AlbumData.title
-                          : String(format: "Album %02d", selectedIndex),
-                    artist: selectedIndex == AlbumData.featuredIndex ? AlbumData.artist
-                          : "Various Artists",
+                    collection: selectedCollection,
+                    songs: collectionSongs,
+                    title: selectedCollection?.title
+                          ?? (selectedIndex == AlbumData.featuredIndex ? AlbumData.title
+                              : String(format: "Album %02d", selectedIndex)),
+                    artist: selectedCollection?.artist
+                          ?? (selectedIndex == AlbumData.featuredIndex ? AlbumData.artist
+                              : "Various Artists"),
                     pull: pull,
                     flip: flip,
                     waveProgress: 0.18,
@@ -112,9 +122,15 @@ struct LibraryView: View {
     private var header: some View {
         HStack {
             // Assets logo mark inside system glass circle (not SF Symbol opticaldisc).
-            GlassCircleButton(assetImage: "logo", accessibilityText: "Vinyl") { }
+            // 左上 logo：未连接时 = 连接 Apple Music 的入口（被拒绝时打开系统设置）
+            GlassCircleButton(assetImage: "logo",
+                              accessibilityText: music.authorized ? "Vinyl" : "连接 Apple Music") {
+                connectMusic()
+            }
             Spacer(minLength: 0)
-            GlassCircleButton(systemImage: "cube", accessibilityText: "新建") { }
+            GlassCircleButton(systemImage: "cube", accessibilityText: "刷新资料库") {
+                if music.authorized { Task { await music.loadLibrary() } } else { connectMusic() }
+            }
         }
         .padding(.horizontal, DS.contentInset)
         .padding(.top, 6)
@@ -161,8 +177,21 @@ struct LibraryView: View {
     private var gridScroll: some View {
         ScrollView(showsIndicators: false) {
             LazyVGrid(columns: columns, spacing: 18) {
-                ForEach(1...AlbumData.coverCount, id: \.self) { index in
-                    coverCell(index)
+                let real = music.collections
+                if real.isEmpty {
+                    // 未授权 / 资料库为空：保留内置演示封面
+                    ForEach(1...AlbumData.coverCount, id: \.self) { index in
+                        coverCell(index)
+                    }
+                } else {
+                    ForEach(Array(real.enumerated()), id: \.element.id) { index, collection in
+                        musicCell(index, collection)
+                            .onAppear {
+                                guard index == real.count - 1 else { return }
+                                if music.hasMorePlaylists { Task { await music.loadMore(playlists: true) } }
+                                else if music.hasMoreAlbums { Task { await music.loadMore(playlists: false) } }
+                            }
+                    }
                 }
             }
             .padding(.horizontal, DS.contentInset)
@@ -172,11 +201,66 @@ struct LibraryView: View {
         .blur(radius: blurRadius)
     }
 
+    /// 真实 Apple Music 封面格：与演示封面同尺寸、同圆角、同投影。
+    private func musicCell(_ index: Int, _ collection: MusicCollection) -> some View {
+        let key = 1000 + index
+        return Button {
+            origin = cellFrames[key] ?? origin
+            openCollection(collection)
+        } label: {
+            ArtworkFill(artwork: collection.artwork, render: 120)
+                .clipShape(RoundedRectangle(cornerRadius: DS.corner))
+                .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
+                .background {
+                    GeometryReader { geo in
+                        Color.clear.preference(key: CoverFrameKey.self,
+                                               value: [key: geo.frame(in: .named("library"))])
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(collection.title)，\(collection.artist)")
+    }
+
+    /// 点开真实集合：沿用同一套放大转场 + 唱片自动滑出，同时读取曲目并从第一首可播放的歌开始播。
+    private func openCollection(_ collection: MusicCollection) {
+        selectedCollection = collection
+        collectionSongs = nil
+        open()
+        Task {
+            do {
+                let songs = try await collection.songs()
+                guard selectedCollection?.id == collection.id else { return }
+                collectionSongs = songs
+                if let first = songs.first(where: { $0.playParameters != nil }) {
+                    await music.play(first, in: songs, fromCatalog: collection.isCatalog)
+                }
+            } catch {
+                guard selectedCollection?.id == collection.id else { return }
+                collectionSongs = []
+                music.errorMessage = "读取曲目失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func connectMusic() {
+        switch music.authorization {
+        case .denied, .restricted:
+            if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+        case .authorized:
+            Task { await music.loadLibrary() }
+        default:
+            Task { await music.connect() }
+        }
+    }
+
     private func coverCell(_ index: Int) -> some View {
         Button {
             // 起点 = 被点击那一格在 library 坐标系里的真实 frame
             origin = cellFrames[index] ?? origin
             selectedIndex = index
+            selectedCollection = nil
+            collectionSongs = nil
             open()
         } label: {
             Image(DS.coverName(index))
@@ -204,8 +288,13 @@ struct LibraryView: View {
         let end = sleeveFrame == .zero
             ? CGRect(x: 43.5, y: 130, width: DS.sleeve, height: DS.sleeve)
             : sleeveFrame
-        return Image(DS.coverName(selectedIndex))
-            .resizable()
+        return Group {
+            if let selectedCollection {
+                ArtworkFill(artwork: selectedCollection.artwork)
+            } else {
+                Image(DS.coverName(selectedIndex)).resizable()
+            }
+        }
             .modifier(CoverFlight(progress: zoom, start: start, end: end, closing: closing))
             .opacity(presented && !reduceMotion ? 1 : 0)
     }

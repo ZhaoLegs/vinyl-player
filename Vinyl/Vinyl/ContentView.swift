@@ -37,13 +37,13 @@ struct ContentView: View {
                         SimplePage(title: "电台", symbol: "dot.radiowaves.left.and.right")
                     }
                     iconTab("我的", "person.crop.circle", AppTab.profile) {
-                        SimplePage(title: "我的", symbol: "person.crop.circle")
+                        MusicAccountView()
                     }
                     // 普通 tab：系统渲染等宽条目 + 选中高亮，形态与原片一致。
                     // 需要「独立搜索圆钮」时用 role: .search；需要强调某个
                     // 目的地 tab 时用 iOS 27 的 role: .prominent（只能一个）。
                     iconTab("搜索", "magnifyingglass", AppTab.search) {
-                        SimplePage(title: "搜索", symbol: "magnifyingglass")
+                        MusicSearchView()
                     }
                 }
                 .tabViewStyle(.tabBarOnly)
@@ -61,10 +61,10 @@ struct ContentView: View {
                         SimplePage(title: "电台", symbol: "dot.radiowaves.left.and.right")
                     }
                     iconTab("我的", "person.crop.circle", AppTab.profile) {
-                        SimplePage(title: "我的", symbol: "person.crop.circle")
+                        MusicAccountView()
                     }
                     iconTab("搜索", "magnifyingglass", AppTab.search) {
-                        SimplePage(title: "搜索", symbol: "magnifyingglass")
+                        MusicSearchView()
                     }
                 }
                 .modifier(NativeTabBehavior())
@@ -80,10 +80,10 @@ struct ContentView: View {
                         SimplePage(title: "电台", symbol: "dot.radiowaves.left.and.right")
                     }
                     iconTab("我的", "person.crop.circle", AppTab.profile) {
-                        SimplePage(title: "我的", symbol: "person.crop.circle")
+                        MusicAccountView()
                     }
                     iconTab("搜索", "magnifyingglass", AppTab.search) {
-                        SimplePage(title: "搜索", symbol: "magnifyingglass")
+                        MusicSearchView()
                     }
                 }
                 .tint(DS.ink)
@@ -98,10 +98,10 @@ struct ContentView: View {
                     SimplePage(title: "电台", symbol: "dot.radiowaves.left.and.right")
                         .tabItem { Label("电台", systemImage: "dot.radiowaves.left.and.right").labelStyle(.iconOnly) }
                         .tag(AppTab.radio)
-                    SimplePage(title: "我的", symbol: "person.crop.circle")
+                    MusicAccountView()
                         .tabItem { Label("我的", systemImage: "person.crop.circle").labelStyle(.iconOnly) }
                         .tag(AppTab.profile)
-                    SimplePage(title: "搜索", symbol: "magnifyingglass")
+                    MusicSearchView()
                         .tabItem { Label("搜索", systemImage: "magnifyingglass").labelStyle(.iconOnly) }
                         .tag(AppTab.search)
                 }

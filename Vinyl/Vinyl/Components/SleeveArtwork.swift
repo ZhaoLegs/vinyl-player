@@ -1,4 +1,5 @@
 import SwiftUI
+import MusicKit
 
 /// 黑胶唱片：同心沟槽 + 镜面扇形高光 + 中心标签，播放时持续旋转。
 ///
@@ -91,6 +92,8 @@ struct PlanetView: View {
 struct SleeveArtwork: View, Animatable {
     /// 封套图：默认原片挖孔素材；点其它专辑时传入该封面，用同一比例的遮罩挖孔
     var coverName: String = "sleeve_cutout"
+    /// 真实 Apple Music 封面；有值时替代 coverName 位图，同一套挖孔遮罩。
+    var artwork: Artwork? = nil
     var pull: CGFloat
     var flip: Double
     let spin: Angle
@@ -114,8 +117,13 @@ struct SleeveArtwork: View, Animatable {
                     .offset(x: (DS.sleeve - DS.planet) / 2,
                             y: (DS.sleeve - DS.planet) / 2)
 
-                Image(coverName)
-                    .resizable()
+                Group {
+                    if let artwork {
+                        ArtworkFill(artwork: artwork)
+                    } else {
+                        Image(coverName).resizable()
+                    }
+                }
                     .frame(width: DS.sleeve, height: DS.sleeve)
                     // 孔直径 = sleeve × 28.06% ≈ 86pt，与原片 sleeve_cutout 实测一致
                     .mask {

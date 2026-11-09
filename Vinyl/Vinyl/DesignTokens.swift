@@ -43,11 +43,11 @@ enum DS {
     /// 原生 toolbar 图标 = 17pt 字号 + .large imageScale（实测与原生 cube 字形同宽同高）。
     static let barButtonGlyph: CGFloat = 17
 
-    /// 底部 mini player：与系统 Tab bar 玻璃胶囊左右对齐，且与其上缘间距 12pt。
+    /// 底部 mini player：与系统 Tab bar 玻璃胶囊左右对齐，且与其上缘可见间距 4pt。
     static let tabBarSideInset: CGFloat = 21
-    static let miniPlayerGap: CGFloat = 12
+    static let miniPlayerGap: CGFloat = 4
     /// safeAreaBar 的底边比 Tab bar 玻璃胶囊的可见上缘低 5.33pt（iOS 27 模拟器 3x 截图实测，
-    /// padding 每 +1pt 间距 +1pt），所以底部 padding = 12 + 5.33，可见边缘间距正好 12pt。
+    /// padding 每 +1pt 间距 +1pt），所以底部 padding = 间距 + 5.33（可见边缘对边缘）。
     static let miniPlayerBottomPadding: CGFloat = miniPlayerGap + 5.33
 
     static func coverName(_ index: Int) -> String {
@@ -275,7 +275,7 @@ struct GlassCircleButton: View {
                     .frame(width: iconSize, height: iconSize)
             } else if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.system(size: DS.barButtonGlyph, weight: .regular))
+                    .font(.system(size: DS.barButtonGlyph, weight: .medium))
                     .imageScale(.large)
             }
         }

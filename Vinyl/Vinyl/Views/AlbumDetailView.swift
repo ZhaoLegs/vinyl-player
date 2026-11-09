@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import MusicKit
 
 /// 上报封套在 "library" 坐标空间中的位置，供 zoom 转场计算终点。
 struct SleeveFrameKey: PreferenceKey {
@@ -12,7 +13,12 @@ struct SleeveFrameKey: PreferenceKey {
 
 struct AlbumDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @EnvironmentObject private var music: AppleMusicStore
     var coverName: String = "sleeve_cutout"
+    /// 真实 Apple Music 集合（nil = 内置演示专辑）
+    var collection: MusicCollection? = nil
+    /// 该集合的歌曲；nil = 仍在读取
+    var songs: [Song]? = nil
     var title: String = AlbumData.title
     var artist: String = AlbumData.artist
     let pull: CGFloat
@@ -48,7 +54,8 @@ struct AlbumDetailView: View {
                 TimelineView(.animation(paused: !isPresented || reduceMotion)) { timeline in
                     let elapsed = timeline.date.timeIntervalSince(motionStart)
                     let spin = Angle.degrees(reduceMotion ? 0 : spinDegrees(elapsed))
-                    SleeveArtwork(coverName: coverName, pull: pull, flip: flip, spin: spin)
+                    SleeveArtwork(coverName: coverName, artwork: collection?.artwork,
+                                  pull: pull, flip: flip, spin: spin)
                         .frame(width: DS.sleeve, height: DS.sleeve)
                         .contentShape(Rectangle())
                         .onTapGesture(perform: onToggleArtwork)
@@ -64,25 +71,37 @@ struct AlbumDetailView: View {
                 // Breathing room under sleeve → track table (preview dtable gap ≈ 30pt).
                 .padding(.top, 20)
 
-                trackTable
-                    .padding(.horizontal, DS.contentInset)
-                    .padding(.top, 40)
-                    .opacity(stage(0.09))
+                if collection != nil {
+                    realTrackTable
+                        .padding(.top, 40)
+                        .opacity(stage(0.09))
+                } else {
+                    trackTable
+                        .padding(.horizontal, DS.contentInset)
+                        .padding(.top, 40)
+                        .opacity(stage(0.09))
 
-                releaseCard
-                    .padding(.horizontal, DS.contentInset)
-                    .padding(.top, 22)
-                    .opacity(stage(0.17))
+                    releaseCard
+                        .padding(.horizontal, DS.contentInset)
+                        .padding(.top, 22)
+                        .opacity(stage(0.17))
 
-                Spacer(minLength: 8)
+                    Spacer(minLength: 8)
+                }
 
-                WaveformBar(progress: waveProgress)
+                waveform
                     // 与首页 mini player 同宽（与系统 Tab bar 胶囊对齐）
                     .padding(.horizontal, DS.tabBarSideInset)
                     .padding(.bottom, 10)
                     .opacity(stage(0.24))
             }
             .opacity(contentAlpha)
+        }
+        .task {
+            guard demoLevels == nil,
+                  let url = Bundle.main.url(forResource: "demo-audio", withExtension: "m4a")
+                    ?? Bundle.main.url(forResource: "demo-audio", withExtension: "wav") else { return }
+            demoLevels = try? await WaveformAnalyzer.shared.levels(for: url)
         }
     }
 
@@ -145,6 +164,113 @@ struct AlbumDetailView: View {
     }
 
     // MARK: - 曲目表
+
+    // MARK: - 波形条（真实播放进度）
+
+    /// Apple Music 正在播放属于本集合的歌时：进度 = playbackTime / duration，
+    /// 高度 = 以歌曲 ID 为种子的伪波形（DRM 拿不到采样）。否则保持演示波形。
+    @ViewBuilder
+    private var waveform: some View {
+        if collection != nil, music.hasCurrentTrack, let id = music.currentSongID {
+            WaveformBar(progress: music.duration > 0 ? music.position / music.duration : 0,
+                        levels: Waveform.seeded(id.rawValue),
+                        isPlaying: music.isPlaying,
+                        toggle: { Task { await music.togglePlayback() } })
+        } else {
+            WaveformBar(progress: waveProgress, levels: demoLevels)
+        }
+    }
+
+    /// 内置演示没有音频文件；若包内放入 demo-audio.m4a/.wav，则用 AVAssetReader 实测 RMS。
+    @State private var demoLevels: [Double]? = nil
+
+    // MARK: - 真实曲目表（Apple Music）
+
+    private var realTrackTable: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Text("Side")
+                    .font(.system(size: TL.header, weight: .bold))
+                    .foregroundStyle(DS.ink)
+                    .frame(width: TL.sideW, alignment: .leading)
+                Text("Time")
+                    .font(.system(size: TL.header, weight: .regular))
+                    .foregroundStyle(TL.bpmHeader)
+                    .frame(width: TL.bpmW, alignment: .leading)
+                Color.clear.frame(width: TL.glyphW, height: 1)
+                Text("Tracklist")
+                    .font(.system(size: TL.header, weight: .regular))
+                    .foregroundStyle(DS.ink)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, DS.contentInset)
+            .padding(.bottom, TL.headerGap)
+
+            if let songs {
+                if songs.isEmpty {
+                    Text("这个列表里没有可播放的歌曲")
+                        .font(.system(size: 15))
+                        .foregroundStyle(TL.idle)
+                        .padding(.horizontal, DS.contentInset)
+                    Spacer(minLength: 8)
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(songs.enumerated()), id: \.offset) { index, song in
+                                realRow(index, song, in: songs)
+                            }
+                        }
+                        .padding(.horizontal, DS.contentInset)
+                        .padding(.bottom, 8)
+                    }
+                }
+            } else {
+                ProgressView()
+                    .padding(.horizontal, DS.contentInset)
+                Spacer(minLength: 8)
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private func realRow(_ index: Int, _ song: Song, in songs: [Song]) -> some View {
+        let current = music.currentSongID == song.id
+        let half = (songs.count + 1) / 2
+        let side = index == 0 ? "A" : (index == half && songs.count > 1 ? "B" : "")
+        return Button {
+            Task {
+                if current { await music.togglePlayback() }
+                else { await music.play(song, in: songs, fromCatalog: collection?.isCatalog ?? false) }
+            }
+        } label: {
+            HStack(spacing: 0) {
+                Text(side)
+                    .font(.system(size: TL.row, weight: .bold))
+                    .foregroundStyle(DS.ink)
+                    .frame(width: TL.sideW, alignment: .leading)
+                Text(musicTime(song.duration ?? 0))
+                    .font(.system(size: TL.row, weight: .regular).monospacedDigit())
+                    .foregroundStyle(TL.bpm)
+                    .frame(width: TL.bpmW, alignment: .leading)
+                    .lineLimit(1)
+                Image(systemName: current && music.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: TL.glyph, weight: .regular))
+                    .foregroundStyle(DS.ink)
+                    .frame(width: TL.glyphW, alignment: .leading)
+                Text("\(song.artistName) - \(song.title)")
+                    .font(.system(size: TL.row, weight: .regular))
+                    .foregroundStyle(current ? DS.ink : TL.idle)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .frame(height: TL.pitch)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(song.playParameters == nil || music.isPreparing)
+        .opacity(song.playParameters == nil ? 0.45 : 1)
+        .accessibilityLabel("\(current && music.isPlaying ? "暂停" : "播放") \(song.title)，\(song.artistName)")
+    }
 
     // 原片实测（960×720 视频，屏宽 289px ↔ 393pt）：列起点相对内容左缘
     // Side 0 / BPM 39.5 / 图标 81.5 / 曲名 104.5pt；行距 36pt；表头 12pt，曲名 15pt，播放图标 13pt（字形高 ≈ 曲名大写高）。
