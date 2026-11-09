@@ -40,6 +40,7 @@ struct LibraryView: View {
 
     private var pull: CGFloat { get { zm.pull } nonmutating set { zm.pull = newValue } }
     private var flip: Double { get { zm.flip } nonmutating set { zm.flip = newValue } }
+    private var lyricsMode: Bool { get { zm.lyricsMode } nonmutating set { zm.lyricsMode = newValue } }
     private var demoToken: Int { get { zm.demoToken } nonmutating set { zm.demoToken = newValue } }
     private var motionStart: Date { get { zm.motionStart } nonmutating set { zm.motionStart = newValue } }
     private var recordingStarted: Bool { get { zm.recordingStarted } nonmutating set { zm.recordingStarted = newValue } }
@@ -414,6 +415,7 @@ struct LibraryView: View {
             isPresented: presented,
             closing: closing,
             landed: landed,
+            lyricsMode: lyricsMode,
             wipe: wipe,
             keepsSpinning: !recordingRequested,
             motionStart: motionStart,
@@ -481,6 +483,7 @@ struct LibraryView: View {
         autoplay = true
         pull = 0
         flip = 0
+        lyricsMode = false
         motionStart = Date()
         // 一条主 spring 驱动封面缩放与背景模糊（同一进度，不再各跑一条曲线）；
         // 详情文字用带 delay 的从曲线错峰淡入，形成「先放大 → 再显内容」的节奏。
@@ -565,6 +568,7 @@ struct LibraryView: View {
         withTransaction(t) {
             pull = 0
             flip = 0
+            lyricsMode = false
             targetKey = key
             if key >= 1000 {
                 let c = music.collections[key - 1000]
@@ -626,6 +630,7 @@ struct LibraryView: View {
             closing = false
             pull = 0
             flip = 0
+            lyricsMode = false
             recordingMarker("complete")
         }
         // 曲目 / 波形等文字比背景擦除更早消失，避免叠在露出的网格上
@@ -648,17 +653,21 @@ struct LibraryView: View {
         Task { @MainActor in
             defer { flipBusy = false }
             let animate = !reduceMotion
+            // t160u：翻面 = spring 0.5s / bounce 0；曲目表 0.2s 淡出、歌词淡入（返回时反向，曲目表逐行重现）
+            let turn: Animation? = animate ? .spring(duration: Lyrics.flip, bounce: 0) : nil
             if flip < 90 {
+                lyricsMode = true
                 if pull > 0.01 {
                     withAnimation(animate ? Motion.animation(Motion.retract) : nil) { pull = 0 }
                     if animate { try? await Task.sleep(for: .seconds(Motion.retract.duration)) }
                 }
                 guard presented && !closing else { return }
-                withAnimation(animate ? Motion.animation(Motion.flip) : nil) { flip = 180 }
-                if animate { try? await Task.sleep(for: .seconds(Motion.flip.duration)) }
+                withAnimation(turn) { flip = 180 }
+                if animate { try? await Task.sleep(for: .seconds(Lyrics.flip)) }
             } else {
-                withAnimation(animate ? Motion.animation(Motion.flip) : nil) { flip = 0 }
-                if animate { try? await Task.sleep(for: .seconds(Motion.flip.duration)) }
+                lyricsMode = false
+                withAnimation(turn) { flip = 0 }
+                if animate { try? await Task.sleep(for: .seconds(Lyrics.flip)) }
                 guard presented && !closing else { return }
                 withAnimation(animate ? Motion.animation(Motion.pull) : nil) { pull = 1 }
                 if animate { try? await Task.sleep(for: .seconds(Motion.pull.duration)) }
@@ -889,6 +898,8 @@ final class LibraryZoomModel: ObservableObject {
     @Published var selectedIndex: Int = AlbumData.featuredIndex
     @Published var pull: CGFloat = 0
     @Published var flip: Double = 0
+    /// t160u：封面翻到背面 = 歌词模式
+    @Published var lyricsMode: Bool = false
     @Published var demoToken: Int = 0
     @Published var motionStart: Date = .distantPast
     @Published var recordingStarted: Bool = false
