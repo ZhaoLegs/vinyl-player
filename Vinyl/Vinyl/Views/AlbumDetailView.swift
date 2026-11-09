@@ -1178,15 +1178,15 @@ enum Lyrics {
     static let fadeIn: Double = 0.25       // 歌词淡入
     static let fadeInDelay: Double = merge // t245u：随合拢时长 0.3 → 0.45；t162u：歌词在翻转阶段（合拢 0.3s 之后）淡入
     static let anchor = UnitPoint(x: 0.5, y: 1.0 / 3)   // 当前行滚到列表高度 1/3 处
-    static let lineGap: CGFloat = 16      // 行距与 16pt 歌词字号一致
+    static let lineGap: CGFloat = 24      // t248u：16 → 24pt
     // t240u：Apple Music 风格
-    static let fontSize: CGFloat = 16
+    static let fontSize: CGFloat = 19     // t248u：16 → 19pt
     static let activeScale: CGFloat = 1.12
     static let dimOpacity: Double = 0.42     // 非当前行（t243u：0.35 → 0.42，6–8 行可读）
     static let unsungOpacity: Double = 0.5   // 当前行未唱部分
     static let scroll = Animation.spring(duration: 0.45, bounce: 0)   // 阻尼 ease-out，整段一起走
     /// 两侧平分放大余量：当前行居中放大后仍不出界，且换行位置与非当前行一致（不重排）
-    static let scaleRoom: CGFloat = 40
+    static let scaleRoom: CGFloat = 44    // t248u：40 → 44（19pt 行宽 ×1.12 仍在内容宽内，不重排）
     /// t243u：非当前行模糊 1.5 / 2 / 2.5pt（最多 2.5）
     /// t247u：再降 → 0.6 / 0.9 / 1.2pt（最多 1.2）
     static func blur(distance d: Int) -> CGFloat { d <= 0 ? 0 : min(1.2, 0.6 + CGFloat(d - 1) * 0.3) }
