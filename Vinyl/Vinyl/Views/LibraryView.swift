@@ -181,6 +181,15 @@ struct LibraryView: View {
                     Task { await music.refreshHome() }
                 } else { connectMusic() }
             }
+            // t192u：长按右上角按钮 → 恢复「从首页隐藏」的条目
+            .contextMenu {
+                Button("刷新资料库", systemImage: "arrow.clockwise") { Task { await music.refreshHome() } }
+                if music.hiddenCount > 0 {
+                    Button("显示已隐藏的 \(music.hiddenCount) 项", systemImage: "eye") {
+                        withAnimation(.spring(duration: 0.4, bounce: 0)) { music.unhideAll() }
+                    }
+                }
+            }
         }
         .padding(.horizontal, DS.contentInset)
         .padding(.top, 6)
@@ -369,6 +378,56 @@ struct LibraryView: View {
         .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection?.id == collection.id,
                              closing: closing))
         .accessibilityLabel("\(collection.title)，\(collection.artist)")
+        // t192u：长按 = 系统原生上下文菜单（抬起预览 + 玻璃材质由系统渲染）；点按仍是 Button 打开详情，滚动不受影响
+        .contextMenu {
+            collectionMenu(collection)
+        } preview: {
+            ArtworkFill(artwork: collection.artwork)
+                .frame(width: 280, height: 280)
+                .clipShape(RoundedRectangle(cornerRadius: DS.corner * 280 / 76.5))
+        }
+    }
+
+    @ViewBuilder
+    private func collectionMenu(_ c: MusicCollection) -> some View {
+        Section {
+            Button("播放", systemImage: "play.fill") { Task { await music.playCollection(c, shuffle: false) } }
+            Button("随机播放", systemImage: "shuffle") { Task { await music.playCollection(c, shuffle: true) } }
+            Button("下一首播放", systemImage: "text.insert") { Task { await music.enqueue(c, next: true) } }
+            Button("加到播放队列末尾", systemImage: "text.append") { Task { await music.enqueue(c, next: false) } }
+        }
+        Section {
+            let loved = music.isLoved(c)
+            Button(loved ? "取消喜欢" : "喜欢", systemImage: loved ? "star.slash" : "star") {
+                Task { await music.toggleLove(c) }
+            }
+            if music.canAddToLibrary(c) {
+                Button("加到资料库", systemImage: "plus") { Task { await music.addToLibrary(c) } }
+            }
+            if !music.editablePlaylists.isEmpty {
+                Menu {
+                    ForEach(music.editablePlaylists, id: \.id) { pl in
+                        Button(pl.name, systemImage: "music.note.list") { Task { await music.addToPlaylist(c, playlist: pl) } }
+                    }
+                } label: {
+                    Label("加到歌单…", systemImage: "text.badge.plus")
+                }
+            }
+        }
+        Section {
+            if let url = c.shareURL {
+                ShareLink(item: url, subject: Text(c.title)) { Label("分享", systemImage: "square.and.arrow.up") }
+            }
+            if let url = c.artistURL {
+                // 工程里没有歌手页 → 在 Apple Music 中打开歌手
+                Button("去看歌手", systemImage: "music.microphone") { openURL(url) }
+            }
+        }
+        Section {
+            Button("从首页隐藏", systemImage: "eye.slash", role: .destructive) {
+                withAnimation(.spring(duration: 0.4, bounce: 0)) { music.hideFromHome(c) }
+            }
+        }
     }
 
     /// 点开真实集合：沿用同一套放大转场 + 唱片自动滑出，同时读取曲目并从第一首可播放的歌开始播。

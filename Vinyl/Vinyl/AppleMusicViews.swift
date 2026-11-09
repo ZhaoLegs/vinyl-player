@@ -324,7 +324,8 @@ struct ArtworkFill: View {
             let side = max(1, geo.size.width)
             Group {
                 if let artwork {
-                    ArtworkImage(artwork, width: render, height: render)
+                    // t193u：http(s) 封面走本地内存 + 磁盘缓存；资料库本地封面（musicKit://）仍交给系统 ArtworkImage
+                    CachedArtwork(artwork: artwork, side: render)
                 } else {
                     ZStack {
                         Color(hex: 0xE4E0DC)
@@ -340,5 +341,129 @@ struct ArtworkFill: View {
             .frame(width: side, height: side, alignment: .topLeading)
         }
         .aspectRatio(1, contentMode: .fit)
+    }
+}
+
+
+// MARK: - t193u：封面持久缓存（内存 NSCache + 磁盘 Caches/artwork，键 = 请求像素尺寸下的封面 URL）
+
+final class ArtworkCache: @unchecked Sendable {
+    static let shared = ArtworkCache()
+    private let memory = NSCache<NSString, UIImage>()
+    private let dir: URL
+    private let io = DispatchQueue(label: "vinyl.artwork.io", qos: .utility)
+    private var inflight: [String: Task<UIImage?, Never>] = [:]
+    private let lock = NSLock()
+    static let diskLimit = 200 * 1024 * 1024
+    private(set) var stats = (memory: 0, disk: 0, network: 0)
+
+    private init() {
+        memory.totalCostLimit = 120 * 1024 * 1024
+        dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("artwork", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        io.asyncAfter(deadline: .now() + 5) { [weak self] in self?.trim() }
+    }
+
+    private func file(_ key: String) -> URL {
+        var h: UInt64 = 1469598103934665603
+        for b in key.utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
+        return dir.appendingPathComponent(String(h, radix: 16) + ".jpg")
+    }
+
+    func cached(_ key: String) -> UIImage? { memory.object(forKey: key as NSString) }
+
+    func image(for url: URL) async -> UIImage? {
+        let key = url.absoluteString
+        if let m = cached(key) { return m }
+        lock.lock()
+        if let t = inflight[key] { lock.unlock(); return await t.value }
+        let task = Task.detached(priority: .userInitiated) { [self] () -> UIImage? in
+            let f = file(key)
+            if let data = try? Data(contentsOf: f), let img = UIImage(data: data)?.preparingForDisplay() {
+                try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: f.path)   // LRU
+                store(img, key: key, source: 1)
+                return img
+            }
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let img = UIImage(data: data)?.preparingForDisplay() else { return nil }
+            try? data.write(to: f, options: .atomic)
+            store(img, key: key, source: 2)
+            return img
+        }
+        inflight[key] = task
+        lock.unlock()
+        let img = await task.value
+        lock.lock(); inflight[key] = nil; lock.unlock()
+        return img
+    }
+
+    private func store(_ img: UIImage, key: String, source: Int) {
+        let cost = Int(img.size.width * img.size.height * img.scale * img.scale * 4)
+        memory.setObject(img, forKey: key as NSString, cost: cost)
+        lock.lock()
+        if source == 1 { stats.disk += 1 } else { stats.network += 1 }
+        let n = stats.disk + stats.network, st = stats
+        lock.unlock()
+        if n == 16 {
+            print("[t193u] first 16 covers ready at \(String(format: "%.2f", Date().timeIntervalSince(HomeCache.launch)))s since launch (disk \(st.disk), network \(st.network))")
+        }
+    }
+
+    /// 超过 200MB 时按最近使用时间（mtime）删最旧的
+    private func trim() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else { return }
+        var items = files.compactMap { u -> (URL, Int, Date)? in
+            guard let v = try? u.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { return nil }
+            return (u, v.fileSize ?? 0, v.contentModificationDate ?? .distantPast)
+        }
+        var total = items.reduce(0) { $0 + $1.1 }
+        print("[t193u] artwork disk cache: \(items.count) files, \(total / 1024 / 1024) MB")
+        guard total > Self.diskLimit else { return }
+        items.sort { $0.2 < $1.2 }
+        for (u, size, _) in items where total > Self.diskLimit {
+            try? fm.removeItem(at: u); total -= size
+        }
+    }
+
+    /// 预取（首页可见 + 后几行）
+    func prefetch(_ urls: [URL]) {
+        for u in urls where cached(u.absoluteString) == nil {
+            Task.detached(priority: .utility) { _ = await self.image(for: u) }
+        }
+    }
+}
+
+struct CachedArtwork: View {
+    let artwork: Artwork
+    let side: CGFloat
+    @Environment(\.displayScale) private var scale
+    @State private var image: UIImage?
+
+    private var url: URL? {
+        let px = Int((side * scale).rounded())
+        guard let u = artwork.url(width: px, height: px), u.scheme == "http" || u.scheme == "https" else { return nil }
+        return u
+    }
+
+    var body: some View {
+        if let url {
+            let img = image ?? ArtworkCache.shared.cached(url.absoluteString)
+            ZStack {
+                if let img {
+                    Image(uiImage: img).resizable().interpolation(.high)
+                } else {
+                    Rectangle().fill(artwork.backgroundColor.map { Color(cgColor: $0) } ?? Color(hex: 0xE4E0DC))
+                }
+            }
+            .frame(width: side, height: side)
+            .task(id: url) {
+                if image == nil || ArtworkCache.shared.cached(url.absoluteString) == nil {
+                    if let i = await ArtworkCache.shared.image(for: url) { image = i }
+                }
+            }
+        } else {
+            ArtworkImage(artwork, width: side, height: side)
+        }
     }
 }

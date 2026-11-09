@@ -13,7 +13,8 @@ final class AppleMusicStore: ObservableObject {
     /// Apple Music 推荐（个性化推荐，失败 / 为空时退回曲库排行榜）
     @Published private(set) var recommended: [MusicCollection] = []
     /// 仅在数据变化时合并首页，避免播放时钟每次更新都重新排序整个资料库。
-    @Published private(set) var collections: [MusicCollection] = []
+    /// t193u：启动时先用上次的首页（磁盘缓存）立即渲染，后台刷新后按 id 原位替换
+    @Published private(set) var collections: [MusicCollection] = HomeCache.load()
     @Published private(set) var homePageRevision = 0
     /// 运行时实际成功的请求：MusicPersonalRecommendationsRequest / MusicCatalogChartsRequest / 空
     @Published private(set) var recommendationSource = ""
@@ -138,7 +139,7 @@ final class AppleMusicStore: ObservableObject {
             identityKeys: \.identityKeys,
             // 保留来源位置，但已在资料库里的同专辑使用本地曲目，避免额外要求曲库订阅。
             preferredItems: libraryPlaylists + libraryAlbums
-        )
+        ).filter { !hiddenHome.contains($0.id) }   // t192u：本地「从首页隐藏」
     }
 
     /// 授权撤销后，即使旧请求迟到，也不能重新填回个人数据。
@@ -183,6 +184,7 @@ final class AppleMusicStore: ObservableObject {
             recentlyPlayed = []
             recommended = []
             collections = []
+            HomeCache.clear()
             recommendationPages = []
             recommendationSource = ""
             libraryLoaded = false
@@ -232,6 +234,7 @@ final class AppleMusicStore: ObservableObject {
         rebuildHome()
         homeLoadedOnce = true
         homePageRevision += 1
+        HomeCache.save(collections)
         print("[t158u] home loaded: \(collections.count) items at \(String(format: "%.2f", Date().timeIntervalSince(createdAt)))s since store init")
     }
     private let createdAt = Date()
@@ -669,4 +672,172 @@ enum MusicCollection: Identifiable {
         }
         return songs
     }
+}
+
+
+// MARK: - t192u：首页长按菜单动作
+
+extension AppleMusicStore {
+    private static let hiddenKey = "vinyl.hiddenHome"
+    private static let lovedKey = "vinyl.lovedCollections"
+
+    var hiddenHome: Set<String> { Set(UserDefaults.standard.stringArray(forKey: Self.hiddenKey) ?? []) }
+    var hiddenCount: Int { hiddenHome.count }
+
+    /// 只在本地记下 ID 并从首页移除，绝不改动 Apple Music 资料库
+    func hideFromHome(_ c: MusicCollection) {
+        var h = hiddenHome; h.insert(c.id)
+        UserDefaults.standard.set(Array(h), forKey: Self.hiddenKey)
+        collections.removeAll { $0.id == c.id }
+    }
+    func unhideAll() {
+        UserDefaults.standard.removeObject(forKey: Self.hiddenKey)
+        rebuildHome()
+    }
+
+    private func playable(_ c: MusicCollection) async -> [Song] {
+        do { return try await c.songs().filter { $0.playParameters != nil } }
+        catch { report(error, action: "读取曲目失败"); return [] }
+    }
+
+    /// 播放 / 随机播放整张专辑（ApplicationMusicPlayer）
+    func playCollection(_ c: MusicCollection, shuffle: Bool) async {
+        let songs = await playable(c)
+        guard let first = shuffle ? songs.randomElement() : songs.first else { return }
+        player.state.shuffleMode = shuffle ? .songs : .off
+        await play(first, in: songs, fromCatalog: c.isCatalog)
+    }
+
+    /// 下一首播放（.afterCurrentEntry）/ 加到播放队列末尾（.tail）；当前没有队列时直接开始播放
+    func enqueue(_ c: MusicCollection, next: Bool) async {
+        let songs = await playable(c)
+        guard !songs.isEmpty else { return }
+        guard hasCurrentTrack else { await play(songs[0], in: songs, fromCatalog: c.isCatalog); return }
+        do { try await player.queue.insert(songs, position: next ? .afterCurrentEntry : .tail) }
+        catch { report(error, action: next ? "下一首播放失败" : "加入播放队列失败") }
+    }
+
+    /// 资料库里的条目（ID 以 l. / p. 开头）不显示「加到资料库」
+    func canAddToLibrary(_ c: MusicCollection) -> Bool {
+        switch c {
+        case .album(_, let catalog): return catalog
+        case .playlist: return c.isCatalog
+        case .librarySongs: return false
+        }
+    }
+    func addToLibrary(_ c: MusicCollection) async {
+        do {
+            switch c {
+            case .album(let a, _): try await MusicLibrary.shared.add(a)
+            case .playlist(let p): try await MusicLibrary.shared.add(p)
+            case .librarySongs: return
+            }
+            print("[t192u] added to library: \(c.title)")
+        } catch { report(error, action: "加到资料库失败") }
+    }
+
+    /// 可编辑的资料库歌单（MusicLibrary.add(_:to:) 只能写用户自己的歌单）
+    var editablePlaylists: [Playlist] { playlists.filter { !$0.id.rawValue.hasPrefix("pl.") } }
+
+    func addToPlaylist(_ c: MusicCollection, playlist: Playlist) async {
+        let songs = await playable(c)
+        var n = 0
+        for s in songs {
+            do { _ = try await MusicLibrary.shared.add(MusicKit.Track.song(s), to: playlist); n += 1 }
+            catch { report(error, action: "加到歌单失败"); break }
+        }
+        print("[t192u] added \(n)/\(songs.count) tracks of \(c.title) to \(playlist.name)")
+    }
+
+    // MARK: 喜欢：MusicKit 没有「喜欢」API → 用 Apple Music API 的 ratings 端点（PUT/DELETE /v1/me/ratings/…，value 1 = 喜欢），同时本地记状态
+    var lovedCollections: Set<String> { Set(UserDefaults.standard.stringArray(forKey: Self.lovedKey) ?? []) }
+    func isLoved(_ c: MusicCollection) -> Bool { lovedCollections.contains(c.id) }
+
+    func toggleLove(_ c: MusicCollection) async {
+        var set = lovedCollections
+        let on = !set.contains(c.id)
+        if on { set.insert(c.id) } else { set.remove(c.id) }
+        UserDefaults.standard.set(Array(set), forKey: Self.lovedKey)
+        objectWillChange.send()
+        let path: String
+        switch c {
+        case .album(let a, let catalog): path = (catalog ? "albums/" : "library-albums/") + a.id.rawValue
+        case .playlist(let p): path = (c.isCatalog ? "playlists/" : "library-playlists/") + p.id.rawValue
+        case .librarySongs: return
+        }
+        guard let url = URL(string: "https://api.music.apple.com/v1/me/ratings/" + path) else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = on ? "PUT" : "DELETE"
+        if on {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = #"{"type":"rating","attributes":{"value":1}}"#.data(using: .utf8)
+        }
+        do {
+            let r = try await MusicDataRequest(urlRequest: req).response()
+            print("[t192u] rating \(req.httpMethod ?? "") \(path): HTTP \(r.urlResponse.statusCode)")
+        } catch {
+            print("[t192u] rating \(req.httpMethod ?? "") \(path) failed: \(error) — 只保留本地状态")
+        }
+    }
+}
+
+extension MusicCollection {
+    var shareURL: URL? {
+        switch self {
+        case .album(let a, _): return a.url
+        case .playlist(let p): return p.url
+        case .librarySongs: return nil
+        }
+    }
+    var artistURL: URL? {
+        if case .album(let a, _) = self { return a.artistURL }
+        return nil
+    }
+}
+
+
+// MARK: - t193u：首页列表持久化（MusicKit 的 Album / Playlist / Song 都是 Codable，含封面 URL 与 Apple 封面颜色）
+
+enum HomeCache {
+    private enum Item: Codable {
+        case album(Album, Bool)
+        case playlist(Playlist)
+        case librarySongs([Song])
+    }
+    private static var url: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("home-feed.json")
+    }
+    static let launch = Date()
+
+    static func load() -> [MusicCollection] {
+        guard !DemoMode.enabled, MusicAuthorization.currentStatus == .authorized,
+              let data = try? Data(contentsOf: url),
+              let items = try? JSONDecoder().decode([Item].self, from: data) else { return [] }
+        let list: [MusicCollection] = items.map {
+            switch $0 {
+            case .album(let a, let c): return .album(a, catalog: c)
+            case .playlist(let p): return .playlist(p)
+            case .librarySongs(let s): return .librarySongs(s)
+            }
+        }
+        print("[t193u] home cache: \(list.count) items decoded in \(String(format: "%.0f", Date().timeIntervalSince(launch) * 1000))ms")
+        // 预取前 6 行封面（磁盘 → 内存），首屏直接命中内存
+        let urls = list.prefix(24).compactMap { $0.artwork?.url(width: 960, height: 960) }
+        ArtworkCache.shared.prefetch(urls)
+        return list
+    }
+
+    static func save(_ list: [MusicCollection]) {
+        let items: [Item] = list.prefix(150).map {
+            switch $0 {
+            case .album(let a, let c): return .album(a, c)
+            case .playlist(let p): return .playlist(p)
+            case .librarySongs(let s): return .librarySongs(Array(s.prefix(200)))
+            }
+        }
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(items) { try? data.write(to: url, options: .atomic) }
+        }
+    }
+    static func clear() { try? FileManager.default.removeItem(at: url) }
 }
