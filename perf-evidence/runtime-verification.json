@@ -1,0 +1,16 @@
+{
+  "checks" : {
+    "currentSongIdentityMatchesOnlySelectedSong" : true,
+    "demoClockDoesNotPublishPageAndSeekClamps" : true,
+    "emptyQueueClearsModels" : true,
+    "fadeCurveUnchanged" : true,
+    "fadeSuppressesDuplicateWrites" : true,
+    "lastRowGap24pt" : true,
+    "queueReorderUpdatesIDsAndSides" : true,
+    "realClockDoesNotPublishPage" : true,
+    "sideABMatchesOriginal" : true,
+    "stableIDsAndPreformattedText" : true,
+    "unchangedQueueDoesNotRebuild" : true
+  },
+  "passed" : true
+}

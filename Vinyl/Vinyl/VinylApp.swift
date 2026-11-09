@@ -16,9 +16,12 @@ struct VinylApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                if TracklistProfile.enabled { TracklistProfileView() }
+                else { ContentView() }
+            }
                 .task(id: scenePhase) {
-                    guard scenePhase == .active, !recordingDemo else { return }
+                    guard scenePhase == .active, !recordingDemo, !TracklistProfile.enabled else { return }
                     // 首次启动直接弹出系统的 Apple Music 授权；之后每次回到前台重新核对授权并刷新资料库。
                     if music.connectionRequested { await music.refreshAccess() }
                     else { await music.connect() }
@@ -26,6 +29,7 @@ struct VinylApp: App {
                 }
                 .overlay(alignment: .top) { MusicErrorBanner() }
                 .environmentObject(music)
+                .environmentObject(music.timeline)
         }
     }
 }

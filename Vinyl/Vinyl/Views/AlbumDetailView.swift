@@ -70,7 +70,8 @@ struct AlbumDetailView: View {
     private var lyricsGap: CGFloat { sleeveBottomY > 0 && lyricsTopY > sleeveBottomY ? lyricsTopY - sleeveBottomY : 0 }
     @State private var barTopY: CGFloat = 0
     /// t219u：曲目表滚到底的接近程度 0…1（底部模糊在时间条上方的部分随之收拢，不挡最后一行）
-    @State private var listEnd: CGFloat = 0
+    @State private var scrollEnd = DetailScrollEnd()
+    @StateObject private var trackRows = TrackRows()
     /// 滑入距离 = 播放条高 42 + 底部间距 10 + 底部安全区（整条完全在屏幕外起步）
     /// （不在 body 里读 UIWindow：那会让整个详情层不渲染；底部安全区由页面 GeometryReader 写入）
     @State private var bottomSafe: CGFloat = 34
@@ -108,6 +109,7 @@ struct AlbumDetailView: View {
     }
 
     var body: some View {
+        let _ = TracklistProfile.count("AlbumDetailView.body")
         ZStack(alignment: .top) {
             AuroraBackground()
                 .opacity(closing ? 1 : contentAlpha)
@@ -235,6 +237,7 @@ struct AlbumDetailView: View {
             // 不再给整列加 contentAlpha：封套只受 ArtworkHandoff 控制（全显 / 全隐），
             // 不会出现半透明封套透出唱片的「鬼影」帧；其余内容各自按 stage() 淡入。
         }
+        .onChange(of: songs, initial: true) { _, tracks in trackRows.prepare(tracks ?? []) }
         .onAppear {
             startReveal(delay: openRevealDelay)
             // 横滑换专辑时详情视图会重建（@State 归零），封面早已落定 → 时间条直接保持显示，不再消失
@@ -323,26 +326,12 @@ struct AlbumDetailView: View {
     }
 
     private var bottomFade: some View {
-        ZStack {
-            Rectangle()
-                .fill(.regularMaterial)
-                .mask(LinearGradient(stops: BottomFade.blurStops, startPoint: .top, endPoint: .bottom))
-                .opacity(lyricsMode ? 0.5 : 1)      // t243u：歌词页底部模糊减半
-            LinearGradient(stops: BottomFade.tintStops, startPoint: .top, endPoint: .bottom)
-                .opacity(lyricsMode ? 0.5 : 1)
-        }
-        .animation(.easeOut(duration: 0.25), value: lyricsMode)
-        .frame(maxWidth: .infinity)
-        // t219u：曲目表滚到底时，时间条上方的模糊从 110pt 收到 24pt（只盖住 24pt 间距），最后一行不被模糊
-        .frame(height: BottomFade.height - (BottomFade.above - TrackInset.gap) * (lyricsMode ? 0 : listEnd))
-        .ignoresSafeArea(.container, edges: .bottom)
-        .allowsHitTesting(false)
+        DetailBottomFade(end: scrollEnd, lyricsMode: lyricsMode)
     }
 
     /// t219u：= 24 + (列表可视区底 − 时间条顶)；两者在 VStack 里相接时就是 24pt
     private var trackBottomInset: CGFloat {
-        guard barTopY > 0, listBottomY > 0 else { return TrackInset.gap }
-        return max(0, TrackInset.gap + listBottomY - barTopY)
+        TrackInset.bottomPadding(listBottom: listBottomY, barTop: barTopY)
     }
 
     // MARK: - t154u 逐行出现
@@ -569,34 +558,10 @@ struct AlbumDetailView: View {
         return songs.contains { music.isCurrent($0) }
     }
 
-    @ViewBuilder private var waveform: some View {
-        if collection != nil, !albumIsPlaying {
-            // t223u：显示中但没在播的专辑 → 空闲态（播放键 / 波形 / 播放头归零），不串用正在播放的那张
-            let first = songs?.first { $0.playParameters != nil }
-            WaveformBar(progress: 0,
-                        levels: Waveform.seeded(first?.id.rawValue ?? collection?.id ?? "idle"),
-                        isPlaying: false,
-                        toggle: {
-                            guard let first, let songs else { return }
-                            Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
-                        },
-                        seek: { _ in },
-                        duration: first?.duration ?? 0)
-        } else if collection != nil, music.hasCurrentTrack, let id = music.currentSongID {
-            WaveformBar(progress: music.duration > 0 ? music.position / music.duration : 0,
-                        levels: Waveform.seeded(id.rawValue),
-                        isPlaying: music.isPlaying,
-                        toggle: { Task { await music.togglePlayback() } },
-                        seek: { music.seek(to: $0 * music.duration) },
-                        duration: music.duration)
-        } else {
-            WaveformBar(progress: music.demoElapsed / AppleMusicStore.demoDuration,
-                        levels: demoLevels,
-                        isPlaying: music.demoPlaying,
-                        toggle: { music.selectDemo(music.demoTrack) },
-                        seek: { music.seekDemo($0) },
-                        duration: AppleMusicStore.demoDuration)
-        }
+    private var waveform: some View {
+        let _ = TracklistProfile.count("DetailWaveform.builder")
+        return DetailWaveform(collection: collection, songs: songs,
+                              albumIsPlaying: albumIsPlaying, demoLevels: demoLevels)
     }
 
     /// 内置演示没有音频文件；若包内放入 demo-audio.m4a/.wav，则用 AVAssetReader 实测 RMS。
@@ -605,7 +570,8 @@ struct AlbumDetailView: View {
     // MARK: - 真实曲目表（Apple Music）
 
     private var realTrackTable: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let _ = TracklistProfile.count("TrackTable.builder")
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Text("Side")
                     .font(.system(size: TL.header, weight: .regular))
@@ -638,9 +604,9 @@ struct AlbumDetailView: View {
                     ScrollView(showsIndicators: false) {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             // 行身份 = 歌曲 ID（稳定），切歌时只有两行的颜色 / 图标变化，列表本身不重建
-                            ForEach(songs, id: \.id) { song in
-                                realRow(sideIndex[song.id] ?? 0, song, in: songs)
-                                    .modifier(rowReveal((sideIndex[song.id] ?? 0) + 1))
+                            ForEach(trackRows.rows, id: \.id) { row in
+                                realRow(row, in: songs)
+                                    .modifier(rowReveal(row.index + 1))
                             }
                             // t214u：曲目表末尾「相似专辑」（无结果整段隐藏；在 BottomFade 留白之上，不被时间条挡住）
                             if let collection {
@@ -656,7 +622,7 @@ struct AlbumDetailView: View {
                         // 由实测的列表底 / 时间条顶算出（不写死安全区 / 播放条高度）
                         .padding(.bottom, trackBottomInset)
                     }
-                    .modifier(ScrollEndProximity(range: TrackInset.fadeRange) { listEnd = $0 })
+                    .modifier(ScrollEndProximity(range: TrackInset.fadeRange) { scrollEnd.update($0) })
                 }
             } else {
                 // t181u：读取中的 loading 在空列表区域上下、屏幕左右居中（不再贴在表头下面）
@@ -744,66 +710,75 @@ struct AlbumDetailView: View {
         }
     }
 
-    /// 歌曲 ID → 序号（只随 songs 变化，切歌不影响）
-    private var sideIndex: [MusicItemID: Int] {
-        var map: [MusicItemID: Int] = [:]
-        for (i, song) in (songs ?? []).enumerated() where map[song.id] == nil { map[song.id] = i }
-        return map
-    }
-
-    private func realRow(_ index: Int, _ song: Song, in songs: [Song]) -> some View {
-        let current = albumIsPlaying && music.isCurrent(song)
-        let half = (songs.count + 1) / 2
-        let side = index == 0 ? "A" : (index == half && songs.count > 1 ? "B" : "")
+    private func realRow(_ row: TrackRowModel, in songs: [Song]) -> some View {
+        TracklistProfile.count("TrackRow.builder")
+        let song = row.song
+        let current = music.isCurrent(song)
         return Button {
             Task {
                 if current { await music.togglePlayback() }
                 else { await music.play(song, in: songs, fromCatalog: collection?.isCatalog ?? false) }
             }
         } label: {
+            TrackRowLabel(side: row.side, time: row.time, title: row.title,
+                          current: current, playing: current && music.isPlaying,
+                          ink: theme.ink, mid: theme.mid)
+                .equatable()
+        }
+        .buttonStyle(.plain)
+        // 不再随 isPreparing 整表禁用（plain 按钮禁用会整体变淡 = 切歌时「闪一下」）；
+        // 重复点击由 AppleMusicStore.play 内的 isPreparing 守卫挡掉。
+        .disabled(!row.playable)
+        .opacity(row.playable ? 1 : 0.45)
+        // t229u：歌曲长按菜单（结构对齐 Apple Music）
+        .contextMenu { songMenu(song) }
+        .animation(.easeInOut(duration: 0.15), value: current)
+        .animation(.easeInOut(duration: 0.15), value: current && music.isPlaying)
+        .accessibilityLabel("\(current && music.isPlaying ? "暂停" : "播放") \(song.title)，\(song.artistName)")
+    }
+
+    private struct TrackRowLabel: View, Equatable {
+        let side: String
+        let time: String
+        let title: String
+        let current: Bool
+        let playing: Bool
+        let ink: Color
+        let mid: Color
+
+        var body: some View {
+            let _ = TracklistProfile.count("TrackRowLabel.body")
             HStack(spacing: 0) {
                 Text(side)
-                    .font(.system(size: TL.row, weight: .medium))   // Side 字母 A/B：500 (medium)
-                    .foregroundStyle(theme.ink)
+                    .font(.system(size: TL.row, weight: .medium))
+                    .foregroundStyle(ink)
                     .frame(width: TL.sideW, alignment: .leading)
-                Text(musicTime(song.duration ?? 0))
-                    .font(.system(size: TL.row, weight: .regular, design: .monospaced))   // t115u：时间用 SF Mono
-                    .foregroundStyle(current ? theme.mid : theme.ink)   // t104u：播放中灰、其余黑
+                Text(time)
+                    .font(.system(size: TL.row, weight: .regular, design: .monospaced))
+                    .foregroundStyle(current ? mid : ink)
                     .frame(width: TL.bpmW, alignment: .leading)
                     .lineLimit(1)
                 Group {
                     if current {
-                        // t225u：正在播放的那一行 = 3 柱均衡器（同槽位、同尺寸）；暂停时定格为低位静止
-                        EqualizerGlyph(playing: music.isPlaying, color: theme.ink, height: TL.glyph * 0.85)
+                        EqualizerGlyph(playing: playing, color: ink, height: TL.glyph * 0.85)
                     } else {
                         Image(systemName: "play.fill")
                             .font(.system(size: TL.glyph, weight: .regular))
-                            .foregroundStyle(theme.ink)
+                            .foregroundStyle(ink)
                     }
                 }
-                    // 图标在列内右对齐：图标右缘 → 歌名首字母（含 D 的 ~1.5pt 字形边距）= 8pt
-                    .frame(width: TL.glyphW - TL.glyphTrail, alignment: .center)
-                    .padding(.trailing, TL.glyphTrail)
-                    .offset(x: -TL.iconShift)
-                Text("\(song.artistName) - \(song.title)")
+                .frame(width: TL.glyphW - TL.glyphTrail, alignment: .center)
+                .padding(.trailing, TL.glyphTrail)
+                .offset(x: -TL.iconShift)
+                Text(title)
                     .font(.system(size: TL.row, weight: .regular))
-                    .foregroundStyle(theme.ink)   // t225u：正在播放的歌名 = 主题色（不再变灰）
+                    .foregroundStyle(ink)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
             .frame(height: TL.pitch)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        // 不再随 isPreparing 整表禁用（plain 按钮禁用会整体变淡 = 切歌时「闪一下」）；
-        // 重复点击由 AppleMusicStore.play 内的 isPreparing 守卫挡掉。
-        .disabled(song.playParameters == nil)
-        .opacity(song.playParameters == nil ? 0.45 : 1)
-        // t229u：歌曲长按菜单（结构对齐 Apple Music）
-        .contextMenu { songMenu(song) }
-        .animation(.easeInOut(duration: 0.15), value: current)
-        .animation(.easeInOut(duration: 0.15), value: current && music.isPlaying)
-        .accessibilityLabel("\(current && music.isPlaying ? "暂停" : "播放") \(song.title)，\(song.artistName)")
     }
 
     // 原片实测（960×720 视频，屏宽 289px ↔ 393pt）：列起点相对内容左缘
@@ -1019,6 +994,102 @@ enum ShareSheet {
     }
 }
 
+/// Row display strings are prepared only when the queue data changes.
+struct TrackRowModel: Identifiable {
+    let song: Song
+    let index: Int
+    let side: String
+    let time: String
+    let title: String
+    let playable: Bool
+    var id: MusicItemID { song.id }
+}
+
+@MainActor
+final class TrackRows: ObservableObject {
+    @Published private(set) var rows: [TrackRowModel] = []
+    private var source: [Song] = []
+    func prepare(_ songs: [Song]) {
+        guard source != songs else { return }
+        source = songs
+        TracklistProfile.count("TrackRows.prepare")
+        let half = (songs.count + 1) / 2
+        var indices: [MusicItemID: Int] = [:]
+        rows = songs.enumerated().map { offset, song in
+            let index = indices[song.id] ?? offset
+            indices[song.id] = index
+            return TrackRowModel(song: song, index: index,
+                                 side: index == 0 ? "A" : (index == half && songs.count > 1 ? "B" : ""),
+                                 time: musicTime(song.duration ?? 0),
+                                 title: "\(song.artistName) - \(song.title)",
+                                 playable: song.playParameters != nil)
+        }
+    }
+}
+
+@MainActor
+final class DetailScrollEnd: ObservableObject {
+    @Published private(set) var proximity: CGFloat = 0
+    func update(_ value: CGFloat) {
+        guard proximity != value else { return }
+        proximity = value
+    }
+}
+
+private struct DetailBottomFade: View {
+    @ObservedObject var end: DetailScrollEnd
+    let lyricsMode: Bool
+    var body: some View {
+        let _ = TracklistProfile.count("DetailBottomFade.body")
+        ZStack {
+            Rectangle()
+                .fill(.regularMaterial)
+                .mask(LinearGradient(stops: BottomFade.blurStops, startPoint: .top, endPoint: .bottom))
+                .opacity(lyricsMode ? 0.5 : 1)
+            LinearGradient(stops: BottomFade.tintStops, startPoint: .top, endPoint: .bottom)
+                .opacity(lyricsMode ? 0.5 : 1)
+        }
+        .animation(.easeOut(duration: 0.25), value: lyricsMode)
+        .frame(maxWidth: .infinity)
+        .frame(height: BottomFade.height - (BottomFade.above - TrackInset.gap) * (lyricsMode ? 0 : end.proximity))
+        .ignoresSafeArea(.container, edges: .bottom)
+        .allowsHitTesting(false)
+    }
+}
+
+private struct DetailWaveform: View {
+    @EnvironmentObject private var music: AppleMusicStore
+    @EnvironmentObject private var timeline: PlaybackTimeline
+    let collection: MusicCollection?
+    let songs: [Song]?
+    let albumIsPlaying: Bool
+    let demoLevels: [Double]?
+    var body: some View {
+        let _ = TracklistProfile.count("DetailWaveform.body")
+        if collection != nil, !albumIsPlaying {
+            let first = songs?.first { $0.playParameters != nil }
+            WaveformBar(progress: 0,
+                        levels: Waveform.seeded(first?.id.rawValue ?? collection?.id ?? "idle"),
+                        isPlaying: false,
+                        toggle: {
+                            guard let first, let songs else { return }
+                            Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
+                        },
+                        seek: { _ in }, duration: first?.duration ?? 0)
+        } else if collection != nil, music.hasCurrentTrack, let id = music.currentSongID {
+            WaveformBar(progress: music.duration > 0 ? timeline.position / music.duration : 0,
+                        levels: Waveform.seeded(id.rawValue), isPlaying: music.isPlaying,
+                        toggle: { Task { await music.togglePlayback() } },
+                        seek: { music.seek(to: $0 * music.duration) }, duration: music.duration)
+        } else {
+            WaveformBar(progress: timeline.demoElapsed / AppleMusicStore.demoDuration,
+                        levels: demoLevels, isPlaying: music.demoPlaying,
+                        toggle: { music.selectDemo(music.demoTrack) },
+                        seek: { music.seekDemo($0) }, duration: AppleMusicStore.demoDuration)
+        }
+    }
+}
+
 // MARK: - t225u 正在播放：3 柱均衡器
 
 struct EqualizerGlyph: View {
@@ -1028,6 +1099,7 @@ struct EqualizerGlyph: View {
     private let rest: [CGFloat] = [0.35, 0.55, 0.30]
 
     var body: some View {
+        let _ = TracklistProfile.count("EqualizerGlyph.body")
         TimelineView(.animation(minimumInterval: 1 / 30, paused: !playing)) { tl in
             let t = tl.date.timeIntervalSinceReferenceDate
             HStack(alignment: .bottom, spacing: height * 0.16) {
@@ -1051,18 +1123,26 @@ enum TrackInset {
     static let space = "detailColumn"
     static let gap: CGFloat = 24            // 最后一行 / 相似专辑底 → 时间条顶（与歌词同一规则）
     static let fadeRange: CGFloat = 140     // 距底部 140pt 内模糊逐步收拢
+    static func bottomPadding(listBottom: CGFloat, barTop: CGFloat) -> CGFloat {
+        guard barTop > 0, listBottom > 0 else { return gap }
+        return max(0, gap + listBottom - barTop)
+    }
 }
 
 /// 滚动视图距离内容底部的接近程度（iOS 18 onScrollGeometryChange；iOS 17 恒为 0）
 struct ScrollEndProximity: ViewModifier {
     let range: CGFloat
     let action: (CGFloat) -> Void
+    static func proximity(distance: CGFloat, range: CGFloat) -> CGFloat {
+        min(1, max(0, 1 - distance / range))
+    }
     func body(content: Content) -> some View {
         if #available(iOS 18.0, *) {
             content.onScrollGeometryChange(for: CGFloat.self) { g in
-                g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY
-            } action: { _, d in
-                action(min(1, max(0, 1 - d / range)))
+                let d = g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY
+                return Self.proximity(distance: d, range: range)
+            } action: { _, proximity in
+                action(proximity)
             }
         } else {
             content
@@ -1464,6 +1544,7 @@ final class LyricsStore {
 /// 歌词面板：统一 16pt；普通行和逐字填色使用相同字体与居中排版。
 struct LyricsPanel: View {
     @EnvironmentObject private var music: AppleMusicStore
+    @EnvironmentObject private var timeline: PlaybackTimeline
     @Environment(\.detailTheme) private var theme
     let song: Song
     let songs: [Song]
@@ -1527,8 +1608,8 @@ struct LyricsPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onChange(of: music.position) { _, p in anchorPos = p; anchorDate = Date() }
-        .onAppear { anchorPos = music.position; anchorDate = Date() }
+        .onChange(of: timeline.position) { _, p in anchorPos = p; anchorDate = Date() }
+        .onAppear { anchorPos = timeline.position; anchorDate = Date() }
         .task(id: song.id) {
             if let hit = LyricsStore.shared.peek(song.title, song.artistName) { result = hit; loadedID = song.id; return }
             let r = await LyricsStore.shared.lyrics(title: song.title, artist: song.artistName,
@@ -1540,7 +1621,7 @@ struct LyricsPanel: View {
 
     private func currentIndex(_ lines: [LyricLine]) -> Int {
         guard music.isCurrent(song) else { return -1 }
-        let t = music.position + Lyrics.lookahead
+        let t = timeline.position + Lyrics.lookahead
         guard let first = lines.first, t >= first.time else { return -1 }
         var lo = 0, hi = lines.count - 1
         while lo < hi { let mid = (lo + hi + 1) / 2; if lines[mid].time <= t { lo = mid } else { hi = mid - 1 } }

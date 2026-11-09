@@ -2,6 +2,13 @@ import Foundation
 import MusicKit
 import SwiftUI
 
+/// Only progress displays observe the four-times-per-second playback clock.
+@MainActor
+final class PlaybackTimeline: ObservableObject {
+    @Published var position: TimeInterval = 0
+    @Published var demoElapsed: Double = 0.18 * AppleMusicStore.demoDuration
+}
+
 /// One player for the entire app. Authorization is requested only after a tap.
 @MainActor
 final class AppleMusicStore: ObservableObject {
@@ -34,7 +41,11 @@ final class AppleMusicStore: ObservableObject {
     @Published private(set) var currentSongID: MusicItemID?
     /// 队列条目自身的 ID（有时与 Song ID 不同）
     @Published private(set) var currentCatalogID: MusicItemID?
-    @Published private(set) var position: TimeInterval = 0
+    let timeline = PlaybackTimeline()
+    private(set) var position: TimeInterval {
+        get { timeline.position }
+        set { if timeline.position != newValue { timeline.position = newValue } }
+    }
     @Published private(set) var duration: TimeInterval = 0
     @Published var errorMessage: String?
 
@@ -42,7 +53,10 @@ final class AppleMusicStore: ObservableObject {
     static let demoDuration: Double = 300
     @Published private(set) var demoTrack = 0
     @Published private(set) var demoPlaying = true
-    @Published private(set) var demoElapsed: Double = 0.18 * AppleMusicStore.demoDuration
+    private(set) var demoElapsed: Double {
+        get { timeline.demoElapsed }
+        set { if timeline.demoElapsed != newValue { timeline.demoElapsed = newValue } }
+    }
     /// 点演示曲目：点当前行 = 暂停 / 继续；点其它行 = 切到该曲并开始播放
     // MARK: - 收藏（t105u）
     /// 本地收藏集合（UserDefaults）。MusicKit 只能「加入资料库」不能移除，所以取消收藏只记在本地。
@@ -519,32 +533,47 @@ final class AppleMusicStore: ObservableObject {
 
     private func syncPlayback() {
         guard authorized else {
-            currentTitle = ""
-            currentArtist = ""
-            currentArtwork = nil
-            currentSongID = nil
-            currentCatalogID = nil
+            if !currentTitle.isEmpty { currentTitle = "" }
+            if !currentArtist.isEmpty { currentArtist = "" }
+            if currentArtwork != nil { currentArtwork = nil }
+            if currentSongID != nil { currentSongID = nil }
+            if currentCatalogID != nil { currentCatalogID = nil }
             position = 0
-            duration = 0
-            isPlaying = false
+            if duration != 0 { duration = 0 }
+            if isPlaying { isPlaying = false }
             return
         }
         let entry = player.queue.currentEntry
-        currentTitle = entry?.title ?? ""
-        currentArtist = entry?.subtitle ?? ""
-        currentArtwork = entry?.artwork
-        currentCatalogID = entry.map { MusicItemID($0.id) }
+        if currentTitle != (entry?.title ?? "") { currentTitle = entry?.title ?? "" }
+        if currentArtist != (entry?.subtitle ?? "") { currentArtist = entry?.subtitle ?? "" }
+        if currentArtwork != entry?.artwork { currentArtwork = entry?.artwork }
+        let catalogID = entry.map { MusicItemID($0.id) }
+        if currentCatalogID != catalogID { currentCatalogID = catalogID }
         if case .song(let song) = entry?.item {
-            currentSongID = song.id
-            duration = song.duration ?? 0
+            if currentSongID != song.id { currentSongID = song.id }
+            if duration != (song.duration ?? 0) { duration = song.duration ?? 0 }
             if currentAlbumTitle != (song.albumTitle ?? "") { currentAlbumTitle = song.albumTitle ?? "" }
         } else {
-            currentSongID = nil
-            duration = 0
+            if currentSongID != nil { currentSongID = nil }
+            if duration != 0 { duration = 0 }
         }
         let time = player.playbackTime
         position = time.isFinite ? max(0, time) : 0
-        isPlaying = player.state.playbackStatus == .playing
+        let playing = player.state.playbackStatus == .playing
+        if isPlaying != playing { isPlaying = playing }
+    }
+
+    /// The profiling timer supplies a fixed queue snapshot at the real player's 4 Hz cadence.
+    func profilePlayback(time: TimeInterval) {
+        guard TracklistProfile.enabled, let song = TracklistProfile.songs.first else { return }
+        if currentTitle != song.title { currentTitle = song.title }
+        if currentArtist != song.artistName { currentArtist = song.artistName }
+        if currentArtwork != nil { currentArtwork = nil }
+        if currentSongID != song.id { currentSongID = song.id }
+        if currentCatalogID != song.id { currentCatalogID = song.id }
+        if duration != (song.duration ?? 0) { duration = song.duration ?? 0 }
+        position = time
+        if !isPlaying { isPlaying = true }
     }
 
     private func report(_ error: Error, action: String) {

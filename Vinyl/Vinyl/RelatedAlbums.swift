@@ -51,6 +51,13 @@ final class RelatedAlbumStore: @unchecked Sendable {
         return e.albums
     }
 
+    /// Rendering may inspect memory, but disk decoding belongs to the loading task.
+    func memoryCached(_ c: MusicCollection) -> [Album]? {
+        guard let key = Self.key(c) else { return [] }
+        lock.lock(); defer { lock.unlock() }
+        return memory[key]?.albums
+    }
+
     func prefetch(_ c: MusicCollection?) {
         guard let c else { return }
         Task.detached(priority: .utility) { _ = await self.albums(for: c) }
@@ -58,6 +65,7 @@ final class RelatedAlbumStore: @unchecked Sendable {
 
     /// 读取（同一专辑并发请求合并成一个）
     func albums(for c: MusicCollection, songs: [Song] = []) async -> [Album] {
+        if TracklistProfile.enabled { return [] }
         guard let key = Self.key(c) else { return [] }   // 资料库歌曲：无相似专辑
         if let hit = cached(c) { return hit }
         if case .playlist = c, songs.isEmpty { return [] }   // 歌单要等曲目到了再算（不落盘）
@@ -210,7 +218,8 @@ struct RelatedAlbumsSection: View {
     enum Size { static let cover: CGFloat = 104 }
 
     var body: some View {
-        let shown = loadedFor == collection.id ? albums : (RelatedAlbumStore.shared.cached(collection) ?? [])
+        let _ = TracklistProfile.count("RelatedAlbumsSection.body")
+        let shown = loadedFor == collection.id ? albums : (RelatedAlbumStore.shared.memoryCached(collection) ?? [])
         Group {
             if !shown.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
@@ -223,7 +232,7 @@ struct RelatedAlbumsSection: View {
                             ForEach(shown, id: \.id) { a in
                                 Button { onOpen(.album(a, catalog: true)) } label: {
                                     VStack(alignment: .leading, spacing: 5) {
-                                        ArtworkFill(artwork: a.artwork, render: 220)
+                                        ArtworkFill(artwork: a.artwork, render: Size.cover)
                                             .frame(width: Size.cover, height: Size.cover)
                                             .clipShape(RoundedRectangle(cornerRadius: DS.corner * Size.cover / 76.5))
                                             .shadow(color: .black.opacity(0.14), radius: 6, x: 0, y: 3)
@@ -253,7 +262,11 @@ struct RelatedAlbumsSection: View {
         }
         .animation(.easeOut(duration: 0.25), value: shown.isEmpty)
         .task(id: "\(collection.id)-\(songs.count)") {
-            let r = await RelatedAlbumStore.shared.albums(for: collection, songs: songs)
+            let c = collection, tracks = songs
+            let r = await Task.detached(priority: .utility) {
+                await RelatedAlbumStore.shared.albums(for: c, songs: tracks)
+            }.value
+            guard !Task.isCancelled else { return }
             albums = r; loadedFor = collection.id
         }
     }

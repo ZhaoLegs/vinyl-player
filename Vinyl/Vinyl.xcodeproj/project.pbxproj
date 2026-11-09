@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BA2600000000000000000001 /* TracklistScrollProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA2600000000000000000002 /* TracklistScrollProbe.swift */; };
 		AB1000000000000000000001 /* AppleMusicStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000002 /* AppleMusicStore.swift */; };
 		AB1000000000000000000003 /* AppleMusicViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000004 /* AppleMusicViews.swift */; };
 		AB10000000000000000000F1 /* RelatedAlbums.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000F2 /* RelatedAlbums.swift */; };
@@ -58,6 +59,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		BA2600000000000000000002 /* TracklistScrollProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TracklistScrollProbe.swift; sourceTree = "<group>"; };
 		AB1000000000000000000002 /* AppleMusicStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicStore.swift; sourceTree = "<group>"; };
 		AB1000000000000000000004 /* AppleMusicViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicViews.swift; sourceTree = "<group>"; };
 		AB10000000000000000000F2 /* RelatedAlbums.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelatedAlbums.swift; sourceTree = "<group>"; };
@@ -181,6 +183,7 @@
 			isa = PBXGroup;
 			children = (
 				AB1000000000000000000002 /* AppleMusicStore.swift */,
+				BA2600000000000000000002 /* TracklistScrollProbe.swift */,
 				AB1000000000000000000004 /* AppleMusicViews.swift */,
 				AB10000000000000000000F2 /* RelatedAlbums.swift */,
 				AB1000000000000000000006 /* Waveform.swift */,
@@ -314,6 +317,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AB1000000000000000000001 /* AppleMusicStore.swift in Sources */,
+				BA2600000000000000000001 /* TracklistScrollProbe.swift in Sources */,
 				AB1000000000000000000003 /* AppleMusicViews.swift in Sources */,
 				AB10000000000000000000F1 /* RelatedAlbums.swift in Sources */,
 				AB1000000000000000000005 /* Waveform.swift in Sources */,

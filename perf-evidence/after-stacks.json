@@ -1,0 +1,42 @@
+{
+  "intervalSeconds": 10.031050042,
+  "mainThreadSamples": 1670,
+  "mainThreadSampleWeightMS": 1670.0,
+  "appInclusiveSampleWeightMS": {
+    "closure #1 in closure #1 in closure #2 in closure #1 in AlbumDetailView.realTrackTable.getter": 34.0,
+    "AlbumDetailView.realRow(_:in:)": 34.0,
+    "closure #1 in closure #2 in closure #1 in AlbumDetailView.body.getter": 21.0,
+    "closure #3 in AlbumDetailView.realRow(_:in:)": 7.0,
+    "partial apply for closure #3 in AlbumDetailView.realRow(_:in:)": 7.0,
+    "AlbumDetailView.songMenu(_:)": 7.0,
+    "protocol witness for View.body.getter in conformance AlbumDetailView.TrackRowLabel": 6.0,
+    "AlbumDetailView.TrackRowLabel.body.getter": 6.0,
+    "closure #1 in AlbumDetailView.TrackRowLabel.body.getter": 4.0,
+    "closure #4 in AlbumDetailView.songMenu(_:)": 2.0,
+    "initializeWithCopy for AlbumDetailView": 2.0,
+    "closure #3 in AlbumDetailView.songMenu(_:)": 1.0
+  },
+  "topLeafSampleWeightMS": {
+    "AG::Graph::propagate_dirty(AG::AttributeID)": 154.0,
+    "<deduplicated_symbol>": 98.0,
+    "AG::Graph::UpdateStack::update()": 90.0,
+    "AG::Subgraph::update(unsigned int)": 37.0,
+    "objc_msgSend": 35.0,
+    "swift::MetadataCacheKey::operator==(swift::MetadataCacheKey const&) const": 34.0,
+    "swift_release": 19.0,
+    "_platform_memmove": 12.0,
+    "getCache(swift::TargetTypeContextDescriptor<swift::InProcess> const&)": 12.0,
+    "swift_retain": 12.0,
+    "A8_mark_constmask(BltDepth const*, BltOp const*, MODE)": 11.0,
+    "_platform_memcmp": 10.0,
+    "mach_msg2_trap": 10.0,
+    "specialized find1<A>(_:key:filter:)": 10.0,
+    "AG::Graph::UpdateStack::push(AG::data::ptr<AG::Node>, AG::Node&, bool, bool)": 10.0,
+    "madvise": 9.0,
+    "CA::AttrList::get(unsigned int, _CAValueType, void*) const": 9.0,
+    "DYLD-STUB$$swift_release": 8.0,
+    "AG::data::zone::alloc_bytes_recycle(unsigned int, unsigned int)": 8.0,
+    "_platform_memset": 8.0
+  },
+  "note": "Sample weights are statistical attribution; inclusive frames overlap and must not be added."
+}

@@ -1,0 +1,21 @@
+{
+  "callbacks" : 601,
+  "frameBudgetMS" : 16.666666604578495,
+  "lateCallbackCount" : 0,
+  "lateCallbackExcessMS" : 0,
+  "mainThreadCPUMS" : 1668.3539999999998,
+  "maxCallbackMS" : 19.333875272423029,
+  "note" : "Synthetic MusicKit fixture; CADisplayLink lateness is a scheduling proxy, NOT an official render hitch.",
+  "p95CallbackMS" : 17.408083193004131,
+  "playlist" : "Tracklist performance fixture — 160 songs",
+  "seconds" : 10.016611791681498,
+  "songCount" : 160,
+  "speedPointsPerSecond" : 1200,
+  "viewEvaluations" : {
+    "DetailBottomFade.body" : 15,
+    "DetailWaveform.body" : 40,
+    "EqualizerGlyph.body" : 1,
+    "TrackRow.builder" : 596,
+    "TrackRowLabel.body" : 298
+  }
+}
