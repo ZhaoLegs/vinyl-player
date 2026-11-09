@@ -193,29 +193,25 @@ struct WaveformBar: View {
             let usedPx = n * barPx + (n - 1) * gapPx
             let x0Px = (widthPx - usedPx) / 2
             let bar = CGFloat(barPx) / scale
-            let played = Double(n) * shown
-            let headIndex = min(n - 1, Int(played))
+            // t120u：按整根竖条走（刻度感），不在竖条内部做亚像素进度
+            let playedBars = min(n, Int((Double(n) * shown).rounded(.down)))
+            // 播放头 = 最后一根已播放的竖条（吸附在竖条上，不在竖条之间滑动）
+            let headIndex = playedBars - 1
             for i in 0..<n {
-                let head = i == headIndex && shown > 0
+                let head = i == headIndex
                 let h = ((head ? 24 : barHeight(i, of: n)) * scale).rounded() / scale
                 let x = CGFloat(x0Px + i * (barPx + gapPx)) / scale
                 let y = (((size.height - h) / 2) * scale).rounded() / scale
                 let rect = CGRect(x: x, y: y, width: bar, height: h)
                 let path = Path(roundedRect: rect, cornerRadius: bar / 2)
-                // 亚竖条精度：分界落在某根竖条内部时，这根竖条左段黑、右段灰，拖动时连续移动不跳格
-                let frac = CGFloat(min(1, max(0, played - Double(i))))
-                let gray = Color(hex: 0xB9B5B1)
-                context.drawLayer { layer in
-                    if head { layer.addFilter(.shadow(color: .black.opacity(0.28), radius: 3)) }
-                    if frac >= 1 {
-                        layer.fill(path, with: .color(DS.ink))
-                    } else {
-                        layer.fill(path, with: .color(gray))
-                        if frac > 0 {
-                            layer.clip(to: Path(CGRect(x: x, y: y, width: bar * frac, height: h)))
-                            layer.fill(path, with: .color(DS.ink))
-                        }
+                let color = i < playedBars ? DS.ink : Color(hex: 0xB9B5B1)
+                if head {
+                    context.drawLayer { layer in
+                        layer.addFilter(.shadow(color: .black.opacity(0.28), radius: 3))
+                        layer.fill(path, with: .color(color))
                     }
+                } else {
+                    context.fill(path, with: .color(color))
                 }
             }
         }
@@ -227,6 +223,19 @@ struct WaveformBar: View {
         let (barPx, gapPx) = Self.pixelMetrics(scale: scale)
         let n = max(1, (Int((width * scale).rounded(.down)) + gapPx) / (barPx + gapPx))
         return min(n - 1, Int(f * Double(n)))
+    }
+
+    /// 竖条总数（与 Canvas 同一像素网格算法）
+    private var barTotal: Int {
+        let scale = max(1, displayScale)
+        let (barPx, gapPx) = Self.pixelMetrics(scale: scale)
+        return max(1, (Int((width * scale).rounded(.down)) + gapPx) / (barPx + gapPx))
+    }
+    /// 擦洗位置吸附到整根竖条：k 根已播放 → 进度 k / n
+    private func snapped(_ f: Double) -> (steps: Int, fraction: Double) {
+        let n = barTotal
+        let k = min(n, max(0, Int((f * Double(n)).rounded())))
+        return (k, Double(k) / Double(n))
     }
 
     private func fraction(_ x: CGFloat) -> Double {
@@ -245,19 +254,23 @@ struct WaveformBar: View {
                     if scrub == nil {
                         // 长按激活擦洗：比刻度更重一点的 impact
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        scrub = shown
-                        scrubBar = bar(for: shown)
+                        let snap = snapped(shown)
+                        scrub = snap.fraction
+                        scrubBar = snap.steps
                     }
                     if let drag {
-                        let f = fraction(drag.location.x)
-                        scrub = f            // 只更新 UI（逐帧），松手时才 seek 一次
-                        scrubBar = bar(for: f)
+                        // 一根竖条一格：只有跨进新的一格才更新进度，并触发一次刻度触觉
+                        let snap = snapped(fraction(drag.location.x))
+                        if snap.steps != scrubBar {
+                            scrub = snap.fraction
+                            scrubBar = snap.steps
+                        }
                     }
                 default: break
                 }
             }
             .onEnded { value in
-                if case .second(true, let drag) = value, let drag { seek?(fraction(drag.location.x)) }
+                if case .second(true, let drag) = value, let drag { seek?(snapped(fraction(drag.location.x)).fraction) }
                 else if let s = scrub { seek?(s) }
                 // 等播放器状态追上后再释放本地进度，避免回跳一帧
                 scrubBar = nil
