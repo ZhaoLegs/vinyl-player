@@ -225,24 +225,46 @@ final class AppleMusicStore: ObservableObject {
         homePageRevision += 1
     }
 
+    /// t148u：同一会话里同类提示最多出现一次（不反复弹）
+    private var reportedActions = Set<String>()
+
+    /// t148u：Apple Music API `GET /v1/me/recent/played` 的 limit 上限是 10（原来传 24 → 400 Invalid Parameter Value）。
+    /// 每页 10 条，用 nextBatch 翻页凑满 24；失败重试一次，仍失败就静默不显示「最近播放」分组（首页还有资料库 / 推荐）。
     private func loadRecentlyPlayed(generation: Int) async {
         guard canApply(generation) else { return }
-        do {
-            var request = MusicRecentlyPlayedContainerRequest()
-            request.limit = 24
-            let response = try await request.response()
-            guard canApply(generation) else { return }
-            recentlyPlayed = HomeFeed.merged(groups: [response.items.compactMap { item in
-                switch item {
-                case .album(let album): return .album(album, catalog: true)
-                case .playlist(let playlist): return .playlist(playlist)
-                case .station: return nil
-                @unknown default: return nil
+        var lastError: Error?
+        for attempt in 0..<2 {
+            do {
+                var request = MusicRecentlyPlayedContainerRequest()
+                request.limit = 10
+                var batch = try await request.response().items
+                var all = Array(batch)
+                while all.count < 24, batch.hasNextBatch, let next = try await batch.nextBatch(limit: 10) {
+                    batch = next
+                    all += Array(next)
                 }
-            }], identityKeys: \.identityKeys)
-        } catch {
-            if canApply(generation) { report(error, action: "读取最近播放失败") }
+                guard canApply(generation) else { return }
+                recentlyPlayed = HomeFeed.merged(groups: [all.compactMap { item in
+                    switch item {
+                    case .album(let album): return .album(album, catalog: true)
+                    case .playlist(let playlist): return .playlist(playlist)
+                    case .station: return nil
+                    @unknown default: return nil
+                    }
+                }], identityKeys: \.identityKeys)
+                return
+            } catch is CancellationError {
+                return
+            } catch {
+                lastError = error
+                print("[Vinyl] MusicRecentlyPlayedContainerRequest attempt \(attempt + 1) failed: \(String(reflecting: error))")
+                if attempt == 0 { try? await Task.sleep(for: .seconds(1.5)) }
+                guard canApply(generation) else { return }
+            }
         }
+        // 两次都失败：静默降级（不显示最近播放分组），本会话最多一次非阻塞提示
+        recentlyPlayed = []
+        if let lastError { reportOnce(lastError, action: "读取最近播放失败") }
     }
 
     private func recommendationContent(_ groups: MusicItemCollection<MusicPersonalRecommendation>)
@@ -509,6 +531,12 @@ final class AppleMusicStore: ObservableObject {
 
     private func report(_ error: Error, action: String) {
         errorMessage = "\(action)：\(error.localizedDescription)"
+    }
+
+    private func reportOnce(_ error: Error, action: String) {
+        guard !reportedActions.contains(action) else { return }
+        reportedActions.insert(action)
+        report(error, action: action)
     }
 }
 

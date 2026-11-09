@@ -101,7 +101,7 @@ enum Motion {
         case fluid, ref, snappy, smooth, spring
         var name: String {
             switch self {
-            case .fluid: return "Fluid · 单进度 .spring(0.42 / 0.36, bounce 0) + 8pt 弧线"
+            case .fluid: return "Fluid · 单进度 .spring(bounce 0)，时长按距离 0.34–0.50s + 8pt 弧线"
             case .ref: return "Ref-fit · 原片逐轴拟合（x / y / 尺寸各一条贝塞尔）0.32s"
             case .snappy: return "B · .snappy(duration: 0.4, extraBounce: 0)"
             case .smooth: return "A · .smooth(duration: 0.5)"
@@ -134,8 +134,21 @@ enum Motion {
     /// t135u：Ref 打开时长 0.40 → 0.32s（逐轴曲线形状不变，只缩放时间）；关闭仍 0.31s
     static let refOpen: Double = 0.32
     /// t147u：Fluid 打开 / 关闭弹簧时长（bounce 0 = 临界阻尼，无过冲）
-    static let fluidOpen: Double = 0.42
-    static let fluidClose: Double = 0.36
+    /// t149u：按飞行距离动态设定（setFlight），默认值仅在首次测量前使用
+    static var fluidOpen: Double = 0.42
+    static var fluidClose: Double = 0.36
+    /// t149u：时长随「位移 + 0.5·尺寸差」的平方根增长（感知等速）：
+    /// open = clamp(0.05 + 0.0186·√c, 0.30, 0.55)，close = 0.85·open；c = hypot(dx, dy) + 0.5·|Δsize|（pt）
+    static func flightDurations(start: CGRect, end: CGRect) -> (open: Double, close: Double) {
+        let c = Double(hypot(start.midX - end.midX, start.midY - end.midY) + 0.5 * abs(end.width - start.width))
+        let o = min(0.55, max(0.30, 0.05 + 0.0186 * c.squareRoot()))
+        return (o, o * 0.85)
+    }
+    static func setFlight(start: CGRect, end: CGRect) {
+        let d = flightDurations(start: start, end: end)
+        fluidOpen = d.open
+        fluidClose = d.close
+    }
     /// Fluid 轨迹弧度（二次贝塞尔控制点相对弦中点的法向偏移，pt；朝「先横后竖」一侧弯）
     static let fluidBow: CGFloat = 8
     /// Fluid 尺寸相对位置的轻微滞后：fs = p − lag·p·(1−p)（单调：lag < 1）

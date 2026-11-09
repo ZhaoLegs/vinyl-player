@@ -410,13 +410,16 @@ struct LibraryView: View {
 
     // MARK: - Zoom 转场中的飞行封面
 
+    private var flightStart: CGRect {
+        origin == .zero ? CGRect(x: 27, y: 385, width: 72, height: 72) : origin
+    }
+    private var flightEnd: CGRect {
+        sleeveFrame == .zero ? CGRect(x: 43.5, y: 130, width: DS.sleeve, height: DS.sleeve) : sleeveFrame
+    }
+
     private var flyingCover: some View {
-        let start = origin == .zero
-            ? CGRect(x: 27, y: 385, width: 72, height: 72)
-            : origin
-        let end = sleeveFrame == .zero
-            ? CGRect(x: 43.5, y: 130, width: DS.sleeve, height: DS.sleeve)
-            : sleeveFrame
+        let start = flightStart
+        let end = flightEnd
         return Group {
             if let selectedCollection {
                 ArtworkFill(artwork: selectedCollection.artwork)
@@ -447,6 +450,8 @@ struct LibraryView: View {
         landed = false
         var noAnim = Transaction(); noAnim.disablesAnimations = true
         withTransaction(noAnim) { wipe = 0 }
+        // t149u：按本次格子 → 封套的距离决定弹簧时长（封面、网格缩放、模糊、抽唱片延迟共用）
+        Motion.setFlight(start: flightStart, end: flightEnd)
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open),
                       completionCriteria: .logicallyComplete) {
             zoom = 1
@@ -557,6 +562,7 @@ struct LibraryView: View {
         guard presented && !closing else { return }
         // t131u：飞回「当前显示的那张专辑」的格子（实时 frame）
         if let k = targetKey, let f = cellFrames[k] { origin = f }
+        Motion.setFlight(start: flightStart, end: flightEnd)
         landed = false
         // 关闭时封面只做缩放 / 位移回到网格，不做任何翻转：
         // 即使用户翻到了 B 面，也先无动画地把 flip 归零。
