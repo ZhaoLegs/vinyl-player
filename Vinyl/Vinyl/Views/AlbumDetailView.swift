@@ -47,6 +47,12 @@ struct AlbumDetailView: View {
     @State private var swipeX: CGFloat = 0
     /// t154u：逐行出现的时间轴（秒，0 → Reveal.total 线性推进；每行 / 播放条按各自 delay 取 easeOut 进度）
     @State private var reveal: CGFloat = Reveal.total
+    /// t157u：播放条入场进度（0 = 在屏幕外，1 = 落位）
+    @State private var barIn: CGFloat = 0
+    /// 滑入距离 = 播放条高 42 + 底部间距 10 + 底部安全区（整条完全在屏幕外起步）
+    /// （不在 body 里读 UIWindow：那会让整个详情层不渲染；底部安全区由页面 GeometryReader 写入）
+    @State private var bottomSafe: CGFloat = 34
+    private var barTravel: CGFloat { 42 + 10 + bottomSafe }
     /// nil = 未判定；true = 横向主导（接管）；false = 纵向（交给列表滚动）
     @State private var swipeAxisH: Bool? = nil
     @State private var swipeBusy = false
@@ -77,8 +83,9 @@ struct AlbumDetailView: View {
                 .mask(WipeMask(progress: wipe).ignoresSafeArea())
             GeometryReader { geo in
                 Color.clear
-                    .onAppear { pageWidth = geo.size.width }
+                    .onAppear { pageWidth = geo.size.width; bottomSafe = geo.safeAreaInsets.bottom > 0 ? geo.safeAreaInsets.bottom : 34 }
                     .onChange(of: geo.size.width) { _, w in pageWidth = w }
+                    .onChange(of: geo.safeAreaInsets.bottom) { _, b in bottomSafe = b > 0 ? b : 34 }
             }
             Rectangle()
                 .fill(.ultraThinMaterial)
@@ -169,15 +176,26 @@ struct AlbumDetailView: View {
                         .ignoresSafeArea(.container, edges: .bottom)
                         .allowsHitTesting(false)
                     }
-                    // t154u：封面落定时播放条淡入 + 上浮 6pt（0.25s easeOut）；关闭时随 contentAlpha 一起快速淡出
-                    .modifier(StaggerReveal(reveal: reveal, delay: 0, duration: Reveal.barDuration, rise: Reveal.barRise,
-                                            closing: closing, closeAlpha: contentAlpha))
+                    // t157u：封面放大结束（landed）后，播放条从屏幕底边外向上滑入 + 淡入（spring 0.4s，bounce 0）；
+                    // 关闭时仍随 contentAlpha 一起 0.12s 快速淡出（不位移）
+                    .opacity(closing ? contentAlpha : (contentAlpha > 0.001 ? Double(barIn) : 0))
+                    .offset(y: closing ? 0 : (1 - barIn) * barTravel)
             }
             // 不再给整列加 contentAlpha：封套只受 ArtworkHandoff 控制（全显 / 全隐），
             // 不会出现半透明封套透出唱片的「鬼影」帧；其余内容各自按 stage() 淡入。
         }
         .onAppear { startReveal(delay: openRevealDelay) }
         .onChange(of: motionStart) { _, _ in startReveal(delay: openRevealDelay) }
+        .onChange(of: landed) { _, now in
+            guard now, !closing else { return }
+            withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(duration: 0.4, bounce: 0)) { barIn = 1 }
+        }
+        .onChange(of: isPresented) { _, shown in
+            // t156u：关闭完成后把逐行时间轴归零，下次打开从头错峰
+            guard !shown else { return }
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { reveal = 0; barIn = 0 }
+        }
         .task {
             guard demoLevels == nil,
                   let url = Bundle.main.url(forResource: "demo-audio", withExtension: "m4a")
@@ -202,6 +220,7 @@ struct AlbumDetailView: View {
         var t = Transaction(); t.disablesAnimations = true
         if reduceMotion { withTransaction(t) { reveal = Reveal.total }; return }
         withTransaction(t) { reveal = 0 }
+        if !landed { withTransaction(t) { barIn = 0 } }
         withAnimation(.linear(duration: Double(Reveal.total)).delay(delay)) { reveal = Reveal.total }
     }
 
@@ -633,7 +652,8 @@ struct StaggerReveal: AnimatableModifier {
         let t = min(1, max(0, (reveal - delay) / duration))
         let e = 1 - pow(1 - t, 3)   // easeOut
         content
-            .opacity(closing ? closeAlpha : Double(e))
+            // t156u：详情未打开（contentAlpha = 0：首次启动 / 关闭完成后）时整块隐藏，不透到首页
+            .opacity(closing ? closeAlpha : (closeAlpha > 0.001 ? Double(e) : 0))
             .offset(y: closing ? 0 : rise * (1 - e))
     }
 }
