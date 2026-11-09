@@ -70,13 +70,19 @@ struct AlbumDetailView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            // t141u：详情背景 = 首页网格本身的渐进高斯模糊（LibraryView.GridVeil），这里不再铺不透明 Aurora，
-            // 否则关闭时露出的是一片平的乳白色而不是模糊。
+            AuroraBackground()
+                .opacity(closing ? 1 : contentAlpha)
+                .mask(WipeMask(progress: wipe).ignoresSafeArea())
             GeometryReader { geo in
                 Color.clear
                     .onAppear { pageWidth = geo.size.width }
                     .onChange(of: geo.size.width) { _, w in pageWidth = w }
             }
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(0.35 * (closing ? 1 : contentAlpha))
+                .mask(WipeMask(progress: wipe).ignoresSafeArea())
+                .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 header
