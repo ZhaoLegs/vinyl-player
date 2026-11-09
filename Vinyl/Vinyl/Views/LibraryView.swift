@@ -32,9 +32,10 @@ struct LibraryView: View {
     private var gridDim: CGFloat { get { zm.gridDim } nonmutating set { zm.gridDim = newValue } }
     /// 关闭时详情模糊背景的自上而下擦除进度：0 = 全覆盖，1 = 全部消失
     private var wipe: CGFloat { get { zm.wipe } nonmutating set { zm.wipe = newValue } }
-    private var origin: CGRect { get { zm.origin } nonmutating set { zm.origin = newValue } }
-    private var sleeveFrame: CGRect { get { zm.sleeveFrame } nonmutating set { zm.sleeveFrame = newValue } }
-    private var cellFrames: [Int: CGRect] { get { zm.cellFrames } nonmutating set { zm.cellFrames = newValue } }
+    // t144u：几何类代理相同值不写回（@Published 无论值是否相等都会发 objectWillChange，导致两棵视图树整树失效）
+    private var origin: CGRect { get { zm.origin } nonmutating set { if zm.origin != newValue { zm.origin = newValue } } }
+    private var sleeveFrame: CGRect { get { zm.sleeveFrame } nonmutating set { if zm.sleeveFrame != newValue { zm.sleeveFrame = newValue } } }
+    private var cellFrames: [Int: CGRect] { get { zm.cellFrames } nonmutating set { if zm.cellFrames != newValue { zm.cellFrames = newValue } } }
     private var selectedIndex: Int { get { zm.selectedIndex } nonmutating set { zm.selectedIndex = newValue } }
 
     private var pull: CGFloat { get { zm.pull } nonmutating set { zm.pull = newValue } }
@@ -474,7 +475,7 @@ struct LibraryView: View {
     /// 打开弹簧逻辑完成（已落定）→ 详情封套接手
     private var landed: Bool { get { zm.landed } nonmutating set { zm.landed = newValue } }
     /// 关闭飞行的目标格子（cellFrames 的 key），滚动时实时跟踪它的 frame
-    private var gridFrame: CGRect { get { zm.gridFrame } nonmutating set { zm.gridFrame = newValue } }
+    private var gridFrame: CGRect { get { zm.gridFrame } nonmutating set { if zm.gridFrame != newValue { zm.gridFrame = newValue } } }
     private var scrollRequest: Int? { get { zm.scrollRequest } nonmutating set { zm.scrollRequest = newValue } }
     private var targetKey: Int? { get { zm.targetKey } nonmutating set { zm.targetKey = newValue } }
 

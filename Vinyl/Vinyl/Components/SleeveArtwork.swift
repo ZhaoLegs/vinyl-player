@@ -21,17 +21,8 @@ struct VinylDiscView: View {
 
             // ① 随盘旋转：沟槽 + 扇光 + 中心标签
             ZStack {
-                Canvas { context, size in
-                    let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                    var r: CGFloat = 26
-                    while r < size.width / 2 - 3 {
-                        let rect = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
-                        context.stroke(Path(ellipseIn: rect),
-                                       with: .color(.white.opacity(0.045)),
-                                       lineWidth: 0.7)
-                        r += 2.4
-                    }
-                }
+                // t144u：沟槽是静态图形，抽成 Equatable 子视图 → 唱片每帧转动（TimelineView）时不再重绘 Canvas
+                VinylGrooves().equatable()
                 Circle()
                     .fill(AngularGradient(colors: [
                         .white.opacity(0.10), .clear, .clear,
@@ -61,6 +52,24 @@ struct VinylDiscView: View {
         // 抽出时唱片离开封套、投影随位移加深，制造景深
         .shadow(color: .black.opacity(Double(0.17 + 0.06 * pull)),   // 原 0.35 + 0.12·pull，减半
                 radius: 20 + 12 * pull, y: 10 + 8 * pull)
+    }
+}
+
+/// 同心沟槽（静态；外观与原 Canvas 完全一致）
+struct VinylGrooves: View, Equatable {
+    static func == (a: VinylGrooves, b: VinylGrooves) -> Bool { true }
+    var body: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            var r: CGFloat = 26
+            while r < size.width / 2 - 3 {
+                let rect = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
+                context.stroke(Path(ellipseIn: rect),
+                               with: .color(.white.opacity(0.045)),
+                               lineWidth: 0.7)
+                r += 2.4
+            }
+        }
     }
 }
 
@@ -151,26 +160,8 @@ struct SleeveArtwork: View, Animatable {
                     .allowsHitTesting(false)
                 // 孔是封套的真实透明挖孔（下方 mask destinationOut），孔内不画任何独立图形：
                 // 透过孔看到的就是后面那一张完整的大黑胶在孔位置的那一部分（随抽出位置变化）。
-                Group {
-                    if let artwork {
-                        ArtworkFill(artwork: artwork)
-                    } else {
-                        Image(coverName).resizable()
-                    }
-                }
-                    .frame(width: DS.sleeve, height: DS.sleeve)
-                    // 孔直径 = sleeve × 28.06% ≈ 86pt，与原片 sleeve_cutout 实测一致
-                    .mask {
-                        Rectangle()
-                            .overlay {
-                                Circle()
-                                    .frame(width: DS.planet,
-                                           height: DS.planet)
-                                    .blendMode(.destinationOut)
-                            }
-                            .compositingGroup()
-                    }
-                    .shadow(color: .black.opacity(0.12), radius: 8, y: 5)
+                // t144u：挖孔封套是静态的（只随 pull / flip 做变换），抽成 Equatable 子视图，转盘每帧不再重算它
+                SleeveCutout(coverName: coverName, artwork: artwork).equatable()
             }
             .scaleEffect(1 - DS.pullScale * pull, anchor: .center)   // 以中心缩放，封套中线不动 → 唱片始终上下居中
             .offset(x: -sleevePullX * pull)
@@ -180,5 +171,33 @@ struct SleeveArtwork: View, Animatable {
         .brightness(-0.16 * abs(sin(flip * .pi / 180)))
         .rotation3DEffect(.degrees(flip > 90 ? flip - 180 : flip),
                           axis: (x: 0, y: 1, z: 0), perspective: 0.55)
+    }
+}
+
+/// 挖孔封套本体（外观与原内联实现一致）
+struct SleeveCutout: View, Equatable {
+    var coverName: String
+    var artwork: Artwork?
+    var body: some View {
+        Group {
+            if let artwork {
+                ArtworkFill(artwork: artwork)
+            } else {
+                Image(coverName).resizable()
+            }
+        }
+            .frame(width: DS.sleeve, height: DS.sleeve)
+            // 孔直径 = sleeve × 28.06% ≈ 86pt，与原片 sleeve_cutout 实测一致
+            .mask {
+                Rectangle()
+                    .overlay {
+                        Circle()
+                            .frame(width: DS.planet,
+                                   height: DS.planet)
+                            .blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+            }
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 5)
     }
 }
