@@ -556,19 +556,26 @@ final class OfficialCoverStore: @unchecked Sendable {
         }
         if let t = inflight[q.id] { lock.unlock(); return await t.value }
         let task = Task.detached(priority: .utility) { [self] () -> UIImage? in
-            let url = await lookup(q)
-            lock.lock()
-            map[q.id] = Entry(url: url?.absoluteString, checkedAt: Date())
-            if url != nil { stats.hit += 1 } else { stats.miss += 1 }
-            let st = stats
-            saveLocked()
-            lock.unlock()
-            if (st.hit + st.miss) == 24 || (st.hit + st.miss) % 40 == 0 {
-                let total = st.hit + st.miss
-                print("[t197u] official covers: \(st.hit)/\(total) matched (\(Int(Double(st.hit)/Double(max(1,total))*100))%), miss \(st.miss), err \(st.error)")
+            let result = await lookup(q)   // .success(url?) = 确定命中/未命中；.failure = 网络错误，不落盘以便重试
+            switch result {
+            case .failure:
+                lock.lock(); stats.error += 1; let st = stats; lock.unlock()
+                print("[t197u] MB temporary failure for \(q.title) (will retry later); err total \(st.error)")
+                return nil
+            case .success(let url):
+                lock.lock()
+                map[q.id] = Entry(url: url?.absoluteString, checkedAt: Date())
+                if url != nil { stats.hit += 1 } else { stats.miss += 1 }
+                let st = stats
+                saveLocked()
+                lock.unlock()
+                if (st.hit + st.miss) == 24 || (st.hit + st.miss) % 40 == 0 {
+                    let total = st.hit + st.miss
+                    print("[t197u] official covers: \(st.hit)/\(total) matched (\(Int(Double(st.hit)/Double(max(1,total))*100))%), miss \(st.miss), err \(st.error)")
+                }
+                guard let url else { return nil }
+                return await ArtworkCache.shared.image(for: url)
             }
-            guard let url else { return nil }
-            return await ArtworkCache.shared.image(for: url)
         }
         inflight[q.id] = task
         lock.unlock()
@@ -598,20 +605,20 @@ final class OfficialCoverStore: @unchecked Sendable {
         if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
     }
 
-    private func lookup(_ q: OfficialCoverQuery) async -> URL? {
+    private func lookup(_ q: OfficialCoverQuery) async -> Result<URL?, Error> {
         // 歌单 / 资料库歌曲集合不适合按「专辑+艺人」查
-        if q.id.hasPrefix("playlist-") || q.id.hasPrefix("library-songs") { return nil }
+        if q.id.hasPrefix("playlist-") || q.id.hasPrefix("library-songs") { return .success(nil) }
         await throttle()
         let title = sanitize(q.title)
         let artist = sanitize(q.artist)
-        guard !title.isEmpty, !artist.isEmpty else { return nil }
+        guard !title.isEmpty, !artist.isEmpty else { return .success(nil) }
         do {
             let (data, resp) = try await mbSearch(title: title, artist: artist)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             guard code == 200, let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let groups = json["release-groups"] as? [[String: Any]], !groups.isEmpty else {
-                if code == 503 || code == 429 { lock.lock(); stats.error += 1; lock.unlock() }
-                return nil
+                if code == 503 || code == 429 { return .failure(URLError(.badServerResponse)) }
+                return .success(nil)
             }
             // 取最高分。同名多版本（Deluxe / nightcore 等）仍用最高分主版本；
             // 仅当第二名分数接近（差 < 5）且标题规范化后不同 → 视为歧义
@@ -621,20 +628,19 @@ final class OfficialCoverStore: @unchecked Sendable {
                 let name = (g["title"] as? String) ?? ""
                 return (id, score, name)
             }.sorted { $0.1 > $1.1 }
-            guard let best = scored.first, best.1 >= 85 else { return nil }
+            guard let best = scored.first, best.1 >= 85 else { return .success(nil) }
             if let second = scored.dropFirst().first,
                second.1 >= 85,
                best.1 - second.1 < 5,
                sanitize(best.2).caseInsensitiveCompare(sanitize(second.2)) != .orderedSame {
-                return nil
+                return .success(nil)
             }
             // Cover Art Archive：先试 front-500；404 再读 JSON 取任意 front
-            if let url = await coverURL(releaseGroup: best.0) { return url }
-            return nil
+            if let url = await coverURL(releaseGroup: best.0) { return .success(url) }
+            return .success(nil)
         } catch {
-            lock.lock(); stats.error += 1; lock.unlock()
             print("[t197u] MB lookup failed for \(q.title): \(error)")
-            return nil
+            return .failure(error)
         }
     }
 
