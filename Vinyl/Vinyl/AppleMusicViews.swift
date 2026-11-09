@@ -444,8 +444,11 @@ struct CachedArtwork: View {
     let side: CGFloat
     var official: OfficialCoverQuery? = nil
     @Environment(\.displayScale) private var scale
-    @State private var appleImage: UIImage?
-    @State private var officialImage: UIImage?
+    // t211u：图片带上来源 key，输入变了旧图立即失效（不会把上一个专辑的封面留在格子里）
+    @State private var appleLoaded: (key: String, image: UIImage)?
+    @State private var officialLoaded: (key: String, image: UIImage)?
+    private var appleImage: UIImage? { appleLoaded.flatMap { $0.key == appleURL?.absoluteString ? $0.image : nil } }
+    private var officialImage: UIImage? { officialLoaded.flatMap { $0.key == official?.id ? $0.image : nil } }
 
     private var appleURL: URL? {
         let px = Int((side * scale).rounded())
@@ -477,16 +480,16 @@ struct CachedArtwork: View {
 
         .task(id: appleURL?.absoluteString) {
             guard let appleURL else { return }
-            if let i = await ArtworkCache.shared.image(for: appleURL) { appleImage = i }
+            if let i = await ArtworkCache.shared.image(for: appleURL) { appleLoaded = (appleURL.absoluteString, i) }
         }
         .task(id: official?.id) {
             guard let official else { return }
             if let cached = OfficialCoverStore.shared.cachedImage(for: official.id) {
-                officialImage = cached; return
+                officialLoaded = (official.id, cached); return
             }
             if let img = await OfficialCoverStore.shared.image(for: official) {
                 // 首次命中才淡入（之后都同步命中缓存，无动画）
-                withAnimation(.easeInOut(duration: 0.25)) { officialImage = img }
+                withAnimation(.easeInOut(duration: 0.25)) { officialLoaded = (official.id, img) }
             }
         }
     }

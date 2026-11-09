@@ -689,10 +689,18 @@ extension AppleMusicStore {
         var h = hiddenHome; h.insert(c.id)
         UserDefaults.standard.set(Array(h), forKey: Self.hiddenKey)
         collections.removeAll { $0.id == c.id }
+        HomeCache.save(collections)   // t211u：缓存里也去掉，重启首帧不会再出现
     }
     func unhideAll() {
         UserDefaults.standard.removeObject(forKey: Self.hiddenKey)
-        rebuildHome()
+        // t211u：资料库已载入 → 立即原位重建；否则（刚冷启动，只有缓存）后台完整刷新一次
+        if libraryLoaded {
+            rebuildHome()
+            homePageRevision += 1
+            HomeCache.save(collections)
+        } else {
+            Task { await refreshHome() }
+        }
     }
 
     private func playable(_ c: MusicCollection) async -> [Song] {
@@ -813,13 +821,16 @@ enum HomeCache {
         guard !DemoMode.enabled, MusicAuthorization.currentStatus == .authorized,
               let data = try? Data(contentsOf: url),
               let items = try? JSONDecoder().decode([Item].self, from: data) else { return [] }
-        let list: [MusicCollection] = items.map {
+        let decoded: [MusicCollection] = items.map {
             switch $0 {
             case .album(let a, let c): return .album(a, catalog: c)
             case .playlist(let p): return .playlist(p)
             case .librarySongs(let s): return .librarySongs(s)
             }
         }
+        // t211u：缓存首帧同样过滤「从首页隐藏」
+        let hidden = Set(UserDefaults.standard.stringArray(forKey: "vinyl.hiddenHome") ?? [])
+        let list = decoded.filter { !hidden.contains($0.id) }
         print("[t193u] home cache: \(list.count) items decoded in \(String(format: "%.0f", Date().timeIntervalSince(launch) * 1000))ms")
         // 预取前 6 行封面（磁盘 → 内存），首屏直接命中内存
         let urls = list.prefix(24).compactMap { $0.artwork?.url(width: 960, height: 960) }

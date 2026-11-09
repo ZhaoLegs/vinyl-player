@@ -277,8 +277,11 @@ struct LibraryView: View {
                     }
                 } else {
                     ForEach(Array(real.enumerated()), id: \.element.id) { index, collection in
+                        // t211u：视图身份 = 集合 id（原来 .id(1000 + index) 按位置复用视图：
+                        // 隐藏一个后，该位置的格子继承了被隐藏专辑的 @State 封面图，看起来「没隐藏」）
                         musicCell(index, collection)
-                            .id(1000 + index)
+                            .id(collection.id)
+                            .transition(.scale(scale: 0.85).combined(with: .opacity))
                     }
                 }
             }
@@ -309,7 +312,12 @@ struct LibraryView: View {
         }
         .onChange(of: scrollRequest) { _, key in
             guard let key else { return }
-            proxy.scrollTo(key, anchor: .center)
+            // t211u：真实格子的滚动 id = 集合 id（key 仍是 1000 + 位置）
+            if key >= 1000, music.collections.indices.contains(key - 1000) {
+                proxy.scrollTo(music.collections[key - 1000].id, anchor: .center)
+            } else {
+                proxy.scrollTo(key, anchor: .center)
+            }
         }
         }
         // t145u：恢复 build 134 的高斯模糊外观（打开时均匀淡入；关闭时由详情背景自上而下羽化擦除）
