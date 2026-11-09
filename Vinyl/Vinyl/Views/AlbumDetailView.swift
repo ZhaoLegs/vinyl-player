@@ -593,7 +593,7 @@ struct AlbumDetailView: View {
                             }
                             // t214u：曲目表末尾「相似专辑」（无结果整段隐藏；在 BottomFade 留白之上，不被时间条挡住）
                             if let collection {
-                                RelatedAlbumsSection(collection: collection, ink: theme.ink, dim: theme.dim) { c in
+                                RelatedAlbumsSection(collection: collection, songs: songs, ink: theme.ink, dim: theme.dim) { c in
                                     guard !swipeBusy else { return }
                                     commitJump(to: c)
                                 }
@@ -1147,7 +1147,17 @@ enum Lyrics {
     static let fadeIn: Double = 0.25       // 歌词淡入
     static let fadeInDelay: Double = 0.3   // t162u：歌词在翻转阶段（合拢 0.3s 之后）淡入
     static let anchor = UnitPoint(x: 0.5, y: 1.0 / 3)   // 当前行滚到列表高度 1/3 处
-    static let lineGap: CGFloat = 14
+    static let lineGap: CGFloat = 16      // t240u：行距 ≈ 字高（17pt 粗体）
+    // t240u：Apple Music 风格
+    static let fontSize: CGFloat = 17
+    static let activeScale: CGFloat = 1.12
+    static let dimOpacity: Double = 0.35     // 非当前行
+    static let unsungOpacity: Double = 0.5   // 当前行未唱部分
+    static let scroll = Animation.spring(duration: 0.45, bounce: 0)   // 阻尼 ease-out，整段一起走
+    /// 右侧预留放大余量：当前行以左缘为锚放大 1.12 后仍不出界，且换行位置与非当前行一致（不重排）
+    static let scaleRoom: CGFloat = 40
+    static func blur(distance d: Int) -> CGFloat { d <= 0 ? 0 : min(5, 3 + CGFloat(d - 1) * 0.5) }
+    static var font: Font { .system(size: fontSize, weight: .bold) }
     static let topInset: CGFloat = LyricsTopFade.height * 0.55   // t231u：首行落在顶部模糊带之下，可读；上方溶开
     static let bottomGap: CGFloat = 24     // t175u：最后一行底 → 时间条顶 = 24pt
     static let lookahead: Double = 0.15    // 播放时钟 0.25s 一跳，提前一点点亮下一行
@@ -1404,11 +1414,12 @@ struct LyricsPanel: View {
             case .plain(let text)?:
                 ScrollView(showsIndicators: false) {
                     Text(text)
-                        .font(.system(size: 15))
-                        .foregroundStyle(theme.ink)
+                        .font(Lyrics.font)                 // t240u：左对齐粗体
+                        .foregroundStyle(theme.ink.opacity(0.85))
                         .lineSpacing(Lyrics.lineGap)
-                        .multilineTextAlignment(.center)   // t163u：歌词整体居中
-                        .frame(maxWidth: .infinity, alignment: .center)
+                        .multilineTextAlignment(.leading)
+                        .shadow(color: .black.opacity(0.10), radius: 1.5, y: 0.5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, DS.contentInset)
                         .padding(.top, Lyrics.topInset)
                         .padding(.bottom, Lyrics.bottomGap)
@@ -1454,30 +1465,42 @@ struct LyricsPanel: View {
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: Lyrics.lineGap) {
                     ForEach(lines) { line in
+                        // t240u：Apple Music 风格 —— 左对齐粗体；当前行 1.12×（左缘锚点）清晰，
+                        // 其他行 0.35 + 3–5pt 模糊（离得越远越糊）；只有当前行挂 TimelineView 逐帧擦亮，其余静态
+                        let isCurrent = line.id == current
+                        let d = current < 0 ? 0 : abs(line.id - current)
                         Group {
-                            if line.id == current {
-                                // t165u：当前行按演唱进度逐字变黑（显示刷新率驱动）
+                            if isCurrent {
                                 KaraokeLine(line: line, end: lineEnd(lines, line.id),
                                             anchorPos: anchorPos, anchorDate: anchorDate,
                                             playing: music.isPlaying)
                             } else {
                                 Text(line.text)
-                                    .font(.system(size: 15, weight: .regular))
-                                    .foregroundStyle(theme.dim)
+                                    .font(Lyrics.font)
+                                    .foregroundStyle(theme.ink)
                             }
                         }
-                            .multilineTextAlignment(.center)   // t163u：歌词整体居中
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .contentShape(Rectangle())
-                            .onTapGesture { seek(to: line) }
-                            .id(line.id)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.trailing, Lyrics.scaleRoom)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .scaleEffect(isCurrent ? Lyrics.activeScale : 1, anchor: .leading)
+                        // 未在播这首 / 尚未到第一句：全部 0.5、不模糊（可读）
+                        .opacity(isCurrent ? 1 : (current < 0 ? Lyrics.unsungOpacity : Lyrics.dimOpacity))
+                        .blur(radius: Lyrics.blur(distance: d))
+                        .contentShape(Rectangle())
+                        .onTapGesture { seek(to: line) }
+                        .id(line.id)
                     }
                 }
+                // 一点点暗色字影（整组一次，不逐行叠加）
+                .shadow(color: .black.opacity(0.10), radius: 1.5, y: 0.5)
                 .padding(.horizontal, DS.contentInset)
                 .padding(.top, Lyrics.topInset)
                 // t175u：歌词最后一行最多停在时间条顶部上方 24pt（不再留 260pt 空白，scrollTo 被内容边界夹住，不会把歌词推到顶部）
                 .padding(.bottom, Lyrics.bottomGap)
-                .animation(.easeOut(duration: 0.2), value: current)
+                // 换行：缩放 / 透明度 / 模糊 与滚动同一条阻尼曲线（出入行交叉淡化，无 stagger）
+                .animation(Lyrics.scroll, value: current)
             }
             // t231u：内容本身顶部 alpha 渐变（配合 overlay 的 material 模糊）——上滚的行溶入背景
             .mask {
@@ -1490,7 +1513,7 @@ struct LyricsPanel: View {
             .onAppear { if current >= 0 { proxy.scrollTo(current, anchor: Lyrics.anchor) } }
             .onChange(of: current) { _, i in
                 guard i >= 0 else { return }
-                withAnimation(.spring(duration: 0.45, bounce: 0)) { proxy.scrollTo(i, anchor: Lyrics.anchor) }
+                withAnimation(Lyrics.scroll) { proxy.scrollTo(i, anchor: Lyrics.anchor) }
             }
         }
     }
@@ -1557,22 +1580,31 @@ struct KaraokeLine: View {
         return Double(cs.count)
     }
 
+    /// t240u：已唱 → 1.0，未唱 → 0.5；边界是约 2.5 个字宽的柔和渐变带，随进度由左到右线性推进（无回弹）。
+    /// 逐字着色（而非整块蒙版），多行折行时也是一行一行擦亮。
+    static let softWidth: Double = 2.5
+
     var body: some View {
         TimelineView(.animation(paused: !playing)) { tl in
             let dt = playing ? min(Karaoke.maxExtrapolate, max(0, tl.date.timeIntervalSince(anchorDate))) : 0
             let n = filled(at: anchorPos + dt)
             let cs = chars
-            let full = min(cs.count, Int(n))
-            let frac = n - Double(full)
-            var text = Text(verbatim: "")
-            let done = String(cs[0..<full])
-            let rest = full < cs.count ? String(cs[(full + 1)...]) : ""
-            text = Text("\(Text(verbatim: done).foregroundColor(theme.ink))")
-            if full < cs.count {
-                let edge = Text(verbatim: String(cs[full])).foregroundColor(Color.mix(theme.dim, theme.ink, frac))
-                text = Text("\(text)\(edge)\(Text(verbatim: rest).foregroundColor(theme.dim))")
+            let w = Self.softWidth
+            // [0, lit) 全亮；[lit, dim) 渐变带；[dim, end) 未唱
+            let lit = max(0, min(cs.count, Int(floor(n - w))))
+            let dimStart = max(lit, min(cs.count, Int(ceil(n))))
+            let hi = theme.ink, lo = theme.ink.opacity(Lyrics.unsungOpacity)
+            var text = Text(verbatim: String(cs[0..<lit])).foregroundColor(hi)
+            for i in lit..<dimStart {
+                let u = max(0, min(1, (n - Double(i)) / w))
+                let k = u * u * (3 - 2 * u)
+                let o = Lyrics.unsungOpacity + (1 - Lyrics.unsungOpacity) * k
+                text = Text("\(text)\(Text(verbatim: String(cs[i])).foregroundColor(theme.ink.opacity(o)))")
             }
-            return text.font(.system(size: 15, weight: .semibold))
+            if dimStart < cs.count {
+                text = Text("\(text)\(Text(verbatim: String(cs[dimStart...])).foregroundColor(lo))")
+            }
+            return text.font(Lyrics.font)
         }
     }
 }

@@ -109,11 +109,17 @@ struct LibraryView: View {
                     try? await Task.sleep(for: .seconds(1))
                     origin = cellFrames[1000 + i] ?? origin
                     targetKey = 1000 + i
-                    openCollection(music.collections[i], startPlayback: false)
+                    // t240u：--debug-play 时打开即播放（截播放态歌词）；默认不播放
+                    let debugPlay = ProcessInfo.processInfo.arguments.contains("--debug-play")
+                    openCollection(music.collections[i], startPlayback: debugPlay)
                     // t231u：诊断 —— 加 --debug-lyrics 时落定后翻到歌词页（截图顶部过渡用）
                     if ProcessInfo.processInfo.arguments.contains("--debug-lyrics") {
                         try? await Task.sleep(for: .seconds(2.5))
                         toggleArtwork()
+                        if debugPlay {
+                            try? await Task.sleep(for: .seconds(2))
+                            if music.duration > 60 { music.seek(to: 50) }
+                        }
                     }
                 }
                 // t214u：诊断 —— --log-related 启动参数时，对首页前几个专辑跑一遍相似专辑查询并打印数据源

@@ -30,9 +30,17 @@ final class RelatedAlbumStore: @unchecked Sendable {
     }
 
     /// 同步读缓存（内存 → 磁盘）；nil = 还没有结果
+    /// 缓存键：专辑 = 专辑 ID；t242u 歌单 = "playlist-<id>"；其他（资料库歌曲）无相似专辑
+    private static func key(_ c: MusicCollection) -> String? {
+        switch c {
+        case .album(let a, _): return a.id.rawValue
+        case .playlist(let p): return "playlist-\(p.id.rawValue)"
+        case .librarySongs: return nil
+        }
+    }
+
     func cached(_ c: MusicCollection) -> [Album]? {
-        guard case .album(let a, _) = c else { return [] }
-        let key = a.id.rawValue
+        guard let key = Self.key(c) else { return [] }
         lock.lock(); defer { lock.unlock() }
         if let e = memory[key] { return e.albums }
         if diskMissed.contains(key) { return nil }
@@ -49,13 +57,19 @@ final class RelatedAlbumStore: @unchecked Sendable {
     }
 
     /// 读取（同一专辑并发请求合并成一个）
-    func albums(for c: MusicCollection) async -> [Album] {
-        guard case .album(let album, let isCatalog) = c else { return [] }   // 歌单 / 资料库歌曲：无相似专辑
+    func albums(for c: MusicCollection, songs: [Song] = []) async -> [Album] {
+        guard let key = Self.key(c) else { return [] }   // 资料库歌曲：无相似专辑
         if let hit = cached(c) { return hit }
-        let key = album.id.rawValue
+        if case .playlist = c, songs.isEmpty { return [] }   // 歌单要等曲目到了再算（不落盘）
         lock.lock()
         if let t = inflight[key] { lock.unlock(); return await t.value }
-        let t = Task<[Album], Never> { await self.load(album, isCatalog: isCatalog) }
+        let t = Task<[Album], Never> {
+            switch c {
+            case .album(let album, let isCatalog): return await self.load(album, isCatalog: isCatalog)
+            case .playlist(let p): return await self.loadPlaylist(p, songs: songs, key: key)
+            case .librarySongs: return []
+            }
+        }
         inflight[key] = t
         lock.unlock()
         let r = await t.value
@@ -109,6 +123,58 @@ final class RelatedAlbumStore: @unchecked Sendable {
         }
     }
 
+    // MARK: t242u 歌单：出现最多的 1–2 位艺人 → 曲库 Artist.albums（排除歌单里已有的专辑），交替合并、去重，≤10
+
+    /// 主艺人名：去掉 feat. / & / , / 、 之后的合作者
+    private static func primaryArtist(_ name: String) -> String {
+        var n = name
+        for sep in [" feat.", " ft.", " featuring ", " & ", ", ", "、", " x ", " X "] {
+            if let r = n.range(of: sep, options: .caseInsensitive) { n = String(n[..<r.lowerBound]) }
+        }
+        return n.trimmingCharacters(in: .whitespaces)
+    }
+
+    private func loadPlaylist(_ p: Playlist, songs: [Song], key: String) async -> [Album] {
+        var counts: [String: Int] = [:]
+        for s in songs { counts[Self.primaryArtist(s.artistName), default: 0] += 1 }
+        let ranked = counts.filter { !$0.key.isEmpty }.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+        // 第一位必取；第二位至少出现 2 次才带上（避免一首客串就混进来）
+        var top = ranked.prefix(1).map(\.key)
+        if ranked.count > 1, ranked[1].value >= 2 { top.append(ranked[1].key) }
+        guard !top.isEmpty else { save(key, Entry(albums: [], source: "none", date: Date())); return [] }
+        let inPlaylist = Set(songs.compactMap { $0.albumTitle }.map(Self.norm))
+        do {
+            var lists: [[Album]] = []
+            for name in top {
+                var req = MusicCatalogSearchRequest(term: name, types: [Artist.self])
+                req.limit = 5
+                let found = try await req.response().artists
+                guard let artist = found.first(where: { Self.norm($0.name) == Self.norm(name) }) ?? found.first else { continue }
+                let full = try await artist.with([.albums])
+                lists.append(Array(full.albums ?? []))
+            }
+            // 交替合并（艺人 1 第 1 张、艺人 2 第 1 张…），按 ID / 标题去重，排除歌单已有专辑
+            var out: [Album] = [], ids: Set<String> = [], titles = inPlaylist
+            var i = 0
+            while out.count < Self.limit, lists.contains(where: { i < $0.count }) {
+                for l in lists where i < l.count {
+                    let a = l[i]; let t = Self.norm(a.title)
+                    if !ids.contains(a.id.rawValue), !titles.contains(t) {
+                        ids.insert(a.id.rawValue); titles.insert(t); out.append(a)
+                        if out.count == Self.limit { break }
+                    }
+                }
+                i += 1
+            }
+            print("[t242u] related playlist \"\(p.name)\": artists=\(top) n=\(out.count)")
+            save(key, Entry(albums: out, source: out.isEmpty ? "none" : "playlistArtists", date: Date()))
+            return out
+        } catch {
+            print("[t242u] related playlist \"\(p.name)\": error \(error)")
+            return []
+        }
+    }
+
     private static func norm(_ s: String) -> String {
         s.lowercased().replacingOccurrences(of: " ", with: "")
     }
@@ -133,6 +199,8 @@ final class RelatedAlbumStore: @unchecked Sendable {
 /// 曲目表末尾的「相似专辑」横向封面列表；没有结果时整段不渲染
 struct RelatedAlbumsSection: View {
     let collection: MusicCollection
+    /// t242u：歌单用曲目统计艺人
+    var songs: [Song] = []
     let ink: Color
     let dim: Color
     let onOpen: (MusicCollection) -> Void
@@ -184,8 +252,8 @@ struct RelatedAlbumsSection: View {
             }
         }
         .animation(.easeOut(duration: 0.25), value: shown.isEmpty)
-        .task(id: collection.id) {
-            let r = await RelatedAlbumStore.shared.albums(for: collection)
+        .task(id: "\(collection.id)-\(songs.count)") {
+            let r = await RelatedAlbumStore.shared.albums(for: collection, songs: songs)
             albums = r; loadedFor = collection.id
         }
     }
