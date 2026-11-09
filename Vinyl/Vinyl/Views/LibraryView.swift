@@ -14,27 +14,34 @@ struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openURL) private var openURL
     @EnvironmentObject private var music: AppleMusicStore
+    /// t125u：转场状态放在共享模型里 —— Tab 里的实例画首页，ContentView 叠在 TabView 之上的实例画详情层
+    @EnvironmentObject private var zm: LibraryZoomModel
+    var overlayMode = false
     /// 被点开的真实 Apple Music 集合；nil = 演示封面
-    @State private var selectedCollection: MusicCollection?
-    @State private var collectionSongs: [Song]?
-    @State private var presented = false
+    private var selectedCollection: MusicCollection? { get { zm.selectedCollection } nonmutating set { zm.selectedCollection = newValue } }
+    private var collectionSongs: [Song]? { get { zm.collectionSongs } nonmutating set { zm.collectionSongs = newValue } }
+    private var presented: Bool { get { zm.presented } nonmutating set { zm.presented = newValue } }
     /// 翻面三段动画进行中：期间忽略点击，避免叠加
-    @State private var flipBusy = false
-    @State private var closing = false
-    @State private var autoplay = false
-    @State private var zoom: CGFloat = 0
-    @State private var contentAlpha: Double = 0
-    @State private var blurRadius: CGFloat = 0
-    @State private var origin: CGRect = .zero
-    @State private var sleeveFrame: CGRect = .zero
-    @State private var cellFrames: [Int: CGRect] = [:]
-    @State private var selectedIndex = AlbumData.featuredIndex
+    private var flipBusy: Bool { get { zm.flipBusy } nonmutating set { zm.flipBusy = newValue } }
+    private var closing: Bool { get { zm.closing } nonmutating set { zm.closing = newValue } }
+    private var autoplay: Bool { get { zm.autoplay } nonmutating set { zm.autoplay = newValue } }
+    private var zoom: CGFloat { get { zm.zoom } nonmutating set { zm.zoom = newValue } }
+    private var contentAlpha: Double { get { zm.contentAlpha } nonmutating set { zm.contentAlpha = newValue } }
+    private var blurRadius: CGFloat { get { zm.blurRadius } nonmutating set { zm.blurRadius = newValue } }
+    /// 首页网格变暗程度（打开时随封面一起到 1；关闭时瞬间归 0，由详情背景的自上而下擦除露出清晰网格）
+    private var gridDim: CGFloat { get { zm.gridDim } nonmutating set { zm.gridDim = newValue } }
+    /// 关闭时详情模糊背景的自上而下擦除进度：0 = 全覆盖，1 = 全部消失
+    private var wipe: CGFloat { get { zm.wipe } nonmutating set { zm.wipe = newValue } }
+    private var origin: CGRect { get { zm.origin } nonmutating set { zm.origin = newValue } }
+    private var sleeveFrame: CGRect { get { zm.sleeveFrame } nonmutating set { zm.sleeveFrame = newValue } }
+    private var cellFrames: [Int: CGRect] { get { zm.cellFrames } nonmutating set { zm.cellFrames = newValue } }
+    private var selectedIndex: Int { get { zm.selectedIndex } nonmutating set { zm.selectedIndex = newValue } }
 
-    @State private var pull: CGFloat = 0
-    @State private var flip: Double = 0
-    @State private var demoToken = 0
-    @State private var motionStart: Date = .distantPast
-    @State private var recordingStarted = false
+    private var pull: CGFloat { get { zm.pull } nonmutating set { zm.pull = newValue } }
+    private var flip: Double { get { zm.flip } nonmutating set { zm.flip = newValue } }
+    private var demoToken: Int { get { zm.demoToken } nonmutating set { zm.demoToken = newValue } }
+    private var motionStart: Date { get { zm.motionStart } nonmutating set { zm.motionStart = newValue } }
+    private var recordingStarted: Bool { get { zm.recordingStarted } nonmutating set { zm.recordingStarted = newValue } }
     private var recordingRequested: Bool {
         ProcessInfo.processInfo.arguments.contains("--record-demo")
     }
@@ -43,44 +50,23 @@ struct LibraryView: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 18), count: 4)
 
     var body: some View {
+        if overlayMode {
+            detailLayer
+                .onPreferenceChange(SleeveFrameKey.self) { sleeveFrame = $0 }
+                .allowsHitTesting(presented)
+        } else {
+            homeBody
+        }
+    }
+
+    private var homeBody: some View {
         GeometryReader { _ in
             ZStack(alignment: .topLeading) {
                 AuroraBackground()
                 homeContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .opacity(Double(1 - 0.72 * zoom))
+                    .opacity(Double(1 - 0.72 * gridDim))
 
-                AlbumDetailView(
-                    coverName: DS.coverName(selectedIndex),
-                    collection: selectedCollection,
-                    songs: collectionSongs,
-                    title: selectedCollection?.title
-                          ?? (selectedIndex == AlbumData.featuredIndex ? AlbumData.title
-                              : String(format: "Album %02d", selectedIndex)),
-                    artist: selectedCollection?.artist
-                          ?? (selectedIndex == AlbumData.featuredIndex ? AlbumData.artist
-                              : "Various Artists"),
-                    pull: pull,
-                    flip: flip,
-                    waveProgress: 0.18,
-                    contentAlpha: contentAlpha,
-                    zoom: zoom,
-                    isPresented: presented,
-                    closing: closing,
-                    landed: landed,
-                    keepsSpinning: !recordingRequested,
-                    motionStart: motionStart,
-                    onClose: { close() },
-                    onToggleArtwork: { toggleArtwork() }
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(contentAlpha > 0.5)
-
-                // Keep the view alive while SwiftUI interpolates the target state.
-                // Testing `zoom < 1` here removes it as soon as open() sets zoom = 1.
-                flyingCover
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
             }
             .overlay(alignment: .top) {
                 if let curveLabel {
@@ -101,8 +87,6 @@ struct LibraryView: View {
                 // CoverFlight 用当前弹簧进度向这个实时 frame 插值，落点永远在格子上。
                 if closing, let key = targetKey, let live = frames[key] { origin = live }
             }
-            .onPreferenceChange(SleeveFrameKey.self) { sleeveFrame = $0 }
-            .toolbar(presented ? .hidden : .visible, for: .tabBar)
             .task(id: demoToken) {
                 await runDemo()
             }
@@ -234,7 +218,7 @@ struct LibraryView: View {
     }
 
     /// 真实 Apple Music 封面格：与演示封面同尺寸、同圆角、同投影。
-    @State private var nowPlayingCollection: MusicCollection? = nil
+    private var nowPlayingCollection: MusicCollection? { get { zm.nowPlayingCollection } nonmutating set { zm.nowPlayingCollection = newValue } }
 
     private func musicCell(_ index: Int, _ collection: MusicCollection) -> some View {
         let key = 1000 + index
@@ -249,13 +233,14 @@ struct LibraryView: View {
                 .background {
                     GeometryReader { geo in
                         Color.clear.preference(key: CoverFrameKey.self,
-                                               value: [key: geo.frame(in: .named("library"))])
+                                               value: [key: geo.frame(in: .global)])
                     }
                 }
         }
         .buttonStyle(.plain)
         // 转场期间源格子隐藏：屏幕上始终只有一个封面
-        .opacity(presented && selectedCollection?.id == collection.id ? 0 : 1)
+        .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection?.id == collection.id,
+                             closing: closing))
         .accessibilityLabel("\(collection.title)，\(collection.artist)")
     }
 
@@ -330,12 +315,58 @@ struct LibraryView: View {
                 .background {
                     GeometryReader { geo in
                         Color.clear.preference(key: CoverFrameKey.self,
-                                               value: [index: geo.frame(in: .named("library"))])
+                                               value: [index: geo.frame(in: .global)])
                     }
                 }
         }
         .buttonStyle(.plain)
-        .opacity(presented && selectedCollection == nil && selectedIndex == index ? 0 : 1)
+        .modifier(TileReveal(progress: zoom, isTarget: presented && selectedCollection == nil && selectedIndex == index,
+                             closing: closing))
+    }
+
+    /// 叠在 TabView 之上的详情层：详情页（遵守安全区）+ 飞行封面（全局坐标，忽略安全区）
+    private var detailLayer: some View {
+        ZStack {
+        AlbumDetailView(
+            coverName: DS.coverName(selectedIndex),
+            collection: selectedCollection,
+            songs: collectionSongs,
+            title: selectedCollection?.title
+                  ?? (selectedIndex == AlbumData.featuredIndex ? AlbumData.title
+                      : String(format: "Album %02d", selectedIndex)),
+            artist: selectedCollection?.artist
+                  ?? (selectedIndex == AlbumData.featuredIndex ? AlbumData.artist
+                      : "Various Artists"),
+            pull: pull,
+            flip: flip,
+            waveProgress: 0.18,
+            contentAlpha: contentAlpha,
+            zoom: zoom,
+            isPresented: presented,
+            closing: closing,
+            landed: landed,
+            wipe: wipe,
+            keepsSpinning: !recordingRequested,
+            motionStart: motionStart,
+            onClose: { close() },
+            onToggleArtwork: { toggleArtwork() }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(contentAlpha > 0.5)
+
+        // Keep the view alive while SwiftUI interpolates the target state.
+        // Testing `zoom < 1` here removes it as soon as open() sets zoom = 1.
+
+            Color.clear
+                .ignoresSafeArea()
+                .overlay(alignment: .topLeading) {
+                    // Keep the view alive while SwiftUI interpolates the target state.
+                    flyingCover
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+                .allowsHitTesting(false)
+        }
     }
 
     // MARK: - Zoom 转场中的飞行封面
@@ -373,10 +404,13 @@ struct LibraryView: View {
         // 一条主 spring 驱动封面缩放与背景模糊（同一进度，不再各跑一条曲线）；
         // 详情文字用带 delay 的从曲线错峰淡入，形成「先放大 → 再显内容」的节奏。
         landed = false
+        var noAnim = Transaction(); noAnim.disablesAnimations = true
+        withTransaction(noAnim) { wipe = 0 }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open),
                       completionCriteria: .logicallyComplete) {
             zoom = 1
             blurRadius = 18
+            gridDim = 1
         } completion: {
             if presented && !closing { landed = true }
         }
@@ -387,12 +421,12 @@ struct LibraryView: View {
         demoToken += 1
     }
 
-    @State private var closeQueued = false
-    @State private var curveLabel: String? = nil
+    private var closeQueued: Bool { get { zm.closeQueued } nonmutating set { zm.closeQueued = newValue } }
+    private var curveLabel: String? { get { zm.curveLabel } nonmutating set { zm.curveLabel = newValue } }
     /// 打开弹簧逻辑完成（已落定）→ 详情封套接手
-    @State private var landed = false
+    private var landed: Bool { get { zm.landed } nonmutating set { zm.landed = newValue } }
     /// 关闭飞行的目标格子（cellFrames 的 key），滚动时实时跟踪它的 frame
-    @State private var targetKey: Int? = nil
+    private var targetKey: Int? { get { zm.targetKey } nonmutating set { zm.targetKey = newValue } }
 
     private func close() {
         guard presented && !closing && !closeQueued else { return }
@@ -420,7 +454,14 @@ struct LibraryView: View {
         // 即使用户翻到了 B 面，也先无动画地把 flip 归零。
         var reset = Transaction()
         reset.disablesAnimations = true
-        withTransaction(reset) { flip = 0 }
+        withTransaction(reset) {
+            flip = 0
+            // 网格瞬间变清晰、不再变暗：此刻被不透明的详情背景完整盖住，看不到这一跳；
+            // 之后背景自上而下擦除，逐步露出清晰的网格。
+            blurRadius = 0
+            gridDim = 0
+            wipe = 0
+        }
         closing = true
         autoplay = false
         demoToken += 1
@@ -429,7 +470,6 @@ struct LibraryView: View {
             completionCriteria: .removed
         ) {
             zoom = 0
-            blurRadius = 0
         } completion: {
             presented = false
             closing = false
@@ -437,8 +477,14 @@ struct LibraryView: View {
             flip = 0
             recordingMarker("complete")
         }
-        withAnimation(.easeInOut(duration: 6.0 / 30).delay(2.0 / 30)) {
+        // 曲目 / 波形等文字比背景擦除更早消失，避免叠在露出的网格上
+        withAnimation(.easeOut(duration: 0.12)) {
             contentAlpha = 0
+        }
+        // t121u：模糊背景自上而下渐变擦除（Ref 关闭曲线形状，0.4s）
+        withAnimation(reduceMotion ? .easeOut(duration: 0.15)
+                      : .timingCurve(0.256, 0.091, 0.141, 0.888, duration: 0.4)) {
+            wipe = 1
         }
     }
 
@@ -547,6 +593,8 @@ private struct CoverFlight: AnimatableModifier {
         let midX: CGFloat = start.midX + (end.midX - start.midX) * p
         let midY: CGFloat = start.midY + (end.midY - start.midY) * p
         // 打开：落定（landed）前一直是飞行封面，落定后瞬间交给几何完全相同的详情封套；关闭：始终是飞行封面
+        // 关闭：飞行封面全程不透明，四边收拢到格子的实时 frame（滚动也跟随），落定瞬间与格子同框同圆角再交接，
+        // 实测提前显示格子 / 交叉淡入会出现错位的双图，所以不做。
         let visible: Double = (closing || !landed) ? 1 : 0
         let hole = width * DS.planet / DS.sleeve
         content
@@ -595,4 +643,52 @@ struct ArtworkHandoff: AnimatableModifier {
         content
             .opacity(shown)
     }
+}
+
+
+/// t121u：关闭时目标格子在缩小的后 35% 就显示在飞行封面下方（飞行封面四边收拢到它身上再淡出），
+/// 打开 / 详情期间隐藏，保证屏幕上不会同时出现两个不同尺寸的同一封面。
+struct TileReveal: AnimatableModifier {
+    var progress: CGFloat
+    let isTarget: Bool
+    let closing: Bool
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+    func body(content: Content) -> some View {
+        // 实测：提前显示格子会和尚未完全落定的飞行封面错位叠成双图 → 目标格子在落定交接前保持隐藏
+        let shown: Double = isTarget ? 0 : 1
+        content.opacity(shown)
+    }
+}
+
+
+/// t125u：首页与详情层（叠在 TabView 之上）共享的转场状态
+final class LibraryZoomModel: ObservableObject {
+    @Published var selectedCollection: MusicCollection?
+    @Published var collectionSongs: [Song]?
+    @Published var presented: Bool = false
+    @Published var flipBusy: Bool = false
+    @Published var closing: Bool = false
+    @Published var autoplay: Bool = false
+    @Published var zoom: CGFloat = 0
+    @Published var contentAlpha: Double = 0
+    @Published var blurRadius: CGFloat = 0
+    @Published var gridDim: CGFloat = 0
+    @Published var wipe: CGFloat = 0
+    @Published var origin: CGRect = .zero
+    @Published var sleeveFrame: CGRect = .zero
+    @Published var cellFrames: [Int: CGRect] = [:]
+    @Published var selectedIndex: Int = AlbumData.featuredIndex
+    @Published var pull: CGFloat = 0
+    @Published var flip: Double = 0
+    @Published var demoToken: Int = 0
+    @Published var motionStart: Date = .distantPast
+    @Published var recordingStarted: Bool = false
+    @Published var nowPlayingCollection: MusicCollection? = nil
+    @Published var closeQueued: Bool = false
+    @Published var curveLabel: String? = nil
+    @Published var landed: Bool = false
+    @Published var targetKey: Int? = nil
 }

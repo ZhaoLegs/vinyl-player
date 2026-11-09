@@ -26,6 +26,8 @@ enum AppTab: Int, Hashable {
 struct ContentView: View {
     @State private var selection: AppTab = .library
 
+    @StateObject private var zoomModel = LibraryZoomModel()
+
     var body: some View {
         Group {
             if #available(iOS 27.0, *) {
@@ -108,6 +110,9 @@ struct ContentView: View {
                 .tint(DS.ink)
             }
         }
+        // t125u：详情页 + 飞行封面叠在整个 TabView（含系统 tab bar）之上
+        .overlay { LibraryView(overlayMode: true) }
+        .environmentObject(zoomModel)
     }
 
     /// Icon on screen, spoken name for VoiceOver. `.labelStyle(.iconOnly)` keeps the title out of the bar.

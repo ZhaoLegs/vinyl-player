@@ -51,38 +51,54 @@ struct MiniPlayer: View {
     /// 点击播放条（除右侧播放键外）= 打开当前专辑的播放页
     var open: () -> Void = {}
 
+    private var title: String { music.hasCurrentTrack ? music.currentTitle : music.demoMiniTitle }
+    private var artist: String { music.hasCurrentTrack ? music.currentArtist : AlbumData.artist }
+    private var durationValue: Double { music.hasCurrentTrack ? music.duration : AppleMusicStore.demoDuration }
+    /// 只在换歌时变化（时长后到不会触发动画）
+    private var trackKey: String { title + "\u{1}" + artist }
+    /// 中心标签的身份：换专辑封面时才交叉淡入
+    private var labelKey: String {
+        if music.hasCurrentTrack {
+            return music.currentArtwork?.url(width: 75, height: 75)?.absoluteString ?? ("t:" + trackKey)
+        }
+        return music.demoCoverName
+    }
+
     var body: some View {
         HStack(spacing: 7) {
             // 40pt slot is the capsule's leading circular cap. The 27pt disc is
             // centered inside that cap, not inset by an extra leading pad.
             ZStack {
                 Circle()
-                    .fill(RadialGradient(colors: [Color(hex: 0x3A2E68), Color(hex: 0x12141C), Color(hex: 0x0B0C10)],
-                                        center: .center, startRadius: 1, endRadius: 16))
-                // 中心标签 = 当前专辑封面（等比填充），主轴孔在最上层
-                DiscLabel(coverName: DS.coverName(AlbumData.featuredIndex),
-                          artwork: music.hasCurrentTrack ? music.currentArtwork : nil,
-                          size: 10)
-                Circle().fill(.white).frame(width: 3.5, height: 3.5)
+                    // 与大唱片同色的黑胶底（去掉原来的紫色中心）
+                    .fill(RadialGradient(colors: [Color(hex: 0x1E1E21), Color(hex: 0x0B0B0D), Color(hex: 0x151517)],
+                                        center: .center, startRadius: 1, endRadius: 13.5))
+                // t126u：中心标签 = 正在播放歌曲所属专辑的封面（圆形裁切），比例与详情页大唱片一致
+                // （DS.discLabel / DS.disc = 72 / 234）；主轴孔同比例（5 / 234）。换歌时交叉淡入。
+                MiniDiscLabel(coverName: music.demoCoverName,
+                              artwork: music.hasCurrentTrack ? music.currentArtwork : nil,
+                              key: labelKey,
+                              discSize: 27)
             }
             .frame(width: 27, height: 27)
+            // t122u：播放时小唱片匀速旋转（5s 一圈），暂停停在当前角度，继续时从该角度接着转
+            .modifier(SpinWhilePlaying(playing: music.hasCurrentTrack ? music.isPlaying : music.demoPlaying))
             // 唱片仍居中于 40pt 胶囊左端圆帽（(40-27)/2 = 6.5pt 左边距），
             // 但右侧不再留 6.5pt 空白：唱片右缘 → 文字左缘 = HStack spacing 8pt。
             .padding(.leading, 6.5)
             .frame(height: 40)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(music.hasCurrentTrack ? music.currentTitle : music.demoMiniTitle)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(DS.ink)
-                    .lineLimit(1)
-                // 第二行：艺人 · 歌曲时长（灰色）
-                (Text("\(music.hasCurrentTrack ? music.currentArtist : AlbumData.artist) · ")
-                    + Text(musicTime(music.hasCurrentTrack ? music.duration : AppleMusicStore.demoDuration))
-                        .font(.system(size: 10.5, design: .monospaced)))   // 只有 m:ss 用 SF Mono
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(DS.secondary)
-                    .lineLimit(1)
+                // t123u：换歌时逐词上飘动画（旧词向上淡出，新词从下方 8pt 模糊淡入，逐词错开）
+                FloatingText(key: trackKey,
+                             tokens: FloatingText.words(title, font: .system(size: 13, weight: .semibold)),
+                             color: DS.ink)
+                // 第二行：艺人 · 歌曲时长（灰色，m:ss 用 SF Mono）；比第一行稍晚开始
+                FloatingText(key: trackKey,
+                             tokens: FloatingText.words(artist + " ·", font: .system(size: 10.5))
+                                + [.init(text: musicTime(durationValue), font: .system(size: 10.5, design: .monospaced))],
+                             color: DS.secondary,
+                             startDelay: 0.08)
             }
 
             Spacer(minLength: 0)
@@ -121,6 +137,8 @@ struct WaveformBar: View {
     @State private var scrub: Double? = nil
     /// 擦洗时手指所在的竖条序号：每跨进一根新竖条触发一次 selection「刻度」触觉
     @State private var scrubBar: Int? = nil
+    /// t124u：直接抓住播放头拖动（不需要长按）
+    @State private var grabbed = false
     @State private var width: CGFloat = 1
     /// 竖条区域在整条胶囊坐标系（"wave"）里的 frame：手指 x → 进度
     @State private var barsFrame: CGRect = CGRect(x: 0, y: 0, width: 1, height: 26)
@@ -152,6 +170,14 @@ struct WaveformBar: View {
         .padding(.horizontal, 14)
         .glassCapsule(height: 42)
         .contentShape(Capsule())
+        // t124u：播放头热区（44pt 宽、整条高），按下横向移动 > 4pt 立即开始擦洗，优先于页面滚动
+        .overlay(alignment: .topLeading) {
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(width: 44, height: 42)
+                .position(x: max(barsFrame.minX + 16, barsFrame.minX + CGFloat(shown) * barsFrame.width), y: 21)
+                .highPriorityGesture(handleGesture)
+        }
         .coordinateSpace(.named("wave"))
         // t117u：整条胶囊任意位置按住 0.25s 后左右拖 = 时间擦洗；没有点按跳转（播放键照常点）
         .gesture(scrubGesture)
@@ -199,7 +225,8 @@ struct WaveformBar: View {
             let headIndex = playedBars - 1
             for i in 0..<n {
                 let head = i == headIndex
-                let h = ((head ? 24 : barHeight(i, of: n)) * scale).rounded() / scale
+                let headH: CGFloat = grabbed ? 26 : 24      // 抓住时播放头稍微变高
+                let h = ((head ? headH : barHeight(i, of: n)) * scale).rounded() / scale
                 let x = CGFloat(x0Px + i * (barPx + gapPx)) / scale
                 let y = (((size.height - h) / 2) * scale).rounded() / scale
                 let rect = CGRect(x: x, y: y, width: bar, height: h)
@@ -243,6 +270,31 @@ struct WaveformBar: View {
     }
 
     /// 长按 0.25s 后水平拖动 = 实时擦洗；开始时轻触觉，松手提交
+    /// 抓住播放头直接拖：吸附整根竖条、每格一次刻度触觉，松手 seek
+    private var handleGesture: some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named("wave"))
+            .onChanged { drag in
+                if scrub == nil {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    grabbed = true
+                    let snap = snapped(shown)
+                    scrub = snap.fraction
+                    scrubBar = snap.steps
+                }
+                let snap = snapped(fraction(drag.location.x))
+                if snap.steps != scrubBar {
+                    scrub = snap.fraction
+                    scrubBar = snap.steps
+                }
+            }
+            .onEnded { drag in
+                seek?(snapped(fraction(drag.location.x)).fraction)
+                scrubBar = nil
+                grabbed = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { scrub = nil }
+            }
+    }
+
     private var scrubGesture: some Gesture {
         LongPressGesture(minimumDuration: 0.25)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("wave")))
@@ -288,5 +340,163 @@ struct WaveformBar: View {
         let a = abs(sin(j * 1.7) * cos(j * 0.41))
         let b = abs(sin(j * 0.13))
         return 6 + CGFloat(a) * 13 + CGFloat(b) * 5
+    }
+}
+
+
+// MARK: - 迷你播放条：旋转唱片
+
+/// 播放中按角速度累计旋转；暂停冻结当前角度，恢复时从该角度继续（不回 0）。
+struct SpinWhilePlaying: ViewModifier {
+    let playing: Bool
+    var degreesPerSecond: Double = 72      // 5s 一圈
+    @State private var base: Double = 0
+    @State private var start: Date? = nil
+
+    func body(content: Content) -> some View {
+        TimelineView(.animation(paused: !playing)) { context in
+            let running = start.map { context.date.timeIntervalSince($0) * degreesPerSecond } ?? 0
+            content.rotationEffect(.degrees(base + running))
+        }
+        .onAppear { if playing { start = Date() } }
+        .onChange(of: playing) { _, now in
+            if now { start = Date() }
+            else if let s = start { base += Date().timeIntervalSince(s) * degreesPerSecond; start = nil }
+        }
+    }
+}
+
+// MARK: - 迷你播放条：逐词上飘文字
+
+struct FloatingText: View {
+    struct Token: Equatable { var text: String; var font: Font
+        static func == (a: Token, b: Token) -> Bool { a.text == b.text } }
+    let key: String
+    let tokens: [Token]
+    let color: Color
+    var startDelay: Double = 0
+
+    @State private var shownKey: String? = nil
+    @State private var previous: [Token] = []
+    @State private var phase: Double = 1
+
+    private static let stagger = 0.045
+    private static let wordDuration = 0.35
+
+    /// 按空格切词；没有空格的中日韩文本按字切
+    static func words(_ s: String, font: Font) -> [Token] {
+        let parts = s.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        let cjk = s.unicodeScalars.contains { (0x3000...0x9FFF).contains($0.value) || (0xAC00...0xD7AF).contains($0.value) }
+        if parts.count <= 1 && cjk { return s.map { Token(text: String($0), font: font) } }
+        return parts.map { Token(text: $0, font: font) }
+    }
+
+    private var total: Double { startDelay + Self.wordDuration + Self.stagger * Double(max(tokens.count, previous.count)) }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            ZStack(alignment: .leading) {
+                if !previous.isEmpty { row(previous, entering: false) }
+                row(tokens, entering: true)
+            }
+            // 放不下时退回普通单行文字（避免逐词布局被截断错乱）
+            plain
+        }
+        .onAppear { animate(fromScratch: true) }
+        .onChange(of: key) { _, _ in animate(fromScratch: false) }
+    }
+
+    private var plain: some View {
+        tokens.enumerated().reduce(Text("")) { acc, item in
+            acc + Text((item.offset == 0 ? "" : " ") + item.element.text).font(item.element.font)
+        }
+        .foregroundStyle(color)
+        .lineLimit(1)
+    }
+
+    private func row(_ list: [Token], entering: Bool) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(list.enumerated()), id: \.offset) { i, t in
+                Text((i == 0 ? "" : " ") + t.text)
+                    .font(t.font)
+                    .foregroundStyle(color)
+                    .fixedSize()
+                    .modifier(WordFloat(phase: phase, index: i, entering: entering,
+                                        total: total, delay: startDelay))
+            }
+        }
+        .lineLimit(1)
+    }
+
+    private func animate(fromScratch: Bool) {
+        guard shownKey != key else { return }
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) {
+            previous = fromScratch || shownKey == nil ? [] : lastTokens
+            phase = 0
+        }
+        shownKey = key
+        lastTokens = tokens
+        withAnimation(.linear(duration: total)) { phase = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + total + 0.05) {
+            if shownKey == key { previous = [] }
+        }
+    }
+    @State private var lastTokens: [Token] = []
+}
+
+/// 单个词的上飘：phase 为整体线性时钟，按词序错开后各自 easeOut
+private struct WordFloat: AnimatableModifier {
+    var phase: Double
+    let index: Int
+    let entering: Bool
+    let total: Double
+    let delay: Double
+    var animatableData: Double { get { phase } set { phase = newValue } }
+
+    func body(content: Content) -> some View {
+        let t = phase * total - delay - Double(index) * 0.045
+        let local = min(1, max(0, t / 0.35))
+        let e = 1 - pow(1 - local, 3)        // easeOutCubic
+        let y: CGFloat = entering ? 8 * (1 - e) : -8 * e
+        let alpha: Double = entering ? e : 1 - e
+        let blur: CGFloat = entering ? 4 * (1 - e) : 3 * e
+        content
+            .offset(y: y)
+            .opacity(alpha)
+            .blur(radius: blur)
+    }
+}
+
+
+/// t126u：迷你唱片中心标签。尺寸按大唱片比例缩放；换封面时新旧交叉淡入（不闪白），随盘一起转。
+struct MiniDiscLabel: View {
+    var coverName: String
+    var artwork: Artwork?
+    var key: String
+    var discSize: CGFloat
+
+    private var labelSize: CGFloat { discSize * DS.discLabel / DS.disc }   // 27 → 8.31pt
+    private var holeSize: CGFloat { max(1.2, discSize * 5 / DS.disc) }     // 27 → 1.2pt
+
+    var body: some View {
+        ZStack {
+            Group {
+                if let artwork {
+                    // 8.3pt @3x ≈ 25px，取 3 倍余量请求 75px 的 Artwork
+                    ArtworkImage(artwork, width: 75, height: 75)
+                        .frame(width: labelSize, height: labelSize)
+                } else {
+                    Image(coverName).resizable().scaledToFill()
+                        .frame(width: labelSize, height: labelSize)
+                }
+            }
+            .clipShape(Circle())
+            .id(key)
+            .transition(.opacity)
+            Circle().fill(.white).frame(width: holeSize, height: holeSize)
+        }
+        .frame(width: labelSize, height: labelSize)
+        .animation(.easeInOut(duration: 0.25), value: key)
     }
 }

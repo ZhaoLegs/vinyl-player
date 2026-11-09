@@ -64,7 +64,14 @@ final class AppleMusicStore: ObservableObject {
         demoElapsed = min(1, max(0, fraction)) * Self.demoDuration
     }
 
-    func selectDemo(_ index: Int) {
+    /// t126u：正在播放的演示专辑封面（迷你播放条小唱片中心标签用）
+    @Published private(set) var demoCoverName = DS.coverName(AlbumData.featuredIndex)
+
+    func selectDemo(_ index: Int, cover: String? = nil) {
+        if let cover, cover != demoCoverName {
+            demoCoverName = cover
+            if index == demoTrack { demoPlaying = true; demoElapsed = 0; return }
+        }
         if index == demoTrack { demoPlaying.toggle() }
         else { demoTrack = index; demoPlaying = true; demoElapsed = 0 }
     }

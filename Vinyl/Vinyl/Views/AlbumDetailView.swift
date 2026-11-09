@@ -29,6 +29,8 @@ struct AlbumDetailView: View {
     let isPresented: Bool
     var closing: Bool = false
     var landed: Bool = false
+    /// 关闭时背景擦除进度（0 → 1，自上而下变透明）
+    var wipe: CGFloat = 0
     /// 正常使用时唱片抽出后一直转（正在播放）；录屏演示按原片在 3.067s 停转。
     var keepsSpinning: Bool = true
     let motionStart: Date
@@ -58,7 +60,8 @@ struct AlbumDetailView: View {
     var body: some View {
         ZStack(alignment: .top) {
             AuroraBackground()
-                .opacity(contentAlpha)
+                .opacity(closing ? 1 : contentAlpha)
+                .mask(WipeMask(progress: wipe).ignoresSafeArea())
             GeometryReader { geo in
                 Color.clear
                     .onAppear { pageWidth = geo.size.width }
@@ -66,7 +69,8 @@ struct AlbumDetailView: View {
             }
             Rectangle()
                 .fill(.ultraThinMaterial)
-                .opacity(0.35 * contentAlpha)
+                .opacity(0.35 * (closing ? 1 : contentAlpha))
+                .mask(WipeMask(progress: wipe).ignoresSafeArea())
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -91,7 +95,7 @@ struct AlbumDetailView: View {
                 .background(
                     GeometryReader { geo in
                         Color.clear.preference(key: SleeveFrameKey.self,
-                                               value: geo.frame(in: .named("library")))
+                                               value: geo.frame(in: .global))
                     }
                 )
                 // Breathing room under sleeve → track table (preview dtable gap ≈ 30pt).
@@ -387,7 +391,7 @@ struct AlbumDetailView: View {
             ForEach(AlbumData.tracks) { track in
                 let index = AlbumData.tracks.firstIndex { $0.id == track.id } ?? 0
                 let current = music.demoTrack == index
-                Button { music.selectDemo(index) } label: {
+                Button { music.selectDemo(index, cover: coverName) } label: {
                     HStack(spacing: 0) {
                         Text(track.side)
                             .font(.system(size: TL.row, weight: .medium))   // Side 字母 A/B：500 (medium)
@@ -446,6 +450,28 @@ struct AlbumDetailView: View {
                     .foregroundStyle(DS.tertiary)
             }
             Spacer(minLength: 0)
+        }
+    }
+}
+
+
+/// 自上而下的擦除遮罩：progress 0 = 全不透明；随 progress 增大，35% 屏高的羽化带从顶边向下扫过，
+/// 上方先变透明，progress 1 时整屏透明。
+struct WipeMask: View {
+    var progress: CGFloat
+    private let feather: CGFloat = 0.35
+    var body: some View {
+        GeometryReader { geo in
+            let h = geo.size.height
+            VStack(spacing: 0) {
+                Color.clear.frame(height: h)
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: h * feather)
+                Color.black.frame(height: h * 2)
+            }
+            .frame(width: geo.size.width, height: h * (3 + feather), alignment: .top)
+            // 羽化带顶边位置 = (progress·(1+feather) − feather)·h
+            .offset(y: (progress * (1 + feather) - feather) * h - h)
         }
     }
 }
