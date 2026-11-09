@@ -400,6 +400,41 @@ struct GlassCircleButton: View {
     }
 }
 
+/// t238u：与 GlassCircleButton 完全同规格（同 label 尺寸 / 同 .glass + .circle），点击弹原生 Menu。
+struct GlassCircleMenu<MenuContent: View>: View {
+    let systemImage: String
+    var accessibilityText: String = ""
+    @ViewBuilder let content: () -> MenuContent
+
+    private var label: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: DS.barButtonGlyph, weight: .medium))
+            .imageScale(.large)
+            .frame(width: DS.barButtonLabel, height: DS.barButtonLabel)
+            .contentShape(.circle)
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            Menu { content() } label: { label }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .tint(DS.ink)
+                .accessibilityLabel(accessibilityText)
+        } else {
+            Menu { content() } label: {
+                label.foregroundStyle(DS.ink)
+                    .padding(7)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.65), lineWidth: 0.8))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(accessibilityText)
+        }
+    }
+}
+
 /// 系统玻璃按钮，label 使用 Assets 里的自定义图（保留给需要位图 logo 的场景）。
 struct SystemImageButton: View {
     let title: String

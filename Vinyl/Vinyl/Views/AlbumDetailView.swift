@@ -20,7 +20,6 @@ struct AlbumDetailView: View {
     @State private var spinBase: Double = 0
     @State private var spinFrom: Date? = nil
     /// t236u：左上角关闭圆钮实测直径（首帧前用 44pt 兜底）
-    @State private var closeDiameter: CGFloat = 44
     var coverName: String = "sleeve_cutout"
     /// 真实 Apple Music 集合（nil = 内置演示专辑）
     var collection: MusicCollection? = nil
@@ -466,8 +465,6 @@ struct AlbumDetailView: View {
             // 形状 / 材质 / 按压高光 / 无障碍全部由系统渲染，工程内不自绘圆。
             GlassCircleButton(systemImage: "xmark",
                               accessibilityText: "关闭", action: onClose)
-                // t236u：读出系统 glass 圆钮的实际渲染直径（label 30pt + 系统玻璃内边距），右侧胶囊用同一高度
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { closeDiameter = $0 }
 
             // t129u：标题 / 艺人各限一行，超长在右侧以 … 截断；占满两按钮之间（两侧各留 10pt），绝不压到按钮
             VStack(spacing: 1) {
@@ -483,32 +480,12 @@ struct AlbumDetailView: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 10)
 
-            // t232u / t233u：右上角 = 一个系统玻璃横胶囊：收藏(star) + 更多(ellipsis，原生 Menu)
-            DetailActionCapsule(height: closeDiameter) {
-                Button { toggleFavorite() } label: {
-                    Image(systemName: favoriteOn ? "star.fill" : "star")
-                        .font(.system(size: DS.barButtonGlyph, weight: .medium))
-                        .imageScale(.large)
-                        .frame(width: DS.barButtonLabel, height: DS.barButtonLabel)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .symbolEffect(.bounce, value: favoriteBounce)
-                .sensoryFeedback(.impact(weight: .light), trigger: favoriteBounce)
-                .accessibilityLabel(favoriteOn ? "取消收藏" : "收藏")
-                Menu {
-                    if let collection { detailMenu(collection) }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: DS.barButtonGlyph, weight: .medium))
-                        .imageScale(.large)
-                        .frame(width: DS.barButtonLabel, height: DS.barButtonLabel)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(collection == nil)
-                .accessibilityLabel("更多")
+            // t238u：右上角只留「更多」——与左侧关闭钮同规格的系统玻璃圆钮（同 label / 同 glass 样式 → 同直径、同图标、同中线），
+            // 点击弹原生 Menu；「喜欢」已并入菜单顶栏（MenuTopBar）
+            GlassCircleMenu(systemImage: "ellipsis", accessibilityText: "更多") {
+                if let collection { detailMenu(collection) }
             }
+            .disabled(collection == nil)
         }
         .padding(.horizontal, DS.contentInset)
     }
@@ -978,30 +955,6 @@ enum ShareSheet {
             let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
             vc.popoverPresentationController?.sourceView = top.view
             top.present(vc, animated: true)
-        }
-    }
-}
-
-// MARK: - t232u 右上角系统玻璃横胶囊
-
-/// 两个按钮共用一块系统 Liquid Glass 胶囊（iOS 26 glassEffect(.regular.interactive(), in: .capsule)，
-/// 与原生 toolbar 分组按钮同款）；旧系统退回 material 胶囊。
-struct DetailActionCapsule<Content: View>: View {
-    /// t236u：= 关闭圆钮的实测直径；两端内边距 = 圆钮里图标到玻璃边的距离，端帽与圆钮一致
-    var height: CGFloat = 44
-    @ViewBuilder let content: Content
-    var body: some View {
-        let inset = max(0, (height - DS.barButtonLabel) / 2)
-        let row = HStack(spacing: 4) { content }
-            .padding(.horizontal, inset)
-            .frame(height: height)
-            .foregroundStyle(DS.ink)
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer {
-                row.glassEffect(.regular.interactive(), in: .capsule)
-            }
-        } else {
-            row.background(.ultraThinMaterial, in: Capsule())
         }
     }
 }
