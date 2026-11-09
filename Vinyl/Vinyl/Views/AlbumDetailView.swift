@@ -36,8 +36,19 @@ struct AlbumDetailView: View {
     let motionStart: Date
     let onClose: () -> Void
     let onToggleArtwork: () -> Void
+    /// t131u：封面区横滑切专辑。dir = +1 下一张（左滑）/ −1 上一张（右滑）
+    var canPage: (Int) -> Bool = { _ in false }
+    var onSwipeBegan: () -> Void = {}
+    var onPage: (Int) -> Void = { _ in }
+    var onSwipeSettled: () -> Void = {}
 
     @State private var pageWidth: CGFloat = 402
+    /// 封套跟手的横向位移（pt）
+    @State private var swipeX: CGFloat = 0
+    /// nil = 未判定；true = 横向主导（接管）；false = 纵向（交给列表滚动）
+    @State private var swipeAxisH: Bool? = nil
+    @State private var swipeBusy = false
+    @State private var swipeSettle = 0
     @State private var favoriteBounce = 0
 
     /// 收藏目标：Apple Music = 正在播放的那首（在本专辑里），否则本专辑第一首；演示 = 当前演示曲目
@@ -98,6 +109,20 @@ struct AlbumDetailView: View {
                                                value: geo.frame(in: .global))
                     }
                 )
+                // t131u：只在封面区横滑翻专辑（位移在 SleeveFrameKey 测量之后，不影响转场终点）
+                .offset(x: swipeX)
+                .simultaneousGesture(albumSwipe, including: landed && !closing ? .all : .subviews)
+                .sensoryFeedback(.impact(weight: .light), trigger: swipeSettle)
+                .onAppear {
+                    guard ProcessInfo.processInfo.arguments.contains("--demo-swipe") else { return }
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(3.2))
+                        onSwipeBegan()
+                        withAnimation(.linear(duration: 0.25)) { swipeX = -110 }
+                        try? await Task.sleep(for: .seconds(0.3))
+                        commitSwipe(dir: 1)
+                    }
+                }
                 // Breathing room under sleeve → track table (preview dtable gap ≈ 30pt).
                 .padding(.top, 20)
 
@@ -186,6 +211,64 @@ struct AlbumDetailView: View {
         return acc                                             // 到 end 后停在最终角度
     }
 
+    // MARK: - 封面横滑切专辑（t131u）
+
+    /// 判定阈值：最小 10pt 才开始识别；|dx| > 1.4·|dy| 才算横向主导（否则交给列表纵向滚动）；
+    /// 松手位移 > 70pt 或预测位移 > 160pt 即翻页；首尾专辑橡皮筋阻尼。
+    private var albumSwipe: some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { v in
+                guard !swipeBusy else { return }
+                let dx = v.translation.width, dy = v.translation.height
+                if swipeAxisH == nil {
+                    swipeAxisH = abs(dx) > abs(dy) * 1.4
+                    if swipeAxisH == true { onSwipeBegan() }
+                }
+                guard swipeAxisH == true else { return }
+                let dir = dx < 0 ? 1 : -1
+                swipeX = canPage(dir) ? dx : rubberBand(dx)
+            }
+            .onEnded { v in
+                defer { swipeAxisH = nil }
+                guard swipeAxisH == true, !swipeBusy else { return }
+                let dx = v.translation.width
+                let dir = dx < 0 ? 1 : -1
+                let flick = abs(v.predictedEndTranslation.width) > 160
+                if canPage(dir) && (abs(dx) > 70 || flick) {
+                    commitSwipe(dir: dir)
+                } else {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.82), completionCriteria: .logicallyComplete) {
+                        swipeX = 0
+                    } completion: { onSwipeSettled() }
+                }
+            }
+    }
+
+    /// 首尾：位移按 x·0.55 / (1 + |x|/220) 衰减，最多拉出约 120pt
+    private func rubberBand(_ x: CGFloat) -> CGFloat {
+        x * 0.55 / (1 + abs(x) / 220)
+    }
+
+    /// 旧封套顺手势方向滑出 → 换专辑 → 新封套从另一侧滑入落定 → 轻触觉 → 0.15s 后唱片抽出
+    private func commitSwipe(dir: Int) {
+        swipeBusy = true
+        let out = -CGFloat(dir) * (pageWidth + 40)
+        withAnimation(.easeIn(duration: 0.16), completionCriteria: .logicallyComplete) {
+            swipeX = out
+        } completion: {
+            onPage(dir)
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { swipeX = -out }
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.86), completionCriteria: .logicallyComplete) {
+                swipeX = 0
+            } completion: {
+                swipeBusy = false
+                swipeSettle += 1
+                onSwipeSettled()
+            }
+        }
+    }
+
     // MARK: - 顶部栏
 
     private var header: some View {
@@ -195,18 +278,21 @@ struct AlbumDetailView: View {
             GlassCircleButton(systemImage: "xmark",
                               accessibilityText: "关闭", action: onClose)
 
-            Spacer(minLength: 0)
-
+            // t129u：标题 / 艺人各限一行，超长在右侧以 … 截断；占满两按钮之间（两侧各留 10pt），绝不压到按钮
             VStack(spacing: 1) {
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(DS.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Text(artist)
                     .font(.system(size: 11))
                     .foregroundStyle(DS.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
-
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 10)
 
             // 右上角：收藏当前播放的歌（无播放时 = 本专辑当前 / 第一首）。heart / heart.fill
             GlassCircleButton(systemImage: favoriteOn ? "heart.fill" : "heart",
@@ -390,7 +476,8 @@ struct AlbumDetailView: View {
 
             ForEach(AlbumData.tracks) { track in
                 let index = AlbumData.tracks.firstIndex { $0.id == track.id } ?? 0
-                let current = music.demoTrack == index
+                // t131u：灰色「正在播放」行只出现在真正在播放的那张专辑里
+                let current = music.demoTrack == index && music.demoCoverName == coverName
                 Button { music.selectDemo(index, cover: coverName) } label: {
                     HStack(spacing: 0) {
                         Text(track.side)

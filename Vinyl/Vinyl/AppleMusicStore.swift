@@ -67,6 +67,14 @@ final class AppleMusicStore: ObservableObject {
     /// t126u：正在播放的演示专辑封面（迷你播放条小唱片中心标签用）
     @Published private(set) var demoCoverName = DS.coverName(AlbumData.featuredIndex)
 
+    /// t132u：演示专辑的「下一首」—— 专辑队列中的下一曲（末曲后回到第一首），并开始播放
+    func nextDemo() {
+        let n = max(1, AlbumData.tracks.count)
+        demoTrack = (demoTrack + 1) % n
+        demoPlaying = true
+        demoElapsed = 0
+    }
+
     func selectDemo(_ index: Int, cover: String? = nil) {
         if let cover, cover != demoCoverName {
             demoCoverName = cover

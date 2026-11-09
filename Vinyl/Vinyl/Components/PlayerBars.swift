@@ -32,6 +32,29 @@ struct SystemPlaybackButton: View {
     }
 }
 
+/// t132u：迷你播放条「下一首」：forward.fill，与 PlaybackSymbol 同 13pt semibold、同墨色；
+/// 可见槽 36×40pt，点击热区外扩到 44×48pt；每次点击轻触觉。
+struct NextTrackButton: View {
+    var size: CGFloat = 13
+    let action: () -> Void
+    @State private var taps = 0
+    var body: some View {
+        Button {
+            taps += 1
+            action()
+        } label: {
+            Image(systemName: "forward.fill")
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(DS.ink)
+                .frame(width: 36, height: 40)
+                .contentShape(Rectangle().inset(by: -4))
+        }
+        .buttonStyle(.plain)
+        .sensoryFeedback(.impact(weight: .light), trigger: taps)
+        .accessibilityLabel("下一首")
+    }
+}
+
 /// 系统 SF Symbols 播放/暂停控件（苹果控件库），工程内不自绘任何 Capsule 图标。
 struct SystemPauseButton: View {
     var size: CGFloat = 14
@@ -97,26 +120,33 @@ struct MiniPlayer: View {
                 FloatingText(key: trackKey,
                              tokens: FloatingText.words(artist + " ·", font: .system(size: 10.5))
                                 + [.init(text: musicTime(durationValue), font: .system(size: 10.5, design: .monospaced))],
-                             color: DS.secondary,
+                             color: DS.ink,          // t130u：第二行与歌名同为黑色
                              startDelay: 0.08)
             }
 
             Spacer(minLength: 0)
-            Color.clear.frame(width: 23, height: 1)   // 给右侧播放键（32pt − 9pt 外伸）留位
+            // 给右侧「播放 + 下一首」两键留位（32 + 36 − 9pt 外伸 = 59pt），标题在此之前截断
+            Color.clear.frame(width: 59, height: 1)
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: open)
         .overlay(alignment: .trailing) {
-            // 播放键独立于整条的点击：只切换播放 / 暂停
-            if music.hasCurrentTrack {
-                SystemPlaybackButton(isPlaying: music.isPlaying) {
-                    Task { await music.togglePlayback() }
+            // 播放键 / 下一首独立于整条的点击
+            HStack(spacing: 0) {
+                if music.hasCurrentTrack {
+                    SystemPlaybackButton(isPlaying: music.isPlaying) {
+                        Task { await music.togglePlayback() }
+                    }
+                } else {
+                    SystemPlaybackButton(isPlaying: music.demoPlaying) { music.selectDemo(music.demoTrack) }
                 }
-                .padding(.trailing, -9)
-            } else {
-                SystemPlaybackButton(isPlaying: music.demoPlaying) { music.selectDemo(music.demoTrack) }
-                    .padding(.trailing, -9)
+                // t132u：下一首（forward.fill，与暂停键同字号 / 字重 / 颜色），热区 44pt，轻触觉
+                NextTrackButton {
+                    if music.hasCurrentTrack { Task { await music.skip(next: true) } }
+                    else { music.nextDemo() }
+                }
             }
+            .padding(.trailing, -9)
         }
         .padding(.trailing, 14)
         .glassCapsule(height: 40)
@@ -191,11 +221,15 @@ struct WaveformBar: View {
                 Text(duration > 0 ? "\(musicTime(s * duration)) / \(musicTime(duration))" : musicTime(s * duration))
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundStyle(DS.ink)
-                    .padding(.horizontal, 9).padding(.vertical, 5)
-                    .background(.regularMaterial, in: Capsule())
-                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                    .padding(.horizontal, 9)
+                    .frame(height: 24)              // 气泡固定 24pt 高（文字 + 上下 5pt）
                     .fixedSize()
-                    .position(x: barsFrame.minX + CGFloat(s) * barsFrame.width, y: -20)
+                    .modifier(BubbleGlass())
+                    // t127u：气泡底边 → 播放条（放大 3.5% 后的可见）顶边 = 12pt。
+                    // overlay 用未缩放的 42pt 布局框，放大后顶边上移 42·0.035/2 = 0.735pt，一并补上：
+                    // 中心 y = −(0.735 + 12 + 24/2)
+                    .position(x: barsFrame.minX + CGFloat(s) * barsFrame.width,
+                              y: -(42 * 0.035 / 2 + 12 + 12))
                     .transaction { $0.animation = nil }
                     .transition(.opacity)
                     .allowsHitTesting(false)
@@ -412,6 +446,7 @@ struct FloatingText: View {
         }
         .foregroundStyle(color)
         .lineLimit(1)
+        .truncationMode(.tail)
     }
 
     private func row(_ list: [Token], entering: Bool) -> some View {
@@ -498,5 +533,19 @@ struct MiniDiscLabel: View {
         }
         .frame(width: labelSize, height: labelSize)
         .animation(.easeInOut(duration: 0.25), value: key)
+    }
+}
+
+
+/// t127u：时间气泡背景 = 系统 Liquid Glass（iOS 26+），旧系统退回 material
+struct BubbleGlass: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: Capsule())
+        } else {
+            content
+                .background(.regularMaterial, in: Capsule())
+                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        }
     }
 }

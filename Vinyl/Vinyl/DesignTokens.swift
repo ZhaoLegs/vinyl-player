@@ -97,7 +97,7 @@ enum Motion {
         case snappy, smooth, spring, ref
         var name: String {
             switch self {
-            case .ref: return "Ref · 原片拟合 timingCurve(0.389, 0.032, 0.701, 1.008, 0.40s)"
+            case .ref: return "Ref · 原片逐轴拟合（x / y / 尺寸各一条贝塞尔，弧线轨迹）0.40s"
             case .snappy: return "B · .snappy(duration: 0.4, extraBounce: 0)"
             case .smooth: return "A · .smooth(duration: 0.5)"
             case .spring: return "C · .spring(response: 0.45, damping: 0.76)"
@@ -105,17 +105,23 @@ enum Motion {
         }
         /// 关闭曲线：Ref 用原片关闭段拟合（0.256, 0.091, 0.141, 0.888, 0.425s），其余与打开相同
         var closeAnimation: Animation {   // Ref 关闭：同比缩短 0.425 → 0.31s
-            self == .ref ? .timingCurve(0.256, 0.091, 0.141, 0.888, duration: 0.31) : animation
+            // t128u：Ref 的进度是线性时间，x / y / 尺寸各自的缓动在 CoverFlight 里按原片逐轴拟合
+            self == .ref ? .linear(duration: 0.31) : animation
         }
         var animation: Animation {
             switch self {
-            case .ref: return .timingCurve(0.389, 0.032, 0.701, 1.008, duration: 0.40)   // t119u：原片拟合形状，0.547s → 0.40s
+            case .ref: return .linear(duration: 0.40)   // t128u：线性时间轴，逐轴曲线见 FlightCurves
             case .snappy: return .snappy(duration: 0.4, extraBounce: 0)
             case .smooth: return .smooth(duration: 0.5)
             case .spring: return .spring(response: zoomSpring.response, dampingFraction: zoomSpring.damping)
             }
         }
     }
+    /// Ref 模式下背景模糊 / 网格变暗仍用 t119u 的单条拟合曲线（封面改走逐轴曲线）
+    static var zoomBackdrop: Animation {
+        zoomCurve == .ref ? .timingCurve(0.389, 0.032, 0.701, 1.008, duration: 0.40) : zoomCurve.animation
+    }
+    static var zoomPerAxis: Bool { zoomCurve == .ref }
     static var zoomCurve: ZoomCurve {
         get { (UserDefaults.standard.object(forKey: "vinyl.zoomCurve2") as? Int).flatMap(ZoomCurve.init(rawValue:)) ?? .ref }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "vinyl.zoomCurve2") }
@@ -506,5 +512,32 @@ struct NativeTabBehavior: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+
+/// t128u：封面飞行逐轴曲线 —— 从原片（vinyl-reference，30fps）逐帧模板匹配封面中心 x / y 与边长，
+/// 每个分量各拟合一条 cubic-bezier（时间归一化）。x 与 y 的缓动不同 → 中心走弧线而不是直线；
+/// 打开时位置先走、尺寸后长；关闭时尺寸先缩、位置后到。
+enum FlightCurves {
+    typealias B = (x1: Double, y1: Double, x2: Double, y2: Double)
+    static let openX: B  = (0.246, 0.021, 0.105, 0.992)
+    static let openY: B  = (0.227, -0.028, 0.214, 1.038)
+    static let openS: B  = (0.245, -0.110, 0.649, 1.001)
+    static let closeX: B = (0.211, -0.038, 0.229, 0.901)
+    static let closeY: B = (0.245, -0.016, 0.158, 0.962)
+    static let closeS: B = (0.390, 0.857, 0.000, 0.947)
+
+    /// CSS 同款 cubic-bezier：给定时间 u∈[0,1] 求输出
+    static func value(_ b: B, _ u: Double) -> Double {
+        let u = min(1, max(0, u))
+        func bx(_ t: Double) -> Double { 3 * (1 - t) * (1 - t) * t * b.x1 + 3 * (1 - t) * t * t * b.x2 + t * t * t }
+        func by(_ t: Double) -> Double { 3 * (1 - t) * (1 - t) * t * b.y1 + 3 * (1 - t) * t * t * b.y2 + t * t * t }
+        var lo = 0.0, hi = 1.0, t = u
+        for _ in 0..<24 {               // 二分（单调），足够精确且不会发散
+            t = (lo + hi) / 2
+            if bx(t) < u { lo = t } else { hi = t }
+        }
+        return by(t)
     }
 }

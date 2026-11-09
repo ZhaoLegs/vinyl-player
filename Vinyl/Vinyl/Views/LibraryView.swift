@@ -191,17 +191,19 @@ struct LibraryView: View {
     }
 
     private var gridScroll: some View {
+        ScrollViewReader { proxy in
         ScrollView(showsIndicators: false) {
             LazyVGrid(columns: columns, spacing: 18) {
                 let real = music.collections
                 if real.isEmpty {
                     // 未授权 / 资料库为空：保留内置演示封面
                     ForEach(1...AlbumData.coverCount, id: \.self) { index in
-                        coverCell(index)
+                        coverCell(index).id(index)
                     }
                 } else {
                     ForEach(Array(real.enumerated()), id: \.element.id) { index, collection in
                         musicCell(index, collection)
+                            .id(1000 + index)
                             .onAppear {
                                 guard index == real.count - 1 else { return }
                                 if music.hasMorePlaylists { Task { await music.loadMore(playlists: true) } }
@@ -213,6 +215,11 @@ struct LibraryView: View {
             .padding(.horizontal, DS.contentInset)
             .padding(.top, 12)
             .padding(.bottom, 8)
+        }
+        .onChange(of: scrollRequest) { _, key in
+            guard let key else { return }
+            proxy.scrollTo(key, anchor: .center)
+        }
         }
         .blur(radius: blurRadius)
     }
@@ -349,7 +356,11 @@ struct LibraryView: View {
             keepsSpinning: !recordingRequested,
             motionStart: motionStart,
             onClose: { close() },
-            onToggleArtwork: { toggleArtwork() }
+            onToggleArtwork: { toggleArtwork() },
+            canPage: { dir in pageNeighbor(dir) != nil },
+            onSwipeBegan: { swipeBegan() },
+            onPage: { dir in pageAlbum(dir) },
+            onSwipeSettled: { swipeSettled() }
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(contentAlpha > 0.5)
@@ -357,15 +368,16 @@ struct LibraryView: View {
         // Keep the view alive while SwiftUI interpolates the target state.
         // Testing `zoom < 1` here removes it as soon as open() sets zoom = 1.
 
-            Color.clear
-                .ignoresSafeArea()
-                .overlay(alignment: .topLeading) {
-                    // Keep the view alive while SwiftUI interpolates the target state.
-                    flyingCover
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
-                .allowsHitTesting(false)
+            // t128u：飞行封面用全局坐标定位 —— 减去本容器的全局原点（之前漏减了顶部安全区 62pt，
+            // 导致整条轨迹下移 62pt、落定时跳回）。
+            GeometryReader { g in
+                let o = g.frame(in: .global).origin
+                flyingCover
+                    .offset(x: -o.x, y: -o.y)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            .allowsHitTesting(false)
         }
     }
 
@@ -387,7 +399,8 @@ struct LibraryView: View {
         }
             .modifier(CoverFlight(progress: zoom, start: start, end: end, closing: closing, landed: landed,
                                  discCover: DS.coverName(selectedIndex),
-                                 discArtwork: selectedCollection?.artwork))
+                                 discArtwork: selectedCollection?.artwork,
+                                 perAxis: Motion.zoomPerAxis && !reduceMotion))
             .opacity(presented && !reduceMotion ? 1 : 0)
     }
 
@@ -409,10 +422,12 @@ struct LibraryView: View {
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open),
                       completionCriteria: .logicallyComplete) {
             zoom = 1
-            blurRadius = 18
-            gridDim = 1
         } completion: {
             if presented && !closing { landed = true }
+        }
+        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomBackdrop) {
+            blurRadius = 18
+            gridDim = 1
         }
         // Detail copy fades in after the cover has started moving (reference frames 9–16).
         withAnimation(.easeInOut(duration: 7.0 / 30).delay(4.0 / 30)) {
@@ -426,6 +441,7 @@ struct LibraryView: View {
     /// 打开弹簧逻辑完成（已落定）→ 详情封套接手
     private var landed: Bool { get { zm.landed } nonmutating set { zm.landed = newValue } }
     /// 关闭飞行的目标格子（cellFrames 的 key），滚动时实时跟踪它的 frame
+    private var scrollRequest: Int? { get { zm.scrollRequest } nonmutating set { zm.scrollRequest = newValue } }
     private var targetKey: Int? { get { zm.targetKey } nonmutating set { zm.targetKey = newValue } }
 
     private func close() {
@@ -447,8 +463,71 @@ struct LibraryView: View {
         beginCloseFlight()
     }
 
+    // MARK: - t131u 封面横滑切专辑
+
+    /// 首页网格顺序里的所有格子 key：演示 = 1…N；Apple Music = 1000 + i
+    private var pageKeys: [Int] {
+        music.collections.isEmpty ? Array(1...AlbumData.coverCount)
+                                  : music.collections.indices.map { 1000 + $0 }
+    }
+    private var currentPageKey: Int {
+        if let targetKey { return targetKey }
+        if let c = selectedCollection, let i = music.collections.firstIndex(where: { $0.id == c.id }) { return 1000 + i }
+        return selectedIndex
+    }
+    private func pageNeighbor(_ dir: Int) -> Int? {
+        let keys = pageKeys
+        guard let i = keys.firstIndex(of: currentPageKey) else { return nil }
+        let j = i + dir
+        return keys.indices.contains(j) ? keys[j] : nil
+    }
+    /// 开始横滑：唱片先收回封套
+    private func swipeBegan() {
+        demoToken += 1          // 取消尚未执行的自动抽出
+        flipBusy = false
+        withAnimation(Motion.animation(Motion.retract)) { pull = 0 }
+    }
+    /// 换到相邻专辑：只换展示内容，不动播放
+    private func pageAlbum(_ dir: Int) {
+        guard let key = pageNeighbor(dir) else { return }
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) {
+            pull = 0
+            flip = 0
+            targetKey = key
+            if key >= 1000 {
+                let c = music.collections[key - 1000]
+                selectedCollection = c
+                collectionSongs = nil
+                Task {
+                    let songs = (try? await c.songs()) ?? []
+                    guard selectedCollection?.id == c.id else { return }
+                    collectionSongs = songs
+                }
+            } else {
+                selectedIndex = key
+                selectedCollection = nil
+                collectionSongs = nil
+            }
+            if let f = cellFrames[key] { origin = f }
+            scrollRequest = key      // 首页网格滚到该格子，关闭时飞回它
+        }
+    }
+    /// 新封套落定：0.15s 后唱片用原有弹簧抽出
+    private func swipeSettled() {
+        demoToken += 1
+        let token = demoToken
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.15))
+            guard token == demoToken, presented, !closing, flip < 90 else { return }
+            withAnimation(Motion.animation(Motion.pull)) { pull = 1 }
+        }
+    }
+
     private func beginCloseFlight() {
         guard presented && !closing else { return }
+        // t131u：飞回「当前显示的那张专辑」的格子（实时 frame）
+        if let k = targetKey, let f = cellFrames[k] { origin = f }
         landed = false
         // 关闭时封面只做缩放 / 位移回到网格，不做任何翻转：
         // 即使用户翻到了 B 面，也先无动画地把 flip 归零。
@@ -578,6 +657,7 @@ private struct CoverFlight: AnimatableModifier {
     var landed: Bool = false
     var discCover: String = DS.coverName(AlbumData.featuredIndex)
     var discArtwork: Artwork? = nil
+    var perAxis: Bool = true
 
     var animatableData: CGFloat {
         get { progress }
@@ -588,13 +668,20 @@ private struct CoverFlight: AnimatableModifier {
         // 位置、尺寸、圆角、挖孔全部跟随同一个弹簧进度 p（不走参考路径、不夹断），
         // 弹簧的轻微过冲自然体现为封面越过终点一点再落定。
         let p: CGFloat = progress
-        let clamped: CGFloat = min(1, max(0, p))
-        let width: CGFloat = start.width + (end.width - start.width) * p
-        let midX: CGFloat = start.midX + (end.midX - start.midX) * p
-        let midY: CGFloat = start.midY + (end.midY - start.midY) * p
-        // 打开：落定（landed）前一直是飞行封面，落定后瞬间交给几何完全相同的详情封套；关闭：始终是飞行封面
-        // 关闭：飞行封面全程不透明，四边收拢到格子的实时 frame（滚动也跟随），落定瞬间与格子同框同圆角再交接，
-        // 实测提前显示格子 / 交叉淡入会出现错位的双图，所以不做。
+        // t128u：逐轴曲线（Ref）：progress 是线性时间；x / y / 尺寸各自按原片拟合的贝塞尔取值 → 弧线轨迹。
+        // 关闭时 progress 1→0，u = 已用时间 = 1 − progress，分量 = 1 − closeCurve(u)。
+        let u = Double(min(1, max(0, closing ? 1 - p : p)))
+        let fx: CGFloat = !perAxis ? p : CGFloat(closing ? 1 - FlightCurves.value(FlightCurves.closeX, u) : FlightCurves.value(FlightCurves.openX, u))
+        let fy: CGFloat = !perAxis ? p : CGFloat(closing ? 1 - FlightCurves.value(FlightCurves.closeY, u) : FlightCurves.value(FlightCurves.openY, u))
+        let fs: CGFloat = !perAxis ? p : CGFloat(closing ? 1 - FlightCurves.value(FlightCurves.closeS, u) : FlightCurves.value(FlightCurves.openS, u))
+        let clamped: CGFloat = min(1, max(0, fs))
+        let width: CGFloat = start.width + (end.width - start.width) * fs
+        let midX: CGFloat = start.midX + (end.midX - start.midX) * fx
+        let midY: CGFloat = start.midY + (end.midY - start.midY) * fy
+        // 原图放大：飞行全程就是格子那张图本身（同图、同裁切、方形等比），只有圆角随尺寸连续变化。
+        // 封套挖孔只在尺寸最后 15% 才淡入（关闭时最先 15% 淡出），与详情封套交接处完全一致，
+        // 其余 85% 的路程画面就是原图在放大 / 缩小，没有任何换图或叠影。
+        let holeAlpha: Double = Double(min(1, max(0, (clamped - 0.85) / 0.15)))
         let visible: Double = (closing || !landed) ? 1 : 0
         let hole = width * DS.planet / DS.sleeve
         content
@@ -604,7 +691,7 @@ private struct CoverFlight: AnimatableModifier {
                 Rectangle()
                     .overlay {
                         Circle().frame(width: hole, height: hole)
-                            .opacity(Double(clamped))
+                            .opacity(holeAlpha)
                             .blendMode(.destinationOut)
                     }
                     .compositingGroup()
@@ -616,7 +703,7 @@ private struct CoverFlight: AnimatableModifier {
                     .scaleEffect(width / DS.sleeve)
                     .frame(width: hole, height: hole)
                     .clipShape(Circle())
-                    .opacity(Double(clamped))
+                    .opacity(holeAlpha)
             }
             // 圆角随同一弹簧进度连续变化：网格 DS.corner → 详情 0（关闭时反向）
             .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - clamped)))
@@ -691,4 +778,5 @@ final class LibraryZoomModel: ObservableObject {
     @Published var curveLabel: String? = nil
     @Published var landed: Bool = false
     @Published var targetKey: Int? = nil
+    @Published var scrollRequest: Int? = nil
 }
