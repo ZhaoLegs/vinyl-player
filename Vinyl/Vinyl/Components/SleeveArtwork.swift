@@ -8,6 +8,9 @@ import MusicKit
 struct VinylDiscView: View {
     let angle: Angle
     var pull: CGFloat = 0
+    /// 中心标签 = 该专辑自己的封面（等比 aspect-fill 进圆形标签，演示用 Assets 封面，Apple Music 用 MusicKit 封面）
+    var coverName: String = DS.coverName(AlbumData.featuredIndex)
+    var artwork: Artwork? = nil
 
     var body: some View {
         ZStack {
@@ -35,11 +38,8 @@ struct VinylDiscView: View {
                         .white.opacity(0.055), .clear, .clear
                     ], center: .center))
                     .blendMode(.screen)
-                Image("planet")
-                    .resizable()
-                    .frame(width: 80, height: 80)
-                    .clipShape(Circle())
-                    .overlay(Circle().fill(.white).frame(width: 5, height: 5))
+                DiscLabel(coverName: coverName, artwork: artwork, size: DS.discLabel)
+                    .overlay(Circle().fill(.white).frame(width: 5, height: 5))   // 主轴孔在最上层
             }
             .clipShape(Circle())
             .rotationEffect(angle)
@@ -61,6 +61,28 @@ struct VinylDiscView: View {
         // 抽出时唱片离开封套、投影随位移加深，制造景深
         .shadow(color: .black.opacity(Double(0.35 + 0.12 * pull)),
                 radius: 20 + 12 * pull, y: 10 + 8 * pull)
+    }
+}
+
+/// 唱片中心标签：封面等比填充（scaledToFill）后裁成正圆，不拉伸。
+struct DiscLabel: View {
+    var coverName: String
+    var artwork: Artwork? = nil
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let artwork {
+                ArtworkFill(artwork: artwork, render: 160)
+            } else {
+                Image(coverName)
+                    .resizable()
+                    .scaledToFill()
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(.black.opacity(0.25), lineWidth: 0.5))
     }
 }
 
@@ -97,18 +119,25 @@ struct SleeveArtwork: View, Animatable {
     var pull: CGFloat
     var flip: Double
     let spin: Angle
+    /// 页面宽度：用来让「抽出状态的封套 + 露出的唱片」整体落在左右 DS.contentInset 之内
+    var pageWidth: CGFloat = 402
     var animatableData: AnimatablePair<CGFloat, Double> {
         get { AnimatablePair(pull, flip) }
         set { pull = newValue.first; flip = newValue.second }
     }
 
     private var discInset: CGFloat { (DS.sleeve - DS.disc) / 2 }
+    private var sleeveRestLeft: CGFloat { (pageWidth - DS.sleeve) / 2 }
+    /// 抽出时封套左移量：缩放后的封套左缘正好落在 contentInset
+    private var sleevePullX: CGFloat { sleeveRestLeft + DS.sleeve * DS.pullScale / 2 - DS.contentInset }
+    /// 抽出时唱片右移量：唱片右缘正好落在 pageWidth - contentInset
+    private var discPullX: CGFloat { (pageWidth - DS.contentInset) - (sleeveRestLeft + discInset + DS.disc) }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             // 唱片在封套之后，抽出时向右位移并旋转
-            VinylDiscView(angle: spin, pull: pull)
-                .offset(x: discInset + DS.discPull * pull, y: discInset)
+            VinylDiscView(angle: spin, pull: pull, coverName: coverName, artwork: artwork)
+                .offset(x: discInset + discPullX * pull, y: discInset)
 
             // 封套缩小 + 左移，制造景深（对应原片 f44–f51）
             ZStack(alignment: .topLeading) {
@@ -139,7 +168,7 @@ struct SleeveArtwork: View, Animatable {
                     .shadow(color: .black.opacity(0.12), radius: 8, y: 5)
             }
             .scaleEffect(1 - DS.pullScale * pull, anchor: .center)   // 以中心缩放，封套中线不动 → 唱片始终上下居中
-            .offset(x: -DS.sleevePull * pull)
+            .offset(x: -sleevePullX * pull)
         }
         .frame(width: DS.sleeve, height: DS.sleeve, alignment: .topLeading)
         // 原片 f116–f119 的绕 Y 轴 3D 翻转；转到侧面时受光变暗

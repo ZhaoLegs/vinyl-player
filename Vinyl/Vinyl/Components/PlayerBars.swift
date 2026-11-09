@@ -56,20 +56,17 @@ struct MiniPlayer: View {
                 Circle()
                     .fill(RadialGradient(colors: [Color(hex: 0x3A2E68), Color(hex: 0x12141C), Color(hex: 0x0B0C10)],
                                         center: .center, startRadius: 1, endRadius: 16))
-                if music.hasCurrentTrack, let artwork = music.currentArtwork {
-                    ArtworkImage(artwork, width: 12, height: 12).clipShape(Circle())
-                } else {
-                    Circle()
-                        .fill(Color(hex: 0x6E5AA8))
-                        .frame(width: 10, height: 10)
-                }
+                // 中心标签 = 当前专辑封面（等比填充），主轴孔在最上层
+                DiscLabel(coverName: DS.coverName(AlbumData.featuredIndex),
+                          artwork: music.hasCurrentTrack ? music.currentArtwork : nil,
+                          size: 10)
                 Circle().fill(.white).frame(width: 3.5, height: 3.5)
             }
             .frame(width: 27, height: 27)
             .frame(width: 40, height: 40)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(music.hasCurrentTrack ? music.currentTitle : "A1 · Mind Games")
+                Text(music.hasCurrentTrack ? music.currentTitle : music.demoMiniTitle)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(DS.ink)
                     .lineLimit(1)
@@ -86,7 +83,8 @@ struct MiniPlayer: View {
                 }
                 .padding(.trailing, -9)
             } else {
-                SystemPauseButton(size: 13)
+                SystemPlaybackButton(isPlaying: music.demoPlaying) { music.selectDemo(music.demoTrack) }
+                    .padding(.trailing, -9)
             }
         }
         .padding(.trailing, 14)

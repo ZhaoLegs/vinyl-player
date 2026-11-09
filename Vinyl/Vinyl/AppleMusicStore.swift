@@ -9,6 +9,10 @@ final class AppleMusicStore: ObservableObject {
     @Published private(set) var albums: [Album] = []
     @Published private(set) var playlists: [Playlist] = []
     @Published private(set) var songs: [Song] = []
+    /// Apple Music 推荐（个性化推荐，失败 / 为空时退回曲库排行榜），排在首页网格最前面
+    @Published private(set) var recommended: [MusicCollection] = []
+    /// 运行时实际成功的请求：MusicPersonalRecommendationsRequest / MusicCatalogChartsRequest / 空
+    @Published private(set) var recommendationSource = ""
     @Published private(set) var isLoading = false
     @Published private(set) var isConnecting = false
     @Published private(set) var hasMoreAlbums = false
@@ -24,6 +28,28 @@ final class AppleMusicStore: ObservableObject {
     @Published private(set) var position: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
     @Published var errorMessage: String?
+
+    // 演示专辑（无音频文件）的播放状态：选中曲目、播放 / 暂停、模拟的播放时钟
+    static let demoDuration: Double = 300
+    @Published private(set) var demoTrack = 0
+    @Published private(set) var demoPlaying = true
+    @Published private(set) var demoElapsed: Double = 0.18 * AppleMusicStore.demoDuration
+    /// 点演示曲目：点当前行 = 暂停 / 继续；点其它行 = 切到该曲并开始播放
+    func selectDemo(_ index: Int) {
+        if index == demoTrack { demoPlaying.toggle() }
+        else { demoTrack = index; demoPlaying = true; demoElapsed = 0 }
+    }
+    var demoMiniTitle: String {
+        let tracks = AlbumData.tracks
+        guard tracks.indices.contains(demoTrack) else { return "" }
+        var side = "A", number = 0
+        for i in 0...demoTrack {
+            if !tracks[i].side.isEmpty { side = tracks[i].side; number = 0 }
+            number += 1
+        }
+        let title = tracks[demoTrack].title.components(separatedBy: " - ").last ?? tracks[demoTrack].title
+        return "\(side)\(number) · \(title)"
+    }
     @Published var showingPlayer = false
 
     // MusicKit's player requires a provisioned app identity. Do not initialize it
@@ -43,7 +69,7 @@ final class AppleMusicStore: ObservableObject {
     /// 首页网格的真实内容：资料库歌曲（合成一张）→ 歌单 → 专辑。
     var collections: [MusicCollection] {
         guard authorized else { return [] }
-        var items: [MusicCollection] = []
+        var items: [MusicCollection] = recommended
         if !songs.isEmpty { items.append(.librarySongs(songs)) }
         items += playlists.map { .playlist($0) }
         items += albums.map { .album($0, catalog: false) }
@@ -71,6 +97,8 @@ final class AppleMusicStore: ObservableObject {
             albums = []
             playlists = []
             songs = []
+            recommended = []
+            recommendationSource = ""
             libraryLoaded = false
             hasMoreAlbums = false
             hasMorePlaylists = false
@@ -88,6 +116,41 @@ final class AppleMusicStore: ObservableObject {
             // Library playback can still be available for purchased/local music.
         }
         if !libraryLoaded { await loadLibrary() }
+        if recommended.isEmpty { await loadRecommendations() }
+    }
+
+    /// 先取个性化推荐（专辑 + 歌单，去重）；失败或为空（如无订阅）时退回当前地区的排行榜。
+    func loadRecommendations() async {
+        guard authorized else { return }
+        var items: [MusicCollection] = []
+        var seen = Set<String>()
+        func add(_ item: MusicCollection) { if seen.insert(item.id).inserted { items.append(item) } }
+        do {
+            var request = MusicPersonalRecommendationsRequest()
+            request.limit = 12
+            let response = try await request.response()
+            for recommendation in response.recommendations {
+                recommendation.albums.forEach { add(.album($0, catalog: true)) }
+                recommendation.playlists.forEach { add(.playlist($0)) }
+            }
+            if !items.isEmpty, authorized {
+                recommended = items
+                recommendationSource = "MusicPersonalRecommendationsRequest"
+                return
+            }
+        } catch is CancellationError { return
+        } catch { /* 无订阅 / 无推荐：退回排行榜 */ }
+        do {
+            var request = MusicCatalogChartsRequest(kinds: [.mostPlayed], types: [Album.self, Playlist.self])
+            request.limit = 24
+            let response = try await request.response()
+            response.albumCharts.flatMap { $0.items }.forEach { add(.album($0, catalog: true)) }
+            response.playlistCharts.flatMap { $0.items }.forEach { add(.playlist($0)) }
+            guard authorized else { return }
+            recommended = items
+            recommendationSource = items.isEmpty ? "" : "MusicCatalogChartsRequest"
+        } catch is CancellationError {
+        } catch { report(error, action: "读取推荐失败") }
     }
 
     func loadLibrary() async {
@@ -201,6 +264,10 @@ final class AppleMusicStore: ObservableObject {
     func observePlayback() async {
         while !Task.isCancelled {
             syncPlayback()
+            if demoPlaying {
+                demoElapsed += 0.25
+                if demoElapsed >= Self.demoDuration { demoElapsed = 0 }
+            }
             do { try await Task.sleep(for: .milliseconds(250)) }
             catch { return }
         }
@@ -272,8 +339,11 @@ enum MusicCollection: Identifiable {
         }
     }
     var isCatalog: Bool {
-        if case .album(_, let catalog) = self { return catalog }
-        return false
+        switch self {
+        case .album(_, let catalog): return catalog
+        case .playlist(let playlist): return playlist.id.rawValue.hasPrefix("pl.")   // 曲库歌单 ID 以 pl. 开头
+        case .librarySongs: return false
+        }
     }
 
     func songs() async throws -> [Song] {

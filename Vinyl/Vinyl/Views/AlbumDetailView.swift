@@ -34,10 +34,17 @@ struct AlbumDetailView: View {
     let onClose: () -> Void
     let onToggleArtwork: () -> Void
 
+    @State private var pageWidth: CGFloat = 402
+
     var body: some View {
         ZStack(alignment: .top) {
             AuroraBackground()
                 .opacity(contentAlpha)
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { pageWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { _, w in pageWidth = w }
+            }
             Rectangle()
                 .fill(.ultraThinMaterial)
                 .opacity(0.35 * contentAlpha)
@@ -55,7 +62,7 @@ struct AlbumDetailView: View {
                     let elapsed = timeline.date.timeIntervalSince(motionStart)
                     let spin = Angle.degrees(reduceMotion ? 0 : spinDegrees(elapsed))
                     SleeveArtwork(coverName: coverName, artwork: collection?.artwork,
-                                  pull: pull, flip: flip, spin: spin)
+                                  pull: pull, flip: flip, spin: spin, pageWidth: pageWidth)
                         .frame(width: DS.sleeve, height: DS.sleeve)
                         .contentShape(Rectangle())
                         .onTapGesture(perform: onToggleArtwork)
@@ -177,7 +184,10 @@ struct AlbumDetailView: View {
                         isPlaying: music.isPlaying,
                         toggle: { Task { await music.togglePlayback() } })
         } else {
-            WaveformBar(progress: waveProgress, levels: demoLevels)
+            WaveformBar(progress: music.demoElapsed / AppleMusicStore.demoDuration,
+                        levels: demoLevels,
+                        isPlaying: music.demoPlaying,
+                        toggle: { music.selectDemo(music.demoTrack) })
         }
     }
 
@@ -250,7 +260,7 @@ struct AlbumDetailView: View {
                     .frame(width: TL.sideW, alignment: .leading)
                 Text(musicTime(song.duration ?? 0))
                     .font(.system(size: TL.row, weight: .regular).monospacedDigit())
-                    .foregroundStyle(TL.bpm)
+                    .foregroundStyle(current ? DS.ink : TL.bpm)
                     .frame(width: TL.bpmW, alignment: .leading)
                     .lineLimit(1)
                 Image(systemName: current && music.isPlaying ? "pause.fill" : "play.fill")
@@ -307,29 +317,34 @@ struct AlbumDetailView: View {
             }
             .padding(.bottom, TL.headerGap)
 
-            ForEach(AlbumData.tracks) { track in
-                HStack(spacing: 0) {
-                    Text(track.side)
-                        .font(.system(size: TL.row, weight: .regular))
-                        .foregroundStyle(DS.ink)
-                        .frame(width: TL.sideW, alignment: .leading)
-                    Text("\(track.bpm)")
-                        .font(.system(size: TL.row, weight: .regular))
-                        .foregroundStyle(TL.bpm)
-                        .frame(width: TL.bpmW, alignment: .leading)
-                    // SF Symbols：正在播放 = pause.fill，其余 = play.fill
-                    Image(systemName: track.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: TL.glyph, weight: .regular))
-                        .foregroundStyle(DS.ink)
-                        .frame(width: TL.glyphW, alignment: .leading)
-                        .accessibilityLabel(track.isPlaying ? "暂停" : "播放")
-                    Text(track.title)
-                        .font(.system(size: TL.row, weight: .regular))
-                        .foregroundStyle(track.isPlaying ? DS.ink : TL.idle)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
+            ForEach(Array(AlbumData.tracks.enumerated()), id: \.offset) { index, track in
+                let current = music.demoTrack == index
+                Button { music.selectDemo(index) } label: {
+                    HStack(spacing: 0) {
+                        Text(track.side)
+                            .font(.system(size: TL.row, weight: .regular))
+                            .foregroundStyle(DS.ink)
+                            .frame(width: TL.sideW, alignment: .leading)
+                        Text("\(track.bpm)")
+                            .font(.system(size: TL.row, weight: .regular))
+                            .foregroundStyle(current ? DS.ink : TL.bpm)
+                            .frame(width: TL.bpmW, alignment: .leading)
+                        // SF Symbols：当前曲目播放中 = pause.fill，其余 / 暂停 = play.fill
+                        Image(systemName: current && music.demoPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: TL.glyph, weight: .regular))
+                            .foregroundStyle(DS.ink)
+                            .frame(width: TL.glyphW, alignment: .leading)
+                        Text(track.title)
+                            .font(.system(size: TL.row, weight: .regular))
+                            .foregroundStyle(current ? DS.ink : TL.idle)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(height: TL.pitch)
+                    .contentShape(Rectangle())
                 }
-                .frame(height: TL.pitch)
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(current && music.demoPlaying ? "暂停" : "播放") \(track.title)")
             }
         }
     }

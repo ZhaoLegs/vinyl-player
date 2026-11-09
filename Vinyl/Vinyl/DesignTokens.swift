@@ -24,11 +24,12 @@ enum DS {
     // 尺寸：以 iPhone 393pt 宽为基准，与原片 480px 屏幕按 0.819 换算
     static let sleeve: CGFloat     = 306
     static let sleeveTop: CGFloat  = 126
-    // 抽出后封套缩到 (1 - pullScale)=0.85 → 260.1pt；唱片直径取 260，
-    // 上下与缩放后的封套齐平（不再纵向溢出），圆心始终在同一条水平中线上。
-    static let disc: CGFloat       = 260
-    static let discPull: CGFloat   = 56
-    static let sleevePull: CGFloat = 58
+    // 抽出后封套缩到 (1 - pullScale)=0.85 → 260.1pt；唱片直径 234（原 260 缩小 10%），
+    // 圆心仍与封套同一条水平中线，上下各比缩放后的封套内缩 13pt。
+    static let disc: CGFloat       = 234
+    /// 唱片中心标签直径：原 80/260 的比例 → 72
+    static let discLabel: CGFloat  = 72
+    // 抽出位移不再是固定值：SleeveArtwork 按页面宽度计算，让封套左缘 = 21pt、唱片右缘 = 宽 - 21pt。
     static let pullScale: CGFloat  = 0.15
     static let planet: CGFloat     = 86
     static let corner: CGFloat     = 5

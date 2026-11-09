@@ -18,6 +18,8 @@ struct LibraryView: View {
     @State private var selectedCollection: MusicCollection?
     @State private var collectionSongs: [Song]?
     @State private var presented = false
+    /// 翻面三段动画进行中：期间忽略点击，避免叠加
+    @State private var flipBusy = false
     @State private var closing = false
     @State private var autoplay = false
     @State private var zoom: CGFloat = 0
@@ -129,7 +131,9 @@ struct LibraryView: View {
             }
             Spacer(minLength: 0)
             GlassCircleButton(systemImage: "cube", accessibilityText: "刷新资料库") {
-                if music.authorized { Task { await music.loadLibrary() } } else { connectMusic() }
+                if music.authorized {
+                    Task { await music.loadLibrary(); await music.loadRecommendations() }
+                } else { connectMusic() }
             }
         }
         .padding(.horizontal, DS.contentInset)
@@ -324,6 +328,11 @@ struct LibraryView: View {
 
     private func close() {
         guard presented && !closing else { return }
+        // 关闭时封面只做缩放 / 位移回到网格，不做任何翻转：
+        // 即使用户翻到了 B 面，也先无动画地把 flip 归零。
+        var reset = Transaction()
+        reset.disablesAnimations = true
+        withTransaction(reset) { flip = 0 }
         closing = true
         autoplay = false
         demoToken += 1
@@ -345,13 +354,40 @@ struct LibraryView: View {
         }
     }
 
-    /// 用户点封套 = 翻面（A 面 ↔ B 面）。翻面只在点击时发生，打开详情时绝不自动翻；
-    /// 不取消正在进行的自动抽出，唱片照常滑出并继续播放。
+    /// 用户点封套 = 翻面（A 面 ↔ B 面），按原片节奏分三步，期间的点击一律忽略：
+    /// ① 唱片收回封套（retract，原片 f91→97 = 0.20s）
+    /// ② 完全收回后封套绕 Y 轴翻面（flip，原片 f114→125 = 0.367s）
+    /// ③ 翻完后唱片再滑出（pull，原片 f41→55 = 0.467s），继续播放；真实专辑切到该面的第一首。
+    /// 打开详情时绝不自动翻面。
     private func toggleArtwork() {
-        guard presented && !closing else { return }
-        withAnimation(reduceMotion ? nil : Motion.animation(Motion.flip)) {
-            flip = flip < 90 ? 180 : 0
+        guard presented && !closing && !flipBusy else { return }
+        flipBusy = true
+        Task { @MainActor in
+            defer { flipBusy = false }
+            let animate = !reduceMotion
+            if pull > 0.01 {
+                withAnimation(animate ? Motion.animation(Motion.retract) : nil) { pull = 0 }
+                if animate { try? await Task.sleep(for: .seconds(Motion.retract.duration)) }
+            }
+            guard presented && !closing else { return }
+            let toBack = flip < 90
+            withAnimation(animate ? Motion.animation(Motion.flip) : nil) { flip = toBack ? 180 : 0 }
+            if animate { try? await Task.sleep(for: .seconds(Motion.flip.duration)) }
+            guard presented && !closing else { return }
+            withAnimation(animate ? Motion.animation(Motion.pull) : nil) { pull = 1 }
+            await playSide(back: toBack)
+            if animate { try? await Task.sleep(for: .seconds(Motion.pull.duration)) }
         }
+    }
+
+    /// 真实专辑：A 面 = 前半曲目，B 面 = 后半；翻到哪面就从该面第一首播（与曲目表的 A/B 标记一致）。
+    /// 演示专辑没有音频，只翻面不换曲。
+    private func playSide(back: Bool) async {
+        guard let collection = selectedCollection, let songs = collectionSongs, songs.count > 1 else { return }
+        let half = (songs.count + 1) / 2
+        let side = back ? Array(songs[half...]) : Array(songs[..<half])
+        guard let first = side.first(where: { $0.playParameters != nil }) else { return }
+        await music.play(first, in: songs, fromCatalog: collection.isCatalog)
     }
 
     /// Source f5 is the opening trigger. Offsets below are relative to that trigger.
@@ -423,12 +459,10 @@ private struct CoverFlight: AnimatableModifier {
         let nativeX = start.minX + (end.minX - start.minX) * clamped
         let nativeY = start.minY + (end.minY - start.minY) * clamped
         let width = start.width + (end.width - start.width) * amount
-        let turn = closing ? Motion.sampleYaw(frame: sourceFrame) : 0
         let visible = closing ? 1.0 : (1 - min(1, max(0, (linear - 0.88) / 0.12)))
         content
             .frame(width: width, height: width)
             .clipShape(RoundedRectangle(cornerRadius: DS.corner * (1 - clamped) + 2 * clamped))
-            .rotation3DEffect(.degrees(turn), axis: (x: 0, y: 1, z: 0), perspective: 0.55)
             .shadow(color: .black.opacity(0.25), radius: 20 * clamped, y: 8 * clamped)
             .offset(x: nativeX + (sample.x - refStraightX),
                     y: nativeY + (sample.y - refStraightY))

@@ -254,6 +254,8 @@ struct MusicAccountView: View {
                              ? (music.canPlayCatalog ? "订阅可播放 Apple Music 曲库" : "当前订阅不可播放曲库")
                              : "订阅状态暂时无法获取")
                         Button("刷新连接状态") { Task { await music.refreshAccess() } }
+                        Text(music.recommendationSource.isEmpty ? "推荐：暂无" : "推荐来源：\(music.recommendationSource)")
+                            .font(.footnote).foregroundStyle(.secondary)
                     } else {
                         MusicAccessView()
                     }
