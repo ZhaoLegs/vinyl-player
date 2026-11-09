@@ -190,7 +190,7 @@ struct AlbumDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Text("Side")
-                    .font(.system(size: TL.header, weight: .bold))
+                    .font(.system(size: TL.header, weight: .regular))
                     .foregroundStyle(DS.ink)
                     .frame(width: TL.sideW, alignment: .leading)
                 Text("Time")
@@ -245,7 +245,7 @@ struct AlbumDetailView: View {
         } label: {
             HStack(spacing: 0) {
                 Text(side)
-                    .font(.system(size: TL.row, weight: .bold))
+                    .font(.system(size: TL.row, weight: .regular))
                     .foregroundStyle(DS.ink)
                     .frame(width: TL.sideW, alignment: .leading)
                 Text(musicTime(song.duration ?? 0))
@@ -292,7 +292,7 @@ struct AlbumDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Text("Side")
-                    .font(.system(size: TL.header, weight: .bold))
+                    .font(.system(size: TL.header, weight: .regular))
                     .foregroundStyle(DS.ink)
                     .frame(width: TL.sideW, alignment: .leading)
                 Text("BPM")
@@ -310,7 +310,7 @@ struct AlbumDetailView: View {
             ForEach(AlbumData.tracks) { track in
                 HStack(spacing: 0) {
                     Text(track.side)
-                        .font(.system(size: TL.row, weight: .bold))
+                        .font(.system(size: TL.row, weight: .regular))
                         .foregroundStyle(DS.ink)
                         .frame(width: TL.sideW, alignment: .leading)
                     Text("\(track.bpm)")
