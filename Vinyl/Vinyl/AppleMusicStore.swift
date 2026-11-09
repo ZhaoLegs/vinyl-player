@@ -18,6 +18,8 @@ final class AppleMusicStore: ObservableObject {
     /// 运行时实际成功的请求：MusicPersonalRecommendationsRequest / MusicCatalogChartsRequest / 空
     @Published private(set) var recommendationSource = ""
     @Published private(set) var isLoading = false
+    /// t158u：首页至少完整加载过一次（之前显示占位格，之后才显示「空 / 失败」提示）
+    @Published private(set) var homeLoadedOnce = false
     @Published private(set) var isConnecting = false
     @Published private(set) var canPlayCatalog = false
     @Published private(set) var subscriptionKnown = false
@@ -182,6 +184,7 @@ final class AppleMusicStore: ObservableObject {
             recommendationPages = []
             recommendationSource = ""
             libraryLoaded = false
+            homeLoadedOnce = false
             albumCursor = MusicPageCursor(pageSize: pageSize)
             playlistCursor = MusicPageCursor(pageSize: pageSize)
             songCursor = MusicPageCursor(pageSize: 200)
@@ -206,7 +209,10 @@ final class AppleMusicStore: ObservableObject {
             subscriptionKnown = false
             // Library playback can still be available for purchased/local music.
         }
-        await refreshHome(reloadLibrary: !libraryLoaded, reloadRecommendations: recommended.isEmpty)
+        // t158u：首页加载放进非结构化 Task —— scenePhase 抖动会取消外层 .task，
+        // 原来请求被一起取消（-999）而 isLoading 又挡住了重试，首页就一直停在空 / 假数据。
+        let reloadLibrary = !libraryLoaded, reloadRecs = recommended.isEmpty
+        await Task { await self.refreshHome(reloadLibrary: reloadLibrary, reloadRecommendations: reloadRecs) }.value
     }
 
     func refreshHome(reloadLibrary: Bool = true, reloadRecommendations: Bool = true) async {
@@ -222,8 +228,11 @@ final class AppleMusicStore: ObservableObject {
         guard canApply(generation) else { return }
         nextHomeSource = 0
         rebuildHome()
+        homeLoadedOnce = true
         homePageRevision += 1
+        print("[t158u] home loaded: \(collections.count) items at \(String(format: "%.2f", Date().timeIntervalSince(createdAt)))s since store init")
     }
+    private let createdAt = Date()
 
     /// t148u：同一会话里同类提示最多出现一次（不反复弹）
     private var reportedActions = Set<String>()

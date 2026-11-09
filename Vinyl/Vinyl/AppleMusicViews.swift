@@ -295,16 +295,20 @@ struct MusicErrorBanner: View {
 
 /// 其它 tab 也挂同一个 mini player（与首页同一套宽度 / 12pt 间距 token）。
 struct MiniPlayerBar: ViewModifier {
+    @EnvironmentObject private var music: AppleMusicStore
+    private var show: Bool { music.hasCurrentTrack || DemoMode.enabled }   // t158u
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content.safeAreaBar(edge: .bottom, spacing: 0) {
-                MiniPlayer()
-                    .padding(.horizontal, DS.tabBarSideInset)
-                    .padding(.bottom, DS.miniPlayerBottomPadding)
+                if show {
+                    MiniPlayer()
+                        .padding(.horizontal, DS.tabBarSideInset)
+                        .padding(.bottom, DS.miniPlayerBottomPadding)
+                }
             }
         } else {
             content.safeAreaInset(edge: .bottom) {
-                MiniPlayer().padding(.horizontal, 16).padding(.bottom, 10)
+                if show { MiniPlayer().padding(.horizontal, 16).padding(.bottom, 10) }
             }
         }
     }

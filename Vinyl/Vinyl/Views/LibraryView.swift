@@ -167,9 +167,13 @@ struct LibraryView: View {
                 // safeAreaBar 会把 mini player 贴到底部安全区，并**自动把滚动边缘效果延伸到它**，
                 // 所以不需要再手写 LinearGradient mask。
                 .safeAreaBar(edge: .bottom, spacing: 0) {
-                    MiniPlayer(open: openNowPlaying)
-                        .padding(.horizontal, DS.tabBarSideInset)
-                        .padding(.bottom, DS.miniPlayerBottomPadding)
+                    // t158u：没有真实正在播放的曲目时不显示假的 mini player
+                    if music.hasCurrentTrack || DemoMode.enabled {
+                        MiniPlayer(open: openNowPlaying)
+                            .padding(.horizontal, DS.tabBarSideInset)
+                            .padding(.bottom, DS.miniPlayerBottomPadding)
+                            .transition(.opacity)
+                    }
                 }
         } else {
             // iOS 17–25 没有该 API：退回渐变遮罩（纯外观降级）。
@@ -184,9 +188,11 @@ struct LibraryView: View {
                             .init(color: .clear, location: 1)
                         ], startPoint: .top, endPoint: .bottom)
                     )
-                MiniPlayer(open: openNowPlaying)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 10)
+                if music.hasCurrentTrack || DemoMode.enabled {
+                    MiniPlayer(open: openNowPlaying)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 10)
+                }
             }
         }
     }
@@ -197,10 +203,18 @@ struct LibraryView: View {
             LazyVStack(spacing: 0) {
             LazyVGrid(columns: columns, spacing: 18) {
                 let real = music.collections
-                if real.isEmpty {
-                    // 未授权 / 资料库为空：保留内置演示封面
+                if real.isEmpty && DemoMode.enabled {
+                    // t158u：内置演示封面只在 --record-demo（模拟器录屏）里出现
                     ForEach(1...AlbumData.coverCount, id: \.self) { index in
                         coverCell(index).id(index)
+                    }
+                } else if real.isEmpty {
+                    // t158u：真实数据到达前 = 同网格的浅色圆角占位（无文字）；授权被拒 / 加载失败另见 homeEmptyNotice
+                    if homeNotice == nil {
+                        ForEach(0..<HomePlaceholder.count, id: \.self) { i in
+                            HomePlaceholder().id(-1 - i)
+                        }
+                        .transition(.opacity)
                     }
                 } else {
                     ForEach(Array(real.enumerated()), id: \.element.id) { index, collection in
@@ -212,6 +226,17 @@ struct LibraryView: View {
             .padding(.horizontal, DS.contentInset)
             .padding(.top, 12)
             .padding(.bottom, 8)
+            // t158u：真实封面 0.25s 淡入替换占位
+            .animation(.easeOut(duration: 0.25), value: music.collections.isEmpty)
+            if let notice = homeNotice, music.collections.isEmpty, !DemoMode.enabled {
+                Text(notice)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                    .padding(.top, 160)
+                    .transition(.opacity)
+            }
             if music.hasMoreHome, !music.collections.isEmpty {
                 // 即使下一页只有重复封面或更多歌曲，也能继续推进；打开详情时暂停分页。
                 Color.clear
@@ -239,6 +264,17 @@ struct LibraryView: View {
         .modifier(GridRipple(progress: zoom, closing: closing,
                              anchor: gridAnchorUnit,
                              enabled: (Motion.zoomPerAxis || Motion.zoomFluid) && !reduceMotion))
+    }
+
+    /// t158u：首页无内容时的简短中文提示（nil = 仍在加载，显示占位格）
+    private var homeNotice: String? {
+        switch music.authorization {
+        case .denied: return "未获得 Apple Music 访问权限\n点左上角按钮前往设置开启"
+        case .restricted: return "此设备限制了 Apple Music 访问"
+        default: break
+        }
+        guard music.authorized, music.homeLoadedOnce, !music.isLoading else { return nil }
+        return music.errorMessage != nil ? "资料库加载失败\n点右上角按钮重试" : "资料库里还没有内容"
     }
 
     /// 屏幕锚点换算成网格自身坐标系的 UnitPoint
@@ -863,4 +899,23 @@ final class LibraryZoomModel: ObservableObject {
     @Published var targetKey: Int? = nil
     @Published var scrollRequest: Int? = nil
     @Published var gridFrame: CGRect = .zero
+}
+
+/// t158u：演示数据只在模拟器录屏 / 调试参数下使用；正常启动永远不显示假数据
+enum DemoMode {
+    static let enabled: Bool = {
+        let a = ProcessInfo.processInfo.arguments
+        return a.contains("--record-demo") || a.contains("--open-featured")
+    }()
+}
+
+/// t158u：加载中的封面占位：与封面同尺寸、同圆角的浅色方块，无文字
+struct HomePlaceholder: View {
+    static let count = 20
+    var body: some View {
+        RoundedRectangle(cornerRadius: DS.corner)
+            .fill(Color.primary.opacity(0.05))
+            .aspectRatio(1, contentMode: .fit)
+            .accessibilityHidden(true)
+    }
 }
