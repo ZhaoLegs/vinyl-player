@@ -799,6 +799,14 @@ struct LibraryView: View {
             onSpinAngle: { zm.detailDiscAngle = $0 },
             onToggleArtwork: { toggleArtwork() },
             canPage: { dir in pageNeighbor(dir) != nil },
+            neighbour: { dir in
+                guard let key = pageNeighbor(dir) else { return nil }
+                if key >= 1000 {
+                    let c = music.collections[key - 1000]
+                    return PagerPeek(coverName: DS.coverName(selectedIndex), artwork: c.artwork, official: c.officialQuery)
+                }
+                return PagerPeek(coverName: DS.coverName(key), artwork: nil, official: nil)
+            },
             onSwipeBegan: { swipeBegan() },
             onPage: { dir in pageAlbum(dir) },
             onSwipeSettled: { swipeSettled() },
