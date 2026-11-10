@@ -1,120 +1,98 @@
-# 迷你播放条封面衔接修复
+# 歌曲行均衡器方头修改结果
 
-工作目录：`/Users/bytedance/Documents/项目/App/vinyl-player-miniflight`
+## 交付范围
 
-分支：`ai/mini-flight`
+- Worktree：`/Users/bytedance/Documents/项目/App/vinyl-player-eqbars`
+- 分支：`ai/eq-square-caps`
+- 基准：`fix/native-buttons-playerbar` 的最新本地提交 `5f4892f`（Build 170）。
+- 代码提交：`f22ebee628dc746efbac8ab50322efdac14fc275`。
+- 仅在上述 worktree 修改并本地提交，没有 push。
 
-基线：`fix/native-buttons-playerbar` / `b3f4ed5`
+## 修改文件、行号和形状
 
-工程：`Vinyl/Vinyl.xcodeproj`，Scheme `Vinyl`
+唯一源码修改：`Vinyl/Vinyl/Views/AlbumDetailView.swift:1112`，`EqualizerGlyph.body` 中每根竖条的形状。
 
-## 根因
+```swift
+// 修改前
+RoundedRectangle(cornerRadius: height * 0.09)
 
-1. **变量名称与实际测量不一致。** `miniDiscFrame` 的注释写着 27pt 黑胶，但基线代码实际在 `MiniDiscLabel` 上测量。标签直径是 `27 × 72 / 234 = 8.307692pt`。测量位于旋转层内，`.global` 返回旋转后的方形包围盒，而非正圆的固定直径。模拟器日志在约 215° 时回报 11.58pt，尺寸误差约 3.28pt / 39.5%，超过 1pt 要求。其中心也带有约 0.17pt 的变换/像素对齐偏移。
-2. **旋转相位没有交接。** 原迷你条私有累计角度，飞行封面始终从 0° 开始；关闭也未同步落地角度。
-3. **标签的中心孔不一致。** 迷你标签有 1.2pt 白孔，原飞行层没有，起飞/返回时图形会改变。
-4. **图源可能不同。** 歌单的迷你条显示当前歌曲专辑封面，旧飞行层取所选歌单封面；演示切换封面时也存在类似差异。异步官方图加载还可能在飞行过程中切换位图。
-5. **关闭目标可能被覆盖。** 首页格子的实时 frame 回报没有排除 `openFromMini`，会在关闭时重写 `origin`。
-
-## 改动
-
-- `Components/PlayerBars.swift`：
-  - 在旋转容器外单独回报 `miniLabelFrame`，使用 global 坐标和恒定的 8.307692pt 直径。
-  - 用共享 `MiniDiscPhase` 保存播放/暂停相位；起飞读取最近显示的角度，隐藏期间冻结，落地从同一角度继续 72°/s。
-  - 仅隐藏 label，27pt 黑胶盘面保留。
-  - 回报实际解析到的封面位图，供飞行使用。
-- `Views/LibraryView.swift`：
-  - mini 路径采用独立 `MiniCoverFlight`，通过 `frame + position` 插值，不用旧飞行层的 `scaleEffect` 放大。
-  - 同一 RoundedRectangle 从标签半径连续过渡到详情封套的实际直角；白色主轴孔平滑消失/恢复，详情圆孔沿用原来的末 30% 进度。
-  - 飞行图案从当前角度转到 0°，关闭反向返回；孔内黑胶使用详情当前角度。
-  - `mini / flight / detail` 单一 owner 控制参与交接的三层，交接使用无动画 transaction。
-  - 排除 mini 关闭时的格子 frame 覆盖；保留旧 `miniDiscFrame` 和原 `CoverFlight` 给网格既有路径。
-  - mini 打开交接采用 `.removed` completion，等原弹簧的剩余位移收敛后交给详情，避免逻辑完成时还有几何余量。**Motion 中的时长、弹簧、弧线、逐轴参数未改；交接等待余量会晚于旧 `.logicallyComplete` 时刻。**
-- `AppleMusicViews.swift`、`Components/SleeveArtwork.swift`、`Views/AlbumDetailView.swift`：
-  - 锁定实际显示的同一 UIImage / 缓存键，官方命中优先；mini 飞行、详情封套和孔内标签共用该快照。
-  - 落地帧仍保留快照，随后才恢复新封面到达时的换图。
-  - 详情的尺寸、布局、间距、翻面和网格打开/关闭算法未调整。详情切到另一专辑时解除原专辑快照。
-- `VinylApp.swift` 和两份诊断脚本：
-  - 显式 `--debug-mini-cycle` 时才使用无账号演示数据、跳过授权并记录几何；普通启动行为不变。
-  - 官方缓存测试使用内置图片作为已命中缓存夹具，不调用网络、不写缓存映射磁盘。
-
-## 验证环境与方法
-
-- Xcode 27.2；Release；iOS 26.5 模拟器，iPhone 16 Pro / 402×874pt / 3×。
-- 专用设备：`CA9452DF-8ADA-4C5F-82EA-B629E6B318F7`。没有操作主模拟器。
-- `simctl io recordVideo` 录制原生界面；`ffmpeg -vf fps=60` 抽帧。
-- 同时保存 `native-frames.json`，保留原生编码帧及时间戳。模拟器录屏为可变帧率，**60fps 导出的重复/补取帧不当作真实 60fps 渲染证据**。
-- 无损端点 PNG 使用本次实际显示的 UIImage、实测 global frame 和角度，通过相同 SwiftUI 组件渲染。像素测量与原生视频、插值几何日志分开统计，未将模型值冒充录像像素测量。
-- 检查三层 owner 全过程、每条飞行日志的图源键，并逐帧查看打开/关闭接触表。这里的“一张封面”指参与交接的迷你 label、飞行层、详情封套，不包含首页既有专辑格子、发行卡缩略图或详情正常抽出的唱片标签。
-
-## 结果
-
-### 无损端点像素检查
-
-| 情况 | 起飞角度 | mini 与飞行起点中心误差 | 直径误差 | 图案角度拟合误差 | 起点 RGBA 平均差 |
-|---|---:|---:|---:|---:|---:|
-| 播放中 | 215.424634° | 0pt | 0pt | 0° | 0/255 |
-| 播放约 1 秒后暂停 | 73.522001° | 0pt | 0pt | 0° | 0/255 |
-| 官方缓存图源夹具 | 217.210736° | 0pt | 0pt | 0° | 0/255 |
-
-三组的详情封套与飞行终点不透明轮廓中心、宽度、高度误差也均为 0pt。详情终点裁切仍是原有直角，没有修改详情样式。
-
-### 逐帧插值与交接
-
-- 三组打开均到达 `progress = 1`，关闭均到达 `progress = 0`。
-- mini 起落点为中心 **(41, 812)pt**，直径 **8.307692pt**。
-- 最后一个交接前的插值采样，打开中心残余误差最大 **0.240pt**、宽度 **0.146pt**、角度 **0.106°**；关闭分别为 **0.184pt / 0.088pt / 0.064°**。最终交接采样误差为 0（浮点中心残差约 3.5e-14pt）。
-- 三组 owner 都严格按 **flight → detail → flight → mini** 变化；可见性条件互斥，未观察到双封面或封面断档。关闭时飞行图源保持不变，mini 从最终角度恢复转动。
-- 官方夹具用 `cover_06`，所选演示专辑仍为 `cover_13`；飞行和详情始终取 `official:mini-official-fixture`。这覆盖了“迷你条图源与所选集合不同”的分支。未使用已登录的真实 Apple Music 歌单或实机网络环境进行验证。
-- 格子回归：诊断日志明确为 `close → tile`，沿用旧 CoverFlight，无 mini owner 切换；录屏正常返回原格子。
-
-| 原生录像 | 原生编码帧数 | 60fps 导出帧数 |
-|---|---:|---:|
-| baseline | 1,204 | 688 |
-| final-playing | 832 | 679 |
-| final-paused | 469 | 590 |
-| final-official | 1,008 | 679 |
-| final-tile | 1,298 | 679 |
-
-## 证据文件
-
-以下路径均相对本工作目录。视频及大量抽帧保留在本地，已通过 `.gitignore` 排除，不进入提交。
-
-- 原始基准：`recordings/mini-flight/baseline/cycle.mov`
-- 最终播放往返：`recordings/mini-flight/final-playing/cycle.mov`
-- 非零角度暂停：`recordings/mini-flight/final-paused/cycle.mov`
-- 官方缓存图源：`recordings/mini-flight/final-official/cycle.mov`
-- 格子路径回归：`recordings/mini-flight/final-tile/cycle.mov`
-- 无损起点对照：`recordings/mini-flight/final-playing/endpoint-comparison.png`
-- 无损端点：`recordings/mini-flight/final-playing/endpoints/{mini,flight-start,detail,flight-end}.png`
-- 打开逐帧接触表：`recordings/mini-flight/final-playing/open-every-frame.jpg`
-- 关闭逐帧接触表：`recordings/mini-flight/final-playing/close-every-frame.jpg`
-- 关键原生录像抽帧：
-  - 起飞前：`recordings/mini-flight/final-playing/frames-60/0252.png`
-  - 起飞初段：`recordings/mini-flight/final-playing/frames-60/0254.png`
-  - 放大途中：`recordings/mini-flight/final-playing/frames-60/0260.png`
-  - 详情接手后：`recordings/mini-flight/final-playing/frames-60/0310.png`
-  - 返回初段：`recordings/mini-flight/final-playing/frames-60/0523.png`
-  - 缩回途中：`recordings/mini-flight/final-playing/frames-60/0530.png`
-  - mini 恢复后：`recordings/mini-flight/final-playing/frames-60/0580.png`
-- 完整数值：各 `final-*` 目录的 `checks.json`、`app.log`、`native-frames.json`。
-- 最终编译日志：`recordings/mini-flight/final-build.log`
-
-## 复现
-
-```bash
-xcodebuild -project Vinyl/Vinyl.xcodeproj -scheme Vinyl \
-  -configuration Release -sdk iphonesimulator \
-  -destination 'platform=iOS Simulator,id=CA9452DF-8ADA-4C5F-82EA-B629E6B318F7' \
-  -derivedDataPath /var/tmp/vinyl-miniflight/build CODE_SIGNING_ALLOWED=NO build
-
-python3 scripts/record_mini_flight.py \
-  --device CA9452DF-8ADA-4C5F-82EA-B629E6B318F7 \
-  --app /var/tmp/vinyl-miniflight/build/Build/Products/Release-iphonesimulator/Vinyl.app \
-  --output recordings/mini-flight/recheck
-python3 scripts/check_mini_flight.py recordings/mini-flight/recheck
+// 修改后
+Rectangle()
 ```
 
-录制脚本可追加 `--paused`、`--official` 或 `--tile`。像素检查脚本需要 Pillow；`--tile` 使用原网格路径，不生成 mini 检查报告。
+调用位置：同文件第 766 行，当前歌曲的 `TrackRowLabel`。
 
-最终 `xcodebuild` 通过，脚本语法检查及 `git diff --check` 通过。仅本地提交，不 push。
+只替换形状构造器，其余代码逐字保留：
+
+- 三根竖条，宽度 `height * 0.2`，间距 `height * 0.16`，底部对齐。
+- 调用高度 `TL.glyph * 0.85`，颜色仍为原来的 `ink` / `.fill(color)`。
+- 动态高度公式、幅度及 `speed = [5.1, 6.7, 4.3]`、`phase = [0.0, 1.7, 3.1]` 不变。
+- `TimelineView(.animation(minimumInterval: 1 / 30, paused: !playing))` 不变。
+- 暂停高度比例 `[0.35, 0.55, 0.30]` 不变；暂停与播放共用同一个 `Rectangle()`。
+- 未修改其他界面、功能、布局、版本号或动画参数。
+
+## 首页和迷你播放条
+
+全项目查找确认：`EqualizerGlyph` 仅在详情页歌曲行调用，首页和迷你播放条没有使用这个跳动均衡器，也没有另一套同用途的三柱均衡器。
+
+`Components/PlayerBars.swift:365` 的 `Capsule(style: .circular).path(in: rect)` 属于另一套 `WaveformBar` 波形进度条，用于显示播放进度、播放头及拖动定位，不是歌曲前面的跳动均衡器。按“不要改别的界面”的要求保留其圆头，也保留播放按钮、玻璃容器等其他 Capsule。
+
+## 编译和真机验收
+
+2026-11-10，在指定设备上完成验收：
+
+- iPhone 16 Pro，UDID：`00008140-0018346C1108801C`，有线连接、已配对、开发者模式开启。
+- 设备实际系统版本：iOS 27.2。
+- Scheme：`Vinyl`，配置：`Release`，`DEVELOPMENT_TEAM=X5LU97BQ66`。
+- `xcodebuild` 结果：`BUILD SUCCEEDED`，安装成功。
+- 正常启动 `com.zhaolegs.Vinyl`，没有传入任何应用启动参数，未使用 `--record-demo`。启动记录见 `build/eq-square-caps/evidence/launch.json`。
+- 在真实 Apple Music 播放状态下打开详情页，核对周杰伦《那天下雨了》和蔡健雅《Bluebirds (Live)》的当前歌曲图标。后者完成连续播放、暂停、恢复播放验证。
+
+构建命令：
+
+```sh
+xcodebuild -project Vinyl/Vinyl.xcodeproj \
+  -scheme Vinyl -configuration Release \
+  -destination 'id=00008140-0018346C1108801C' \
+  -derivedDataPath build/eq-square-caps/DerivedData \
+  DEVELOPMENT_TEAM=X5LU97BQ66 -allowProvisioningUpdates build
+```
+
+### 放大确认与动画验证
+
+原始截图来自 `xcrun devicectl device capture screenshot`，分辨率均为 `1206 × 2622`，不是模拟器或网页预览。
+
+从《Bluebirds (Live)》歌曲行截取原始像素，用最近邻方式放大 12 倍。三根竖条上下边缘均为平直横边，两侧为垂直边，四角为直角；播放和暂停均无圆头。
+
+连续截图中，竖条深色像素的高度如下，单位为原始截图像素：
+
+| 状态 / 截图 | 左柱 | 中柱 | 右柱 |
+| --- | ---: | ---: | ---: |
+| 播放 01 | 26 | 14 | 22 |
+| 播放 02 | 28 | 12 | 33 |
+| 播放 03 | 32 | 27 | 28 |
+| 暂停 01 | 12 | 19 | 10 |
+| 暂停 02 | 12 | 19 | 10 |
+
+三张播放截图的高度组合不同，确认三柱正常跳动。两张暂停截图的均衡器区域逐像素一致，确认静止；其比例符合原有暂停高度。验收后已恢复播放。
+
+系统拒绝 CLI 录屏，错误为 `The capability “Screen Recording” is not supported by this device`。因此使用连续原始截图验证高度变化，没有把静态图冒充录屏；动画节奏和幅度保持不变的依据是唯一源码差异只有形状这一行。
+
+## 截图和证据路径
+
+以下路径均相对于本 worktree 根目录，证据保存在已忽略的 `build/` 中，不提交图片或构建产物。
+
+- 完整播放截图：
+  - `build/eq-square-caps/evidence/bluebirds-playing-01.png`
+  - `build/eq-square-caps/evidence/bluebirds-playing-02.png`
+  - `build/eq-square-caps/evidence/bluebirds-playing-03.png`
+- 完整暂停截图：
+  - `build/eq-square-caps/evidence/bluebirds-paused-01.png`
+  - `build/eq-square-caps/evidence/bluebirds-paused-02.png`
+- 播放方头 12 倍放大图：`build/eq-square-caps/evidence/bluebirds-playing-01-glyph-12x.png`
+- 暂停方头 12 倍放大图：`build/eq-square-caps/evidence/bluebirds-paused-01-glyph-12x.png`
+- 歌曲行裁剪图：`build/eq-square-caps/evidence/bluebirds-playing-01-row.png`、`build/eq-square-caps/evidence/bluebirds-paused-01-row.png`
+- 周杰伦歌曲的补充截图：`build/eq-square-caps/evidence/playing.png`、`build/eq-square-caps/evidence/playing-glyph-12x.png`。完整截图中菜单已展开，但歌曲行和均衡器未被遮挡；主验收采用上述无遮挡的 Bluebirds 截图。
+- 编译日志：`build/eq-square-caps/evidence/build.log`
+
+本报告另作本地文档提交；上面的完整 hash 指向只包含单行形状修改、且已经真机编译验收的代码提交。
