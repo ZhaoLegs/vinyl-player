@@ -614,6 +614,7 @@ struct AlbumDetailView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.bottom, TL.headerGap + TL.header)   // 抵消表头高度 → 相对整块空区域居中
                 } else {
+                    ScrollViewReader { proxy in
                     ScrollView(showsIndicators: false) {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             // 行身份 = 歌曲 ID（稳定），切歌时只有两行的颜色 / 图标变化，列表本身不重建
@@ -623,9 +624,29 @@ struct AlbumDetailView: View {
                             }
                         }
                         .padding(.horizontal, DS.contentInset)
+                        // t261u: header gap lives inside the scroll view so rows fade out at the header's bottom edge
+                        .padding(.top, TL.headerGap)
                         // t219u：滚到底时最后一行（有相似专辑时 = 相似专辑）底边距时间条顶 24pt，
                         // 由实测的列表底 / 时间条顶算出（不写死安全区 / 播放条高度）
                         .padding(.bottom, trackBottomInset)
+                    }
+                    // t261u: header stays fixed above; rows dissolve over the header gap (single opacity mask on the container, no per-row effect)
+                    .mask {
+                        VStack(spacing: 0) {
+                            LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom)
+                                .frame(height: TL.headerGap)
+                            Color.black
+                        }
+                    }
+                    .padding(.top, -TL.headerGap)
+                    .onAppear {
+                        guard ProcessInfo.processInfo.arguments.contains("--debug-scroll-end"),
+                              let last = trackRows.rows.last?.id else { return }
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(3))
+                            withAnimation(.easeInOut(duration: 0.6)) { proxy.scrollTo(last, anchor: .bottom) }
+                        }
+                    }
                     }
                     .modifier(ScrollEndProximity(range: TrackInset.fadeRange) { scrollEnd.update($0) })
                 }
@@ -775,7 +796,7 @@ struct AlbumDetailView: View {
                 .offset(x: -TL.iconShift)
                 Text(title)
                     .font(.system(size: TL.row, weight: .regular))
-                    .foregroundStyle(ink)
+                    .foregroundStyle(current ? mid : ink)   // t263u: playing title = same grey as its time
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
