@@ -142,8 +142,8 @@ struct MiniPlayer: View {
             ZStack {
                 Circle()
                     // 与大唱片同色的黑胶底（去掉原来的紫色中心）
-                    .fill(RadialGradient(colors: [Color(hex: 0x1E1E21), Color(hex: 0x0B0B0D), Color(hex: 0x151517)],
-                                        center: .center, startRadius: 1, endRadius: 13.5))
+                    // t392u：与大唱片同一 Podium 盘面色（27pt 太小，沟槽 / 反光不画）
+                    .fill(Color(white: 0.05))
                 // t126u：中心标签 = 正在播放歌曲所属专辑的封面（圆形裁切），比例与详情页大唱片一致
                 // （DS.discLabel / DS.disc = 72 / 234）；主轴孔同比例（5 / 234）。换歌时交叉淡入。
                 MiniDiscLabel(coverName: music.demoCoverName,

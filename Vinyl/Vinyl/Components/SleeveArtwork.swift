@@ -1,12 +1,11 @@
 import SwiftUI
 import MusicKit
 
-/// 黑胶唱片：同心沟槽 + 镜面扇形高光 + 中心标签，播放时持续旋转。
-///
-/// 物理细节：唱片的**沟槽与中心标签**随盘转动，但**镜面反光是环境反射，方向固定**，
-/// 不能跟着转。因此把旋转层与固定高光层拆开，转起来才有真实的黑胶质感。
-/// t194u/t195u：黑胶唱片。对照参考图：密同心沟槽（亮暗交替捕光）、固定软径向高光、
-/// 软投影、封面中心标签 + 小暗色主轴孔。只优化唱片，不加唱臂；一张盘、播放时转、孔行为不变。
+/// 黑胶唱片。t392u / Build 211：外观移植自 Podium（https://github.com/mateuszlomni/podium,
+/// Podium/Views/VinylView.swift，MIT License，Copyright (c) 2026 Podium contributors，见 THIRD_PARTY_NOTICES.md）：
+/// 纯色近黑盘面 Color(white: 0.05) + 26 道细沟槽（每第 5 道稍亮）+ 圆形封面标签 + 小深色主轴孔，
+/// 上面叠一层不随盘转的锥形反光（AngularGradient，-30°），外加较重的软投影。
+/// 尺寸 / 旋转角 / 标签尺寸（DS.discLabel）/ 所有动画保持不变：只替换绘制。
 struct VinylDiscView: View {
     let angle: Angle
     var pull: CGFloat = 0
@@ -16,90 +15,52 @@ struct VinylDiscView: View {
     var official: OfficialCoverQuery? = nil
     var snapshot: MiniArtworkSnapshot? = nil
 
+    /// Podium AppTheme.background — 主轴孔颜色
+    static let holeColor = Color(red: 0.025, green: 0.03, blue: 0.04)
+
     var body: some View {
         ZStack {
-            // 底色：中心略亮 → 外缘深黑，给沟槽一个暗底
-            Circle()
-                .fill(RadialGradient(colors: [
-                    Color(hex: 0x222226), Color(hex: 0x121214), Color(hex: 0x070708)
-                ], center: .center, startRadius: DS.discLabel / 2, endRadius: DS.disc / 2))
-
-            // ① 随盘旋转：沟槽 + 中心标签（高光不跟转）
+            // ① 随盘旋转：盘面 + 沟槽（静态 Canvas，Equatable → 旋转不重绘）+ 标签 + 主轴孔
             ZStack {
                 VinylGrooves().equatable()
                 DiscLabel(coverName: coverName, artwork: artwork, official: official, size: DS.discLabel, snapshot: snapshot)
-                // 小暗色主轴孔（参考图：标签正中一小颗黑点）
                 Circle()
-                    .fill(Color(hex: 0x050506))
-                    .frame(width: 7, height: 7)
-                    .overlay(Circle().stroke(.black.opacity(0.55), lineWidth: 0.6))
+                    .fill(Self.holeColor)
+                    .frame(width: DS.disc * 0.022, height: DS.disc * 0.022)
             }
             .clipShape(Circle())
             .rotationEffect(angle)
 
-            // ② 固定软径向高光（环境反射，不随盘转）：约 11 点 / 5 点两道锥形光带
+            // ② Podium：反光固定不动，唱片在其下转动
             Circle()
-                .fill(AngularGradient(colors: [
-                    .clear,
-                    .white.opacity(0.03),
-                    .white.opacity(0.16),
-                    .white.opacity(0.04),
-                    .clear, .clear,
-                    .white.opacity(0.02),
-                    .white.opacity(0.10),
-                    .white.opacity(0.03),
-                    .clear, .clear, .clear
-                ], center: .center, angle: .degrees(-40)))
-                .blendMode(.screen)
-                .mask(
-                    RadialGradient(colors: [.clear, .white, .white, .clear],
-                                   center: .center,
-                                   startRadius: DS.discLabel / 2 + 2,
-                                   endRadius: DS.disc / 2 - 1)
-                )
-            // 外缘细亮边 + 内缘暗晕，增加厚度
-            Circle().stroke(.white.opacity(0.10), lineWidth: 0.8)
-            Circle()
-                .stroke(.black.opacity(0.45), lineWidth: 10)
-                .blur(radius: 10)
-                .clipShape(Circle())
+                .fill(AngularGradient(colors: [.clear, .white.opacity(0.07), .clear, .clear, .white.opacity(0.05), .clear],
+                                      center: .center, angle: .degrees(-30)))
+                .allowsHitTesting(false)
         }
         .frame(width: DS.disc, height: DS.disc)
-        // 软投影：抽出时加深
-        .shadow(color: .black.opacity(Double(0.22 + 0.10 * pull)),
-                radius: 18 + 10 * pull, y: 8 + 6 * pull)
+        // Podium 投影 black 0.55 / r26 / y14；这里在抽出（pull = 1）时达到 Podium 值，收在封套里时更轻
+        .shadow(color: .black.opacity(Double(0.35 + 0.20 * pull)),
+                radius: 18 + 8 * pull, y: 8 + 6 * pull)
     }
 }
 
-/// t194u：密同心沟槽。亮暗交替细环，捕到固定高光时像真实沟槽反光；静态 Equatable → 转盘不重绘
+/// Podium 盘面 + 沟槽，一次性画在静态 Canvas 里：26 道 1pt 同心环，
+/// 半径 = side/2 − side·(0.05 + i·0.012)，每第 5 道 white 0.07，其余 white 0.03。
 struct VinylGrooves: View, Equatable {
     static func == (a: VinylGrooves, b: VinylGrooves) -> Bool { true }
     var body: some View {
         Canvas { context, size in
+            let side = min(size.width, size.height)
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let outer = size.width / 2 - 1.5
-            let inner = DS.discLabel / 2 + 1.5
-            var r = inner
-            var i = 0
-            while r < outer {
+            context.fill(Path(ellipseIn: CGRect(x: center.x - side / 2, y: center.y - side / 2, width: side, height: side)),
+                         with: .color(Color(white: 0.05)))
+            for i in 0..<26 {
+                let r = side / 2 - side * (0.05 + CGFloat(i) * 0.012)
                 let rect = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
-                // 亮环 / 暗环交替；偶数为捕光细亮线，奇数为微暗槽
-                if i % 2 == 0 {
-                    context.stroke(Path(ellipseIn: rect),
-                                   with: .color(.white.opacity(0.07)),
-                                   lineWidth: 0.55)
-                } else {
-                    context.stroke(Path(ellipseIn: rect),
-                                   with: .color(.black.opacity(0.22)),
-                                   lineWidth: 0.7)
-                }
-                r += 1.15
-                i += 1
+                context.stroke(Path(ellipseIn: rect),
+                               with: .color(.white.opacity(i.isMultiple(of: 5) ? 0.07 : 0.03)),
+                               lineWidth: 1)
             }
-            // 标签外一圈稍粗的分隔环
-            let ring = DS.discLabel / 2 + 0.8
-            let rr = CGRect(x: center.x - ring, y: center.y - ring, width: ring * 2, height: ring * 2)
-            context.stroke(Path(ellipseIn: rr), with: .color(.white.opacity(0.12)), lineWidth: 1.1)
         }
     }
 }
@@ -127,7 +88,6 @@ struct DiscLabel: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-        .overlay(Circle().stroke(.black.opacity(0.25), lineWidth: 0.5))
     }
 }
 
