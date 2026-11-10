@@ -364,14 +364,8 @@ struct WaveformBar: View {
                 // t183u：两端始终是正圆（圆形 Capsule；默认 continuous 圆角在 r = w/2 时两端会发平）
                 let path = Capsule(style: .circular).path(in: rect)
                 let color = i < playedBars ? theme.ink : theme.track
-                if head {
-                    context.drawLayer { layer in
-                        layer.addFilter(.shadow(color: .black.opacity(0.28), radius: 3))
-                        layer.fill(path, with: .color(color))
-                    }
-                } else {
-                    context.fill(path, with: .color(color))
-                }
+                // t267u: playhead = round-capped Capsule, no shadow (same size / colour / position)
+                context.fill(path, with: .color(color))
             }
         }
     }

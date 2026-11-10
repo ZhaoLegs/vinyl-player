@@ -1652,6 +1652,10 @@ struct KaraokeLine: View {
     let playing: Bool
 
     private var chars: [Character] { Array(line.text) }
+    /// t268u: the 4 Hz player clock re-anchors the extrapolated time; when the real clock lands slightly
+    /// behind the extrapolation, n stepped backwards, so lifted/brightened glyphs dropped and re-rose
+    /// (jitter at the wipe edge). Small backward steps are held; a real seek (> 1 char back) still applies.
+    @State private var clock = KaraokeClock()
 
     /// 有效字：CJK / 字母 / 数字记 1，空格与标点记 0
     private static func weight(_ c: Character) -> Double {
@@ -1690,7 +1694,7 @@ struct KaraokeLine: View {
     var body: some View {
         TimelineView(.animation(paused: !playing)) { tl in
             let dt = playing ? min(Karaoke.maxExtrapolate, max(0, tl.date.timeIntervalSince(anchorDate))) : 0
-            let n = filled(at: anchorPos + dt)
+            let n = clock.monotonic(filled(at: anchorPos + dt), line: line.id)
             if #available(iOS 18.0, *) {
                 // t244u：TextRenderer 逐字绘制 —— 擦亮 0.5 → 1.0、已唱字上浮 2pt、正在唱的字柔光（只这一行逐帧）
                 Text(verbatim: line.text)
@@ -1723,6 +1727,17 @@ struct KaraokeLine: View {
             }
             return text.font(Lyrics.font)
         }
+    }
+}
+
+final class KaraokeClock {
+    private var last: Double = -1
+    private var lineID: Int = -1
+    func monotonic(_ n: Double, line: Int) -> Double {
+        if line != lineID { lineID = line; last = n; return n }
+        if n < last && last - n < 1 { return last }
+        last = n
+        return n
     }
 }
 
