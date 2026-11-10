@@ -172,15 +172,19 @@ final class AppleMusicStore: ObservableObject {
                        || songCursor.hasMore || !recommendationPages.isEmpty)
     }
 
-    /// 最近播放 → 最近添加 → 推荐 → 资料库歌曲 → 歌单 → 专辑；跨来源只显示一次。
+    /// t312u: 最近播放 → 资料库（最近添加 → 资料库歌曲 → 歌单 → 专辑）→ 为你推荐；跨来源只显示一次（专辑 ID / 曲库 ID）。
+    /// 无订阅（canPlayCatalogContent = false / 未知）时只显示资料库。
+    private var catalogHome: Bool { subscriptionKnown && canPlayCatalog }
     private func rebuildHome() {
         let libraryAlbums = albums.map { MusicCollection.album($0, catalog: false) }
         let libraryPlaylists = playlists.map { MusicCollection.playlist($0) }
         let recentlyAdded = HomeFeed.latest(libraryAlbums + libraryPlaylists,
                                             date: \.libraryAddedDate, limit: 24)
+        let catalog = catalogHome
         collections = HomeFeed.merged(
-            groups: [recentlyPlayed, recentlyAdded, recommended,
-                     songs.isEmpty ? [] : [.librarySongs(songs)], libraryPlaylists, libraryAlbums],
+            groups: [catalog ? recentlyPlayed : [], recentlyAdded,
+                     songs.isEmpty ? [] : [.librarySongs(songs)], libraryPlaylists, libraryAlbums,
+                     catalog ? recommended : []],
             identityKeys: \.identityKeys,
             // 保留来源位置，但已在资料库里的同专辑使用本地曲目，避免额外要求曲库订阅。
             preferredItems: libraryPlaylists + libraryAlbums
@@ -275,10 +279,16 @@ final class AppleMusicStore: ObservableObject {
         isLoading = true
         errorMessage = nil
         defer { if generation == accessGeneration { isLoading = false } }
-        if reloadLibrary { await loadLibrary(generation: generation) }
-        await loadRecentlyPlayed(generation: generation)
-        if reloadRecommendations { await loadRecommendations(generation: generation) }
+        // t312u: the grid paints from HomeCache; library, recently played and For You load in parallel and are
+        // applied in one rebuild (no extra grid revisions)
+        let catalog = catalogHome
+        async let library: Void = reloadLibrary ? loadLibrary(generation: generation) : ()
+        async let recent: Void = catalog ? loadRecentlyPlayed(generation: generation) : ()
+        async let recs: Void = catalog && reloadRecommendations ? loadRecommendations(generation: generation) : ()
+        _ = await (library, recent, recs)
+        if !catalog { recentlyPlayed = []; recommended = []; recommendationPages = [] }
         guard canApply(generation) else { return }
+        print("[t312u] home sources: recentlyPlayed \(recentlyPlayed.count), library albums \(albums.count) / playlists \(playlists.count) / songs \(songs.count), recommendations \(recommended.count) via \(recommendationSource.isEmpty ? "-" : recommendationSource), catalog \(catalog) (subscription known \(subscriptionKnown), canPlay \(canPlayCatalog))")
         nextHomeSource = 0
         rebuildHome()
         homeLoadedOnce = true

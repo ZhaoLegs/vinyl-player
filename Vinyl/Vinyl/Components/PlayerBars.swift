@@ -334,9 +334,10 @@ struct WaveformBar: View {
                     .truncationMode(.tail)
                     .padding(.horizontal, 9)
                     .frame(height: 24)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: max(80, barsFrame.width))
+                    // t314u: hug the text (glass on the padded text itself); the outer fixed-width frame only
+                    // caps the proposal at the bar width and centres it — tail "…" only past the cap
                     .modifier(BubbleGlass())
+                    .frame(width: max(80, barsFrame.width))
                     .position(x: barsFrame.midX, y: -(42 * 0.035 / 2 + 12 + 12))
                     .transaction { $0.animation = nil }
                     .transition(.opacity)
