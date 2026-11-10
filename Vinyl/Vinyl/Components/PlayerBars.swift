@@ -254,6 +254,9 @@ struct WaveformBar: View {
     var nowPlayingLabel: String? = nil
     var labelPulse: Int = 0
     @State private var labelVisible = false
+    @State private var globalMinX: CGFloat = 0
+    /// t318u: both bubbles sit on the screen's vertical centre line (not the bars' centre, which the play button offsets)
+    private var screenCenterX: CGFloat { UIScreen.main.bounds.width / 2 - globalMinX }
     private let count = Waveform.barCount
 
     /// 线宽 1.6pt → 3x 屏 4.8px，按整像素取整为 5px（所有竖线同一像素宽）；间距固定 2pt = 6px。
@@ -295,6 +298,8 @@ struct WaveformBar: View {
                     .onEnded { _ in headDown = false })
         }
         .coordinateSpace(.named("wave"))
+        // t318u: the capsule's global x → screen centre line in the overlay's (unscaled) coordinates
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minX } action: { globalMinX = $0 }
         // t117u：整条胶囊任意位置按住 0.25s 后左右拖 = 时间擦洗；没有点按跳转（播放键照常点）
         .gesture(scrubGesture)
         .sensoryFeedback(.selection, trigger: scrubBar) { old, new in old != nil && new != nil }
@@ -314,7 +319,8 @@ struct WaveformBar: View {
                     // t127u：气泡底边 → 播放条（放大 3.5% 后的可见）顶边 = 12pt。
                     // overlay 用未缩放的 42pt 布局框，放大后顶边上移 42·0.035/2 = 0.735pt，一并补上：
                     // 中心 y = −(0.735 + 12 + 24/2)
-                    .position(x: barsFrame.minX + CGFloat(s) * barsFrame.width,
+                    // t318u: was x = barsFrame.minX + s · barsFrame.width (followed the finger / play head)
+                    .position(x: screenCenterX,
                               y: -(42 * 0.035 / 2 + 12 + 12))
                     .transaction { $0.animation = nil }
                     .transition(.opacity)
@@ -336,7 +342,7 @@ struct WaveformBar: View {
                     // caps the proposal at the bar width and centres it — tail "…" only past the cap
                     .modifier(BubbleGlass())
                     .frame(width: max(80, barsFrame.width))
-                    .position(x: barsFrame.midX, y: -(42 * 0.035 / 2 + 12 + 12))
+                    .position(x: screenCenterX, y: -(42 * 0.035 / 2 + 12 + 12))
                     .transaction { $0.animation = nil }
                     .transition(.opacity)
                     .allowsHitTesting(false)
