@@ -73,6 +73,9 @@ struct AlbumDetailView: View {
     @State private var rowsShown = false
     /// rows actually flip visible only once they exist (songs may arrive after the zoom lands), one runloop later
     @State private var rowsLive = false
+    /// t328u: swiping to another album hides the rows at the page change and holds them until the swipe settles,
+    /// then the same TrackRowRise entrance replays (no per-frame triggering)
+    @State private var rowsHold = false
     /// t247u：封套（封面）下缘 / 歌词区顶 —— 歌词滚动区与顶部渐变模糊向上延伸到封面下缘，不再在半路硬切
     @State private var sleeveBottomY: CGFloat = 0
     @State private var lyricsTopY: CGFloat = 0
@@ -319,7 +322,7 @@ struct AlbumDetailView: View {
             // t156u：关闭完成后把逐行时间轴归零，下次打开从头错峰
             guard !shown else { return }
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { reveal = 0; barIn = 0; titleIn = 0; chromeIn = 0; listIn = 0; rowsShown = false; rowsLive = false }
+            withTransaction(t) { reveal = 0; barIn = 0; titleIn = 0; chromeIn = 0; listIn = 0; rowsShown = false; rowsLive = false; rowsHold = false }
         }
         .task {
             guard demoLevels == nil,
@@ -387,15 +390,15 @@ struct AlbumDetailView: View {
     /// t251u：标题 / 曲目表的显隐。淡入：标题 0.28s easeOut，曲目表晚 0.06s；淡出：两者 0.15s。
     /// 每次都以目标值收尾（不依赖上一次动画是否跑完），快速开关也不会停在半透明。
     private func goLiveIfReady() {
-        guard rowsShown, !rowsLive, songs != nil else { return }
-        DispatchQueue.main.async { if rowsShown { rowsLive = true } }
+        guard rowsShown, !rowsLive, !rowsHold, songs != nil else { return }
+        DispatchQueue.main.async { if rowsShown && !rowsHold { rowsLive = true } }
     }
 
     private func setCopy(_ v: Double, animated: Bool) {
         if DetailReveal.log { print("[t251u] setCopy \(v) animated=\(animated) t=\(Date().timeIntervalSince1970)") }
         if !animated {
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { titleIn = v; chromeIn = v; listIn = v; if v > 0 { rowsShown = true; if songs != nil { rowsLive = true } } }
+            withTransaction(t) { titleIn = v; chromeIn = v; listIn = v; if v > 0 { rowsShown = true; if songs != nil && !rowsHold { rowsLive = true } } }
         } else if v > 0 {
             rowsShown = true   // each row animates itself (TrackRowRise)
             withAnimation(.easeOut(duration: DetailReveal.fadeIn)) { titleIn = v }
@@ -494,6 +497,8 @@ struct AlbumDetailView: View {
         withAnimation(.easeIn(duration: 0.16), completionCriteria: .logicallyComplete) {
             swipeX = out
         } completion: {
+            // t328u: new album's rows start hidden; they rise once the swipe settles
+            do { var h = Transaction(); h.disablesAnimations = true; withTransaction(h) { rowsHold = true; rowsLive = false } }
             onPage(dir)
             // t154u：新专辑的曲目表同样逐行出现（随新封套滑入开始）
             startReveal(delay: 0.08)
@@ -504,6 +509,7 @@ struct AlbumDetailView: View {
             } completion: {
                 swipeBusy = false
                 swipeSettle += 1
+                rowsHold = false; goLiveIfReady()   // t328u: replay TrackRowRise on the settled album
                 onSwipeSettled()
             }
         }
@@ -517,6 +523,8 @@ struct AlbumDetailView: View {
         withAnimation(.easeIn(duration: 0.16), completionCriteria: .logicallyComplete) {
             swipeX = out
         } completion: {
+            // t328u: new album's rows start hidden; they rise once the swipe settles
+            do { var h = Transaction(); h.disablesAnimations = true; withTransaction(h) { rowsHold = true; rowsLive = false } }
             onJump(c)
             startReveal(delay: 0.08)
             var t = Transaction(); t.disablesAnimations = true
@@ -526,6 +534,7 @@ struct AlbumDetailView: View {
             } completion: {
                 swipeBusy = false
                 swipeSettle += 1
+                rowsHold = false; goLiveIfReady()   // t328u: replay TrackRowRise on the settled album
                 onSwipeSettled()
             }
         }

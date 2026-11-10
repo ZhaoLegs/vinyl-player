@@ -881,8 +881,9 @@ struct LibraryView: View {
         if !zm.openFromMini && !reduceMotion {
             zm.pushAnchor = origin
             zm.pushFrames = cellFrames
-            // t322u: no fade-out any more — the pushed tiles stay visible, covered by the blur
             withAnimation(TilePushAway.open) { zm.pushAway = true }
+            // t327u: Cove.X 0.38s easeOut fade restored (removed in t322u)
+            withAnimation(TilePushAway.fade) { zm.pushOpacity = 0 }
         } else { zm.pushAnchor = nil }
         if DetailReveal.log { print("[t251u] zoom start t=\(Date().timeIntervalSince1970) fluidOpen=\(Motion.fluidOpen)") }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open),
@@ -1081,6 +1082,7 @@ struct LibraryView: View {
         if zm.pushAnchor != nil {
             cellFrames = cellFrames.merging(zm.pushFrames) { _, unpushed in unpushed }
             withAnimation(TilePushAway.close) { zm.pushAway = false }
+            withAnimation(TilePushAway.fade) { zm.pushOpacity = 1 }
         }
         // t131u：飞回「当前显示的那张专辑」的格子（实时 frame）
         // t222u：从 mini player 打开 → 飞回 mini 唱片；从格子打开 → 当前专辑格子在屏幕上可见就飞回它，否则飞回 mini 唱片
@@ -1534,8 +1536,8 @@ struct ArtworkHandoff: AnimatableModifier {
 struct TilePushAway: ViewModifier {
     @ObservedObject var zm: LibraryZoomModel
     let key: Int
-    /// t322u: short push (0.8 → 0.18 × longer screen side) so the tiles stay partly visible under the blur
-    static let factor: CGFloat = 0.18
+    /// t327u: back to Cove.X's full push (0.8 × longer screen side); t322u's 0.18 short push looked buggy
+    static let factor: CGFloat = 0.8
     static let open = Animation.spring(response: 0.36, dampingFraction: 0.88)
     static let close = Animation.spring(response: 0.38, dampingFraction: 0.9)
     static let fade = Animation.easeOut(duration: 0.38)
@@ -1544,7 +1546,8 @@ struct TilePushAway: ViewModifier {
     /// value, so they ride the push springs (open 0.36/0.88, close 0.38/0.9). The tapped tile is untouched.
     /// Per tile by default; `--push-blur-layer` blurs the whole grid layer once instead (cheaper, for A/B on device).
     static let blurRadius: CGFloat = 20
-    static let scale: CGFloat = 0.92
+    /// t327u: 0.92 → 1 (Cove.X collapsedScatterScale = 1); the shrink made tiles shift inward against the push
+    static let scale: CGFloat = 1
     /// t323u: blur is per tile again (it must follow each tile's own displacement); no grid-layer push blur
     static let layerBlur = false
 
@@ -1570,6 +1573,8 @@ struct TilePushAway: ViewModifier {
                                                               height: $0.dir.height * longer * Self.factor) } ?? .zero,
                                        maxBlur: Self.peakBlur.lowerBound + (Self.peakBlur.upperBound - Self.peakBlur.lowerBound) * t,
                                        minScale: Self.scale))
+            // t327u: fade restored; the tapped tile (and opens from the mini player) stay at full opacity
+            .opacity(zm.pushAnchor == nil || (g == nil && zm.pushFrames[key] != nil) ? 1 : zm.pushOpacity)
     }
 }
 
