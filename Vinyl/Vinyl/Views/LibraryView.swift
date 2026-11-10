@@ -36,7 +36,10 @@ struct LibraryView: View {
     // t144u：几何类代理相同值不写回（@Published 无论值是否相等都会发 objectWillChange，导致两棵视图树整树失效）
     private var origin: CGRect { get { zm.origin } nonmutating set { if zm.origin != newValue { zm.origin = newValue } } }
     private var sleeveFrame: CGRect { get { zm.sleeveFrame } nonmutating set { if zm.sleeveFrame != newValue { zm.sleeveFrame = newValue } } }
-    private var cellFrames: [Int: CGRect] { get { zm.cellFrames } nonmutating set { if zm.cellFrames != newValue { zm.cellFrames = newValue } } }
+    private var cellFrames: [Int: CGRect] {
+        get { zm.gridGeometry.cellFrames }
+        nonmutating set { zm.gridGeometry.cellFrames = newValue }
+    }
     private var selectedIndex: Int { get { zm.selectedIndex } nonmutating set { zm.selectedIndex = newValue } }
 
     private var pull: CGFloat { get { zm.pull } nonmutating set { zm.pull = newValue } }
@@ -51,8 +54,11 @@ struct LibraryView: View {
 
     // 网格几何按原片实测：4 列、列宽 72pt、间距 17pt、左右 27pt
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 18), count: 4)
+    @State private var artworkPrefetcher = GridArtworkPrefetcher()
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
+        let _ = GridScrollProfile.recordUpdate(overlayMode ? "LibraryView.overlay" : "LibraryView.home")
         if overlayMode {
             detailLayer
                 .onPreferenceChange(SleeveFrameKey.self) { sleeveFrame = $0 }
@@ -85,6 +91,7 @@ struct LibraryView: View {
                 }
                 // t184u：懒加载首页第一个专辑的曲目（给默认 mini player 用）
                 .task(id: music.collections.first?.id) {
+                    guard !GridScrollProfile.enabled else { return }
                     guard let c = music.collections.first, !music.hasCurrentTrack else { return }
                     let songs = (try? await c.songs()) ?? []
                     suggestID = c.id; suggestSongs = songs
@@ -179,6 +186,9 @@ struct LibraryView: View {
                 }
             }
             .coordinateSpace(name: "library")
+            .background {
+                if GridScrollProfile.enabled { GridScrollProbe(music: music) }
+            }
             .onPreferenceChange(CoverFrameKey.self) { frames in
                 cellFrames = frames
                 // 关闭飞行期间用户滚动首页：目标格子的实时 frame 每帧更新到 origin，
@@ -452,7 +462,7 @@ struct LibraryView: View {
             targetKey = key
             openCollection(collection)
         } label: {
-            ArtworkFill(artwork: collection.artwork, official: collection.officialQuery)   // t197u：官方封面就绪后替换
+            ArtworkFill(artwork: collection.artwork, official: collection.officialQuery, useDisplaySize: true)
                 .clipShape(RoundedRectangle(cornerRadius: DS.corner))
                 .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
                 .background {
@@ -467,6 +477,10 @@ struct LibraryView: View {
         .modifier(TileReveal(progress: zoom, isTarget: presented && zm.flyToTile && selectedCollection?.id == collection.id,
                              closing: closing))
         .accessibilityLabel("\(collection.title)，\(collection.artist)")
+        .onAppear {
+            let side = max(1, (gridFrame.width - 2 * DS.contentInset - 3 * 18) / 4)
+            artworkPrefetcher.update(music.collections, around: index, side: side, scale: displayScale)
+        }
         // t192u：长按 = 系统原生上下文菜单（抬起预览 + 玻璃材质由系统渲染）；点按仍是 Button 打开详情，滚动不受影响
         .contextMenu {
             collectionMenu(collection)
@@ -1237,6 +1251,9 @@ struct TileReveal: AnimatableModifier {
 
 /// t125u：首页与详情层（叠在 TabView 之上）共享的转场状态
 final class LibraryZoomModel: ObservableObject {
+    // Frames are an imperative lookup for the flight origin, not a rendering input.
+    // Only the selected live origin is published during closing, exactly as before.
+    let gridGeometry = LibraryGridGeometry()
     @Published var selectedCollection: MusicCollection?
     /// t222u：本次详情从哪里打开（网格格子 / 底部 mini player），关闭时回到同一处
     @Published var openFromMini = false
@@ -1256,7 +1273,6 @@ final class LibraryZoomModel: ObservableObject {
     @Published var wipe: CGFloat = 0
     @Published var origin: CGRect = .zero
     @Published var sleeveFrame: CGRect = .zero
-    @Published var cellFrames: [Int: CGRect] = [:]
     @Published var selectedIndex: Int = AlbumData.featuredIndex
     @Published var pull: CGFloat = 0
     @Published var flip: Double = 0
@@ -1278,6 +1294,10 @@ final class LibraryZoomModel: ObservableObject {
     @Published var targetKey: Int? = nil
     @Published var scrollRequest: Int? = nil
     @Published var gridFrame: CGRect = .zero
+}
+
+final class LibraryGridGeometry {
+    var cellFrames: [Int: CGRect] = [:]
 }
 
 /// t158u：演示数据只在模拟器录屏 / 调试参数下使用；正常启动永远不显示假数据

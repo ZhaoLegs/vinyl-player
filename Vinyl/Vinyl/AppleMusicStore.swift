@@ -21,7 +21,7 @@ final class AppleMusicStore: ObservableObject {
     @Published private(set) var recommended: [MusicCollection] = []
     /// 仅在数据变化时合并首页，避免播放时钟每次更新都重新排序整个资料库。
     /// t193u：启动时先用上次的首页（磁盘缓存）立即渲染，后台刷新后按 id 原位替换
-    @Published private(set) var collections: [MusicCollection] = HomeCache.load()
+    @Published private(set) var collections: [MusicCollection] = GridScrollProfile.collections() ?? HomeCache.load()
     @Published private(set) var homePageRevision = 0
     /// 运行时实际成功的请求：MusicPersonalRecommendationsRequest / MusicCatalogChartsRequest / 空
     @Published private(set) var recommendationSource = ""
@@ -544,19 +544,25 @@ final class AppleMusicStore: ObservableObject {
             return
         }
         let entry = player.queue.currentEntry
-        if currentTitle != (entry?.title ?? "") { currentTitle = entry?.title ?? "" }
-        if currentArtist != (entry?.subtitle ?? "") { currentArtist = entry?.subtitle ?? "" }
-        if currentArtwork != entry?.artwork { currentArtwork = entry?.artwork }
+        let title = entry?.title ?? "", artist = entry?.subtitle ?? ""
+        let artwork = entry?.artwork
         let catalogID = entry.map { MusicItemID($0.id) }
+        if currentTitle != title { currentTitle = title }
+        if currentArtist != artist { currentArtist = artist }
+        if currentArtwork != artwork { currentArtwork = artwork }
         if currentCatalogID != catalogID { currentCatalogID = catalogID }
+        let songID: MusicItemID?
+        let songDuration: TimeInterval
         if case .song(let song) = entry?.item {
-            if currentSongID != song.id { currentSongID = song.id }
-            if duration != (song.duration ?? 0) { duration = song.duration ?? 0 }
+            songID = song.id
+            songDuration = song.duration ?? 0
             if currentAlbumTitle != (song.albumTitle ?? "") { currentAlbumTitle = song.albumTitle ?? "" }
         } else {
-            if currentSongID != nil { currentSongID = nil }
-            if duration != 0 { duration = 0 }
+            songID = nil
+            songDuration = 0
         }
+        if currentSongID != songID { currentSongID = songID }
+        if duration != songDuration { duration = songDuration }
         let time = player.playbackTime
         position = time.isFinite ? max(0, time) : 0
         let playing = player.state.playbackStatus == .playing
@@ -867,7 +873,7 @@ enum HomeCache {
     }
     static let launch = Date()
 
-    static func load() -> [MusicCollection] {
+    @MainActor static func load() -> [MusicCollection] {
         guard !DemoMode.enabled, MusicAuthorization.currentStatus == .authorized,
               let data = try? Data(contentsOf: url),
               let items = try? JSONDecoder().decode([Item].self, from: data) else { return [] }
@@ -883,8 +889,10 @@ enum HomeCache {
         let list = decoded.filter { !hidden.contains($0.id) }
         print("[t193u] home cache: \(list.count) items decoded in \(String(format: "%.0f", Date().timeIntervalSince(launch) * 1000))ms")
         // 预取前 6 行封面（磁盘 → 内存），首屏直接命中内存
-        let urls = list.prefix(24).compactMap { $0.artwork?.url(width: 960, height: 960) }
-        ArtworkCache.shared.prefetch(urls)
+        let side = max(1, (UIScreen.main.bounds.width - 2 * DS.contentInset - 3 * 18) / 4)
+        let pixels = max(1, Int((side * UIScreen.main.scale).rounded(.up)))
+        let urls = list.prefix(24).compactMap { $0.artwork?.url(width: pixels, height: pixels) }
+        ArtworkCache.shared.prefetch(urls, pixelSize: pixels)
         return list
     }
 

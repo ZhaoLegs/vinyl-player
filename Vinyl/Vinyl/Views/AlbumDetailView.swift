@@ -110,6 +110,7 @@ struct AlbumDetailView: View {
 
     var body: some View {
         let _ = TracklistProfile.count("AlbumDetailView.body")
+        let _ = GridScrollProfile.recordUpdate("AlbumDetailView")
         ZStack(alignment: .top) {
             AuroraBackground()
                 .opacity(closing ? 1 : contentAlpha)

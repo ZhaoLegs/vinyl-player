@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		BA2600000000000000000001 /* TracklistScrollProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA2600000000000000000002 /* TracklistScrollProbe.swift */; };
+		AB10000000000000000000E1 /* GridScrollProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB10000000000000000000E2 /* GridScrollProbe.swift */; };
 		AB1000000000000000000001 /* AppleMusicStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000002 /* AppleMusicStore.swift */; };
 		AB1000000000000000000003 /* AppleMusicViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000004 /* AppleMusicViews.swift */; };
 		AB1970000000000000000001 /* OfficialCoverLookup.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1970000000000000000002 /* OfficialCoverLookup.swift */; };
@@ -60,6 +61,7 @@
 
 /* Begin PBXFileReference section */
 		BA2600000000000000000002 /* TracklistScrollProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TracklistScrollProbe.swift; sourceTree = "<group>"; };
+		AB10000000000000000000E2 /* GridScrollProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridScrollProbe.swift; sourceTree = "<group>"; };
 		AB1000000000000000000002 /* AppleMusicStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicStore.swift; sourceTree = "<group>"; };
 		AB1000000000000000000004 /* AppleMusicViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicViews.swift; sourceTree = "<group>"; };
 		AB1970000000000000000002 /* OfficialCoverLookup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfficialCoverLookup.swift; sourceTree = "<group>"; };
@@ -182,6 +184,7 @@
 		0157955E267509BCB8BB1075 /* Vinyl */ = {
 			isa = PBXGroup;
 			children = (
+				AB10000000000000000000E2 /* GridScrollProbe.swift */,
 				AB1000000000000000000002 /* AppleMusicStore.swift */,
 				BA2600000000000000000002 /* TracklistScrollProbe.swift */,
 				AB1000000000000000000004 /* AppleMusicViews.swift */,
@@ -318,6 +321,7 @@
 			files = (
 				AB1000000000000000000001 /* AppleMusicStore.swift in Sources */,
 				BA2600000000000000000001 /* TracklistScrollProbe.swift in Sources */,
+				AB10000000000000000000E1 /* GridScrollProbe.swift in Sources */,
 				AB1000000000000000000003 /* AppleMusicViews.swift in Sources */,
 				AB1970000000000000000001 /* OfficialCoverLookup.swift in Sources */,
 				AB1000000000000000000005 /* Waveform.swift in Sources */,
