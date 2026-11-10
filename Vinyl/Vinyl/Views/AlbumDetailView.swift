@@ -124,6 +124,8 @@ struct AlbumDetailView: View {
     @State private var hintPeek = false
     /// t368u: neighbour pages rendered at ±page width while a drag / its settle runs (paging: the next cover tracks the finger)
     @State private var dragPeek = false
+    /// t379u: invisible value whose spring completion releases the rows after a paging swap (see commitSwipe)
+    @State private var rowGate: Double = 0
     /// t369u / t371u: simulated presses in the first-open hint (lyrics button; cover — visual only, never plays)
     @State private var lyricsPress = false
     @State private var coverPress = false
@@ -236,18 +238,39 @@ struct AlbumDetailView: View {
                         .brightness(lyricsPress ? SwipeHint.pressBrighten : 0)
                         .opacity(!closing && !playHiddenForFlip ? chromeIn : 0)
                         .allowsHitTesting(!closing && !swipeBusy && !playHiddenForFlip && chromeIn > 0.5)
-                        // t371u: play button removed (cover tap plays / pauses)
+                        // t381u: play button restored exactly as in 203 / 204 (right of lyrics, 8pt; hidden on the playing
+                        // album but keeps its slot). Cover tap still plays / pauses (t370u).
+                        if collection != nil {
+                            GlassCircleButton(systemImage: "play.fill", accessibilityText: "播放这张专辑", ink: theme.ink) {
+                                guard let songs, let first = songs.first(where: { $0.playParameters != nil }) else { return }
+                                userInteracted()
+                                if let collection { onPlayedAlbum(collection) }
+                                Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
+                            }
+                            .opacity(playShown && !playHiddenForFlip ? chromeIn : 0)
+                            .animation(.easeOut(duration: 0.2), value: playShown)
+                            .allowsHitTesting(playShown && coverPlayVisible && !swipeBusy && !playHiddenForFlip && chromeIn > 0.5)
+                            .accessibilityHidden(!playShown)
+                        }
                     }
                     .animation(.easeOut(duration: playHiddenForFlip ? 0.1 : 0.2), value: playHiddenForFlip)   // t347u
                     .padding(CoverButtons.inset)
                     .frame(width: r.width, height: r.height, alignment: .bottomLeading)
                     .offset(x: r.minX, y: r.minY)
                 }
+                // t379u: the row-release gate needs one animated reader, else its spring completes at once
+                .background { Color.clear.frame(width: 1, height: 1).opacity(rowGate).allowsHitTesting(false).accessibilityHidden(true) }
                 // t354u: neighbour covers one page away, only while the onboarding nudge runs
                 .background { hintPeeks }
                 // t131u：只在封面区横滑翻专辑（位移在 SleeveFrameKey 测量之后，不影响转场终点）
                 .offset(x: swipeX)
                 .opacity(jumpFade)
+                // t363u / t381u: per page — the new album decides at once (it is off-screen / just swapped → no fade then)
+                .onChange(of: coverPlayVisible, initial: true) { _, v in
+                    if swipeBusy { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { playShown = v } }
+                    else { playShown = v }
+                }
+                .onChange(of: swipeSettle) { _, _ in playShown = coverPlayVisible }
                 .simultaneousGesture(albumSwipe, including: landed && !closing ? .all : .subviews)
                 .sensoryFeedback(.impact(weight: .light), trigger: swipeSettle)
                 .sensoryFeedback(.impact(weight: .light), trigger: returnTick)   // t341u
@@ -605,7 +628,12 @@ struct AlbumDetailView: View {
             // let the release land on the same frames as the row insertion, the theme crossfade (.animation(value:
             // theme) at the root) and the settle work → rows sometimes appeared already shown / faded instead of
             // sliding. The old two-step commit had ~0.38s here; 0.12s keeps the swap snappy and the slide intact.
-            DispatchQueue.main.asyncAfter(deadline: .now() + TrackRowRise.releaseDelay) {
+            // t379u: 204 released the rows on the logical completion of the 0.38/0.86 in-spring that followed the
+            // swap. The seamless commit has no in-spring any more, so run the same spring on an invisible gate value
+            // and release from its completion → identical swap → release timing and mechanism as 204.
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.86), completionCriteria: .logicallyComplete) {
+                rowGate = rowGate == 0 ? 1 : 0
+            } completion: {
                 swipeBusy = false
                 swipeSettle += 1
                 rowsHold = false; goLiveIfReady()
@@ -718,7 +746,11 @@ struct AlbumDetailView: View {
     private func peekButtons(_ n: PagerPeek) -> some View {
         let r = SleeveArtwork.sleeveRect(pageWidth: pageWidth > 0 ? pageWidth : 402, pull: 0, hold: false)
         return HStack(spacing: CoverButtons.spacing) {
-            GlassCircleButton(systemImage: "quote.bubble", accessibilityText: "歌词", ink: theme.ink) {}   // t371u: lyrics only
+            GlassCircleButton(systemImage: "quote.bubble", accessibilityText: "歌词", ink: theme.ink) {}
+            if n.hasCollection {   // t381u: neighbour's own play button (hidden, slot kept, if it is the playing album)
+                GlassCircleButton(systemImage: "play.fill", accessibilityText: "播放这张专辑", ink: theme.ink) {}
+                    .opacity(n.isPlaying ? 0 : 1)
+            }
         }
         .opacity(chromeIn)
         .padding(CoverButtons.inset)

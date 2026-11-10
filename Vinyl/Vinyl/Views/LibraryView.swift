@@ -1170,7 +1170,9 @@ struct LibraryView: View {
         guard presented, !closing, !zm.openFromMini, let key = targetKey else { return }
         let rest = (zm.pushAnchor != nil ? zm.pushFrames[key] : nil) ?? cellFrames[key]
         guard #available(iOS 18, *), !(rest.map(tileVisible) ?? false) else {
-            reanchorPush()   // t375u: tile already on screen → push around it now
+            // t375u / t379u: re-anchor after the row slide, not on the settle frame: it redraws every pushed (blurred)
+            // tile, and on 207 that long frame landed exactly where the rows start their spring
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { if targetKey == key { reanchorPush() } }
             return
         }
         // t374u: scroll after the row slide (≤ ~0.9s) so the grid relayout never shares frames with it
