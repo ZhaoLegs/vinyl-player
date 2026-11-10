@@ -1047,6 +1047,12 @@ struct LibraryView: View {
             guard selectedCollection?.id == c.id, collectionSongs?.count == shown.count else {
                 TrackPrefetch.shared.store(c, full); return
             }
+            // t353u: don't swap the rows (new IDs) while the swipe slide-in is still running
+            let wait = TrackPrefetch.shared.rowsAnimatingFor()
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            guard selectedCollection?.id == c.id, collectionSongs?.count == shown.count else {
+                TrackPrefetch.shared.store(c, full); return
+            }
             collectionSongs = full
             TrackPrefetch.shared.store(c, full)
         }
@@ -2201,7 +2207,14 @@ final class TrackPrefetch {
 
     // timing probe
     func pageChanged(prefetched: Bool) { settleAt = nil; pendingPrefetched = prefetched }
+    /// t353u: time left in the row slide-in that starts at the last settle (stagger 0.24s + spring ≈ 0.55s)
+    private var lastSettle: Date?
+    func rowsAnimatingFor() -> Double {
+        guard let lastSettle else { return 0 }
+        return max(0, 0.8 - Date().timeIntervalSince(lastSettle))
+    }
     func settled(hasTracks: Bool) {
+        lastSettle = Date()
         guard let pre = pendingPrefetched else { return }
         if hasTracks {
             if Self.log { print("[t330u] settle → tracks 0ms (\(pre ? "prefetched" : "loaded before settle"))") }
