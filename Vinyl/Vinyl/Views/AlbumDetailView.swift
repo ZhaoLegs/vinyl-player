@@ -231,13 +231,6 @@ struct AlbumDetailView: View {
                 waveform
                     // t219u：时间条顶边（布局位置；滑入动画的 offset 在后面，不影响这里测得的值）
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TrackInset.space)).minY } action: { barTopY = $0 }
-                    // t275u: sleep timer indicator just above the time bar's trailing end
-                    .overlay(alignment: .topTrailing) {
-                        SleepBadge(color: theme.mid)
-                            .padding(.trailing, 14)
-                            .offset(y: -16)
-                            .allowsHitTesting(false)
-                    }
                     // 与首页 mini player 同宽（与系统 Tab bar 胶囊对齐）
                     .padding(.horizontal, DS.tabBarSideInset)
                     .padding(.bottom, 10)
@@ -524,11 +517,9 @@ struct AlbumDetailView: View {
             GlassCircleButton(systemImage: "xmark",
                               accessibilityText: "关闭", action: onClose)
             // t276u: invisible twin of the 喜欢 button so the title stays centred between two equal sides
+            // t278u: keeps the title centred against the wider capsule on the right (one extra 44pt half)
             if collection != nil {
-                GlassCircleButton(systemImage: "heart", action: {})
-                    .hidden()
-                    .accessibilityHidden(true)
-                    .padding(.leading, DS.barButtonPairGap)
+                Color.clear.frame(width: DS.barButtonSize, height: 1).accessibilityHidden(true)
             }
 
             // t129u：标题 / 艺人各限一行，超长在右侧以 … 截断；占满两按钮之间（两侧各留 10pt），绝不压到按钮
@@ -558,23 +549,47 @@ struct AlbumDetailView: View {
 
     @ViewBuilder
     private var trailingButtons: some View {
-        let pair = HStack(spacing: DS.barButtonPairGap) {
-            if let collection {
-                let liked = music.isLoved(collection)
-                GlassCircleButton(systemImage: liked ? "heart.fill" : "heart",
-                                  accessibilityText: liked ? "取消喜欢" : "喜欢") {
-                    Task { await music.toggleLove(collection) }
+        if #available(iOS 26.0, *), let collection {
+            // t278u: 喜欢 + 更多 share ONE system Liquid Glass capsule (glassEffect in .capsule on the pair),
+            // same 44pt height as the 关闭 glass circle; each half keeps a 44pt hit area.
+            let liked = music.isLoved(collection)
+            HStack(spacing: 0) {
+                Button { Task { await music.toggleLove(collection) } } label: {
+                    Image(systemName: liked ? "star.fill" : "star")
+                        .font(.system(size: DS.barButtonGlyph, weight: .medium))
+                        .imageScale(.large)
+                        .foregroundStyle(DS.ink)
+                        .frame(width: DS.barButtonSize, height: DS.barButtonSize)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(liked ? "取消喜欢" : "喜欢")
+                Menu { detailMenu(collection).menuItemDefaults() } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: DS.barButtonGlyph, weight: .medium))
+                        .imageScale(.large)
+                        .foregroundStyle(DS.ink)
+                        .frame(width: DS.barButtonSize, height: DS.barButtonSize)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("更多")
             }
-            GlassCircleMenu(systemImage: "ellipsis", accessibilityText: "更多") {
-                if let collection { detailMenu(collection) }
-            }
-            .disabled(collection == nil)
-        }
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: DS.barButtonPairGap) { pair }
+            .glassEffect(.regular.interactive(), in: .capsule)
         } else {
-            pair
+            HStack(spacing: DS.barButtonPairGap) {
+                if let collection {
+                    let liked = music.isLoved(collection)
+                    GlassCircleButton(systemImage: liked ? "star.fill" : "star",
+                                      accessibilityText: liked ? "取消喜欢" : "喜欢") {
+                        Task { await music.toggleLove(collection) }
+                    }
+                }
+                GlassCircleMenu(systemImage: "ellipsis", accessibilityText: "更多") {
+                    if let collection { detailMenu(collection) }
+                }
+                .disabled(collection == nil)
+            }
         }
     }
 

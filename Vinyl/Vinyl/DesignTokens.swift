@@ -43,6 +43,8 @@ enum DS {
     static let barButtonLabel: CGFloat = 30
     /// t276u: gap between paired glass circle buttons (system toolbar pair spacing)
     static let barButtonPairGap: CGFloat = 8
+    /// t278u: rendered diameter of the system glass circle (measured 134px @3x on device)
+    static let barButtonSize: CGFloat = 44
     /// 原生 toolbar 图标 = 17pt 字号 + .large imageScale（实测与原生 cube 字形同宽同高）。
     static let barButtonGlyph: CGFloat = 17
 

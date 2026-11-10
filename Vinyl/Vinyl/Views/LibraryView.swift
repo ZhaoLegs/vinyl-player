@@ -136,11 +136,6 @@ struct LibraryView: View {
                     targetKey = 1000 + i
                     // t240u：--debug-play 时打开即播放（截播放态歌词）；默认不播放
                     let debugPlay = ProcessInfo.processInfo.arguments.contains("--debug-play")
-                    // t275u diagnostic: --debug-sleep=album | --debug-sleep=<minutes>
-                    if let a = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--debug-sleep=") }) {
-                        let v = String(a.dropFirst("--debug-sleep=".count))
-                        music.sleep.set(v == "album" ? .album : .minutes(Int(v) ?? 15))
-                    }
                     openCollection(music.collections[i], startPlayback: debugPlay)
                     // t231u：诊断 —— 加 --debug-lyrics 时落定后翻到歌词页（截图顶部过渡用）
                     // 不随 .task 取消（开始播放会刷新 homePageRevision → 本 task 被取消重跑）

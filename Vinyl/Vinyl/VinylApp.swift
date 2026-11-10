@@ -44,6 +44,14 @@ struct VinylApp: App {
                 .environmentObject(music)
                 .environmentObject(music.timeline)
                 .environmentObject(music.sleep)
+                // t275u/t278u diagnostic: --debug-sleep=album | --debug-sleep=<minutes>, applied at launch
+                // (was inside the --debug-open handler, so a plain home launch never set it)
+                .task {
+                    guard let a = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--debug-sleep=") }),
+                          !music.sleep.isActive else { return }
+                    let v = String(a.dropFirst("--debug-sleep=".count))
+                    music.sleep.set(v == "album" ? .album : .minutes(Int(v) ?? 15))
+                }
         }
     }
 }
