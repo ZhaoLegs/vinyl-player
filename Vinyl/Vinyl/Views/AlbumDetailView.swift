@@ -760,25 +760,29 @@ struct AlbumDetailView: View {
             if next || prev {
                 guard live("nudge") else { return }
                 withAnimation(.easeOut(duration: 0.15)) { hintPeek = true }
+                // t372u: left → centre → pause 0.5s → right (if a previous album) → centre → pause 2s → lyrics press
                 if next {
                     withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.86)) { swipeX = -swing }
                     try? await Task.sleep(for: .seconds(SwipeHint.spring + SwipeHint.hold))
-                    guard live("swing right") else { hintPeek = false; recentreAfterHint("stopped"); return }
+                    guard live("centre after left") else { hintPeek = false; recentreAfterHint("stopped"); return }
+                    withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.9)) { swipeX = 0 }
+                    try? await Task.sleep(for: .seconds(SwipeHint.spring))
+                    if prev {
+                        try? await Task.sleep(for: .seconds(SwipeHint.midPause))
+                        guard live("swing right") else { hintPeek = false; recentreAfterHint("stopped"); return }
+                    }
                 }
                 if prev {
                     withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.86)) { swipeX = swing }
                     try? await Task.sleep(for: .seconds(SwipeHint.spring + SwipeHint.hold))
-                    guard live("centre") else { hintPeek = false; recentreAfterHint("stopped"); return }
+                    guard live("centre after right") else { hintPeek = false; recentreAfterHint("stopped"); return }
+                    withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.9)) { swipeX = 0 }
+                    try? await Task.sleep(for: .seconds(SwipeHint.spring))
                 }
-                withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.9)) { swipeX = 0 }
-                try? await Task.sleep(for: .seconds(SwipeHint.spring))
                 withAnimation(.easeOut(duration: 0.15)) { hintPeek = false }
                 try? await Task.sleep(for: .seconds(SwipeHint.gap))
             }
             guard live("flip"), !lyricsSideUp else { return }
-            // t371u: a light cover press first (visual only — no playback during the hint)
-            guard await simulatedPress({ coverPress = $0 }, down: SwipeHint.coverPressDown, gap: SwipeHint.coverPressGap,
-                                       live: { live("flip (cover press)") }) else { return }
             // t369u: then the lyrics button is "pressed" and the existing flip starts 0.1s after it releases
             guard await simulatedPress({ lyricsPress = $0 }, down: SwipeHint.pressDown, gap: SwipeHint.pressGap,
                                        live: { live("flip (press)") }) else { return }
@@ -2538,7 +2542,7 @@ enum SwipeHint {
     /// t354u: v2 keys — values written while testing 196 are ignored
     static let countKey = "detailHintOpens.v2"
     static let learnedKey = "detailHintLearned.v2"
-    static let swing: CGFloat = 0.15   // t357u: 15% of the page width (~60pt) each way (was 0.4)
+    static let swing: CGFloat = 0.22   // t373u: 22% of the page width (~88pt) each way (was 0.15; t357u 0.4 → 0.15)
     static let hold: Double = 0.15     // t357u: s held at each side (was 0.25)
     static let spring: Double = 0.45   // t357u: swing spring response (was 0.55 left / 0.7 right / 0.55 centre)
     static let log = ProcessInfo.processInfo.arguments.contains("--log-hints")
@@ -2546,7 +2550,8 @@ enum SwipeHint {
     static let opens = 3               // t352u: hints on the first 3 detail opens
     static let nudge: CGFloat = 30     // pt the pager shifts left once
     static let delay: Double = 0.6     // s after the cover lands
-    static let gap: Double = 0.5       // s between the nudge settling and the demo flip
+    static let gap: Double = 2         // t372u: s between the last return to centre and the lyrics press (was 0.5)
+    static let midPause: Double = 0.5  // t372u: s at centre between the left and the right swing
     static let lyricsHold: Double = 1  // s the demo stays on the lyrics side
     static let pressScale: CGFloat = 0.85   // t369u: simulated lyrics-button press
     static let pressBrighten: Double = 0.08
