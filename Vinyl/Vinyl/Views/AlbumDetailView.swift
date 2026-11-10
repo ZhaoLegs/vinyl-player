@@ -326,15 +326,7 @@ struct AlbumDetailView: View {
     /// 叠页面底色 0 → 0.85 渐变；位于曲目表 / 歌词之上、播放条之下，不接收触摸。
     /// t231u：歌词层顶部渐变模糊（强 → 弱），高度 LyricsTopFade.height；不挡触摸
     private var lyricsTopFade: some View {
-        // 只用最薄的系统 material 做模糊、不叠白色底色（叠色会在渐变背景上形成一条亮带）；
-        // 真正的「溶开」由歌词内容自身的 alpha 渐变 mask 完成
-        Rectangle()
-            .fill(.ultraThinMaterial)
-            .mask(LinearGradient(stops: LyricsTopFade.materialStops, startPoint: .top, endPoint: .bottom))
-            .opacity(LyricsTopFade.materialOpacity)
-        .frame(maxWidth: .infinity)
-        .frame(height: lyricsGap + LyricsTopFade.height)
-        .allowsHitTesting(false)
+        TopProgressiveBlurMaterial(height: lyricsGap + LyricsTopFade.height)
     }
 
     private var bottomFade: some View {
@@ -585,27 +577,9 @@ struct AlbumDetailView: View {
     private var realTrackTable: some View {
         let _ = TracklistProfile.count("TrackTable.builder")
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 0) {
-                Text("Side")
-                    .font(.system(size: TL.header, weight: .regular))
-                    .foregroundStyle(theme.ink)
-                    .frame(width: TL.sideW, alignment: .leading)
-                Text("Time")
-                    .font(.system(size: TL.header, weight: .regular))
-                    .foregroundStyle(theme.header)
-                    .frame(width: TL.bpmW, alignment: .leading)
-                Color.clear.frame(width: TL.glyphW, height: 1)
-                Text("Tracklist")
-                    .font(.system(size: TL.header, weight: .regular))
-                    .foregroundStyle(theme.ink)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, DS.contentInset)
-            .padding(.bottom, TL.headerGap)
-            .modifier(rowReveal(0))
-
             if let songs {
                 if songs.isEmpty {
+                    trackTableHeader
                     // t181u：空 / 失败提示在空列表区域（封套底 → 时间条顶）上下、屏幕左右居中
                     Text("这个列表里没有可播放的歌曲")
                         .font(.system(size: 15))
@@ -614,6 +588,8 @@ struct AlbumDetailView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.bottom, TL.headerGap + TL.header)   // 抵消表头高度 → 相对整块空区域居中
                 } else {
+                    // t261u: header pinned outside the scroll view; rows dissolve at its bottom edge
+                    trackTableHeader
                     ScrollViewReader { proxy in
                     ScrollView(showsIndicators: false) {
                         LazyVStack(alignment: .leading, spacing: 0) {
@@ -626,18 +602,11 @@ struct AlbumDetailView: View {
                         .padding(.horizontal, DS.contentInset)
                         // t261u: header gap lives inside the scroll view so rows fade out at the header's bottom edge
                         .padding(.top, TL.headerGap)
-                        // t219u：滚到底时最后一行（有相似专辑时 = 相似专辑）底边距时间条顶 24pt，
-                        // 由实测的列表底 / 时间条顶算出（不写死安全区 / 播放条高度）
+                        // t219u：滚到底时最后一行底边距时间条顶 24pt，由实测的列表底 / 时间条顶算出
                         .padding(.bottom, trackBottomInset)
                     }
-                    // t261u: header stays fixed above; rows dissolve over the header gap (single opacity mask on the container, no per-row effect)
-                    .mask {
-                        VStack(spacing: 0) {
-                            LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom)
-                                .frame(height: TL.headerGap)
-                            Color.black
-                        }
-                    }
+                    // t264u: shared top fade (ai/tracklist-top-blur) applied over the header gap only; single container mask, no per-row effect
+                    .modifier(TopProgressiveBlurMask(height: TL.headerGap))
                     .padding(.top, -TL.headerGap)
                     .onAppear {
                         guard ProcessInfo.processInfo.arguments.contains("--debug-scroll-end"),
@@ -651,6 +620,7 @@ struct AlbumDetailView: View {
                     .modifier(ScrollEndProximity(range: TrackInset.fadeRange) { scrollEnd.update($0) })
                 }
             } else {
+                trackTableHeader
                 // t181u：读取中的 loading 在空列表区域上下、屏幕左右居中（不再贴在表头下面）
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -660,27 +630,35 @@ struct AlbumDetailView: View {
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    /// t229u：顶栏三图标（添加 / 喜爱 / 共享）→ 歌单 · 下一首 · 队列末尾 → 前往专辑 / 艺人
+    private var trackTableHeader: some View {
+        HStack(spacing: 0) {
+            Text("Side")
+                .font(.system(size: TL.header, weight: .regular))
+                .foregroundStyle(theme.ink)
+                .frame(width: TL.sideW, alignment: .leading)
+            Text("Time")
+                .font(.system(size: TL.header, weight: .regular))
+                .foregroundStyle(theme.header)
+                .frame(width: TL.bpmW, alignment: .leading)
+            Color.clear.frame(width: TL.glyphW, height: 1)
+            Text("Tracklist")
+                .font(.system(size: TL.header, weight: .regular))
+                .foregroundStyle(theme.ink)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, DS.contentInset)
+        .padding(.bottom, TL.headerGap)
+        .modifier(rowReveal(0))
+    }
+
+    /// 歌曲菜单：喜欢 / 共享 → 前往专辑 / 艺人。
     @ViewBuilder
     private func songMenu(_ song: Song) -> some View {
         let catalog = collection?.isCatalog ?? false
         let key = "am:" + song.id.rawValue
-        MenuTopBar(canAdd: music.canAddToLibrary(song, fromCatalog: catalog),
-                   liked: music.isFavorite(key),
+        MenuTopBar(liked: music.isFavorite(key),
                    shareURL: song.url,
-                   add: { Task { await music.addToLibrary(song) } },
                    like: { Task { await music.toggleFavorite(key, song: song, fromCatalog: catalog) } })
-        Section {
-            if !music.editablePlaylists.isEmpty {
-                Menu {
-                    ForEach(music.editablePlaylists, id: \.id) { pl in
-                        Button(pl.name, systemImage: "music.note.list") { Task { await music.addToPlaylist(song, playlist: pl) } }
-                    }
-                } label: { Label("添加到播放列表", systemImage: "text.badge.plus") }
-            }
-            Button("下一首播放", systemImage: "text.insert") { Task { await music.enqueue(song, next: true, fromCatalog: catalog) } }
-            Button("加到队列末尾", systemImage: "text.append") { Task { await music.enqueue(song, next: false, fromCatalog: catalog) } }
-        }
         Section {
             // 当前页就是这张专辑 → 省略「前往专辑」；歌单里的歌 → 解析它的专辑后用相似专辑同一条换专辑路径打开
             if let album = song.albumTitle, !album.isEmpty, !(collection.map { if case .album = $0 { return true }; return false } ?? false) {
@@ -705,20 +683,10 @@ struct AlbumDetailView: View {
     /// t233u：「更多」菜单 = 首页长按同一结构（不含从首页隐藏）
     @ViewBuilder
     private func detailMenu(_ c: MusicCollection) -> some View {
-        MenuTopBar(canAdd: music.canAddToLibrary(c),
-                   liked: music.isLoved(c),
+        MenuTopBar(liked: music.isLoved(c),
                    shareURL: c.shareURL,
-                   add: { Task { await music.addToLibrary(c) } },
                    like: { Task { await music.toggleLove(c) } })
         Section {
-            if !music.editablePlaylists.isEmpty {
-                Menu {
-                    ForEach(music.editablePlaylists, id: \.id) { pl in
-                        Button(pl.name, systemImage: "music.note.list") { Task { await music.addToPlaylist(c, playlist: pl) } }
-                    }
-                } label: { Label("添加到播放列表", systemImage: "text.badge.plus") }
-            }
-            Button("播放", systemImage: "play.fill") { Task { await music.playCollection(c, shuffle: false) } }
             Button("随机播放", systemImage: "shuffle") { Task { await music.playCollection(c, shuffle: true) } }
         }
         if let url = c.artistURL {
@@ -727,10 +695,6 @@ struct AlbumDetailView: View {
                     Label { Text("前往艺人"); Text(c.artist) } icon: { Image(systemName: "music.microphone") }
                 }
             }
-        }
-        Section {
-            Button("下一首播放", systemImage: "text.insert") { Task { await music.enqueue(c, next: true) } }
-            Button("加到队列末尾", systemImage: "text.append") { Task { await music.enqueue(c, next: false) } }
         }
     }
 
@@ -982,21 +946,15 @@ struct StaggerReveal: AnimatableModifier {
     }
 }
 
-// MARK: - t237u 菜单顶栏（添加 / 喜欢 / 共享）
+// MARK: - 菜单顶栏（喜欢 / 共享）
 
-/// 原来的 ControlGroup 里是「if 添加 + let + 喜欢 + if ShareLink」：子项个数随条件变化，且混入 ShareLink。
-/// 系统把 ControlGroup 桥接成 UIMenu 横排时，混入 ShareLink / 可选项会让横排只渲染部分子项（真机上「喜欢」丢失）。
-/// 现在固定 3 个普通 Button（不可用的置灰而不是移除），共享改为普通按钮弹系统分享面板 → 横排稳定显示三项。
+/// 保持固定两个普通 Button，避免可选 ShareLink 影响原生横排菜单的桥接。
 struct MenuTopBar: View {
-    let canAdd: Bool
     let liked: Bool
     let shareURL: URL?
-    let add: () -> Void
     let like: () -> Void
     var body: some View {
         ControlGroup {
-            Button(action: add) { Label("添加", systemImage: "plus") }
-                .disabled(!canAdd)
             Button(action: like) { Label(liked ? "取消喜欢" : "喜欢", systemImage: liked ? "star.fill" : "star") }
             Button { if let shareURL { ShareSheet.present(shareURL) } } label: { Label("共享", systemImage: "square.and.arrow.up") }
                 .disabled(shareURL == nil)
@@ -1175,6 +1133,36 @@ struct ScrollEndProximity: ViewModifier {
 }
 
 // MARK: - t160u 歌词（LRCLIB）
+
+/// 歌词与曲目表共用的视口透明度遮罩；只作用于滚动容器，不给歌曲行添加模糊。
+struct TopProgressiveBlurMask: ViewModifier {
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        content.mask {
+            VStack(spacing: 0) {
+                LinearGradient(stops: LyricsTopFade.spanAlphaStops, startPoint: .bottom, endPoint: .top)
+                    .frame(height: height)
+                Color.black
+            }
+        }
+    }
+}
+
+/// 复用歌词原有的单层系统材质；两端透明，不叠白色底色，不拦截手势。
+struct TopProgressiveBlurMaterial: View {
+    let height: CGFloat
+
+    var body: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .mask(LinearGradient(stops: LyricsTopFade.materialStops, startPoint: .top, endPoint: .bottom))
+            .opacity(LyricsTopFade.materialOpacity)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .allowsHitTesting(false)
+    }
+}
 
 /// t166u：底部渐变模糊（不含安全区的可见高度；加上 34pt 安全区 ≈ 196pt）
 /// t231u：歌词顶部渐变模糊（封面下缘 → 歌词溶开；与 BottomFade 同手法，方向相反）
@@ -1489,13 +1477,7 @@ struct LyricsPanel: View {
                         .padding(.top, Lyrics.topInset + topExtend)
                         .padding(.bottom, Lyrics.bottomGap)
                 }
-                .mask {
-                    VStack(spacing: 0) {
-                        LinearGradient(stops: LyricsTopFade.spanAlphaStops, startPoint: .bottom, endPoint: .top)
-                            .frame(height: topExtend + LyricsTopFade.height)
-                        Color.black
-                    }
-                }
+                .modifier(TopProgressiveBlurMask(height: topExtend + LyricsTopFade.height))
             case .none?: Self.emptyText
             case nil:
                 if loadedID == song.id && loadFailed {
@@ -1599,13 +1581,7 @@ struct LyricsPanel: View {
                 .frame(maxWidth: .infinity, alignment: .top)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(stops: LyricsTopFade.spanAlphaStops, startPoint: .bottom, endPoint: .top)
-                        .frame(height: topExtend + LyricsTopFade.height)
-                    Color.black
-                }
-            }
+            .modifier(TopProgressiveBlurMask(height: topExtend + LyricsTopFade.height))
             .onAppear { viewportH = geo.size.height; snapFollow(current, lines: lines, animated: false) }
             .onChange(of: geo.size.height) { _, h in viewportH = h; snapFollow(current, lines: lines, animated: false) }
             .onPreferenceChange(LyricHeightKey.self) { lineHeights.merge($0) { _, n in n }; snapFollow(current, lines: lines, animated: false) }

@@ -31,3 +31,6 @@ xcuserdata/
 
 # Native mini-flight recordings and extracted frames (paths documented in RESULT.md)
 recordings/mini-flight/
+
+# Tracklist top-fade screenshots and local performance evidence
+recordings/listfade/
