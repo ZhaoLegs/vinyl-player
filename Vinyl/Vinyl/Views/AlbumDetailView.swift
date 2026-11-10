@@ -115,6 +115,15 @@ struct AlbumDetailView: View {
     @AppStorage(SwipeHint.countKey) private var hintOpens = 0
     @AppStorage(SwipeHint.learnedKey) private var hintLearned = false
     @State private var hintToken = 0
+    /// t354u: live mirror of landed && !closing && isPresented — the hint Task reads this @State instead of the
+    /// `let` properties of the view copy it captured (those are frozen at capture time)
+    @State private var hintStage = false
+    /// t354u: neighbour covers render only while the nudge runs
+    @State private var hintPeek = false
+    /// t354u: live mirror of the `lyricsMode` parameter for the same reason
+    @State private var lyricsSideUp = false
+    /// t355u: play button visibility for the settled album (not updated mid-swipe)
+    @State private var playShown = false
     @State private var favoriteBounce = 0
     /// t172u：专辑主题色（MusicKit Artwork 颜色优先，位图兜底；近白 / 无彩色 → 默认黑）
     @State private var theme = DetailTheme.standard
@@ -188,6 +197,21 @@ struct AlbumDetailView: View {
                         .onChange(of: spin.degrees, initial: true) { _, angle in onSpinAngle(angle) }
                 }
                 .frame(width: DS.sleeve, height: DS.sleeve)
+                .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom, closing: closing,
+                                         landed: landed || reduceMotion, miniOwner: miniOwner))
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(key: SleeveFrameKey.self,
+                                               value: geo.frame(in: .global))
+                    }
+                )
+                // t354u: neighbour covers one page away, only while the onboarding nudge runs
+                .background { hintPeeks }
+                // t131u：只在封面区横滑翻专辑（位移在 SleeveFrameKey 测量之后，不影响转场终点）
+                .offset(x: swipeX)
+                .opacity(jumpFade)
+                // t355u: attached after the pager offset / jump fade, so the buttons stay fixed on screen while the
+                // cover swipes or nudges; they act on the settled album (play visibility switches on settle)
                 // t340u / t346u / t349u / t352u: native glass buttons at the sleeve/vinyl frame's bottom-left, side by side
                 // (8pt): lyrics (left; same flip as a cover tap, filled glyph on the lyrics side; all albums) and play
                 // (right; only for an album that isn't the one playing). Both fade in with the top bar after the cover
@@ -201,7 +225,7 @@ struct AlbumDetailView: View {
                         }
                         .accessibilityAddTraits(lyricsMode ? .isSelected : [])
                         .opacity(!closing && !playHiddenForFlip ? chromeIn : 0)
-                        .allowsHitTesting(!closing && !playHiddenForFlip && chromeIn > 0.5)
+                        .allowsHitTesting(!closing && !swipeBusy && !playHiddenForFlip && chromeIn > 0.5)
                         if collection != nil {
                             GlassCircleButton(systemImage: "play.fill", accessibilityText: "播放这张专辑", ink: theme.ink) {
                                 guard let songs, let first = songs.first(where: { $0.playParameters != nil }) else { return }
@@ -209,26 +233,17 @@ struct AlbumDetailView: View {
                                 if let collection { onPlayedAlbum(collection) }
                                 Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
                             }
-                            .opacity(coverPlayVisible && !playHiddenForFlip ? chromeIn : 0)
-                            .animation(.easeOut(duration: 0.2), value: coverPlayVisible)
-                            .allowsHitTesting(coverPlayVisible && !playHiddenForFlip && chromeIn > 0.5)
-                            .accessibilityHidden(!coverPlayVisible)
+                            .opacity(playShown && !playHiddenForFlip ? chromeIn : 0)
+                            .animation(.easeOut(duration: 0.2), value: playShown)
+                            .allowsHitTesting(playShown && coverPlayVisible && !swipeBusy && !playHiddenForFlip && chromeIn > 0.5)
+                            .accessibilityHidden(!playShown)
                         }
                     }
                     .animation(.easeOut(duration: playHiddenForFlip ? 0.1 : 0.2), value: playHiddenForFlip)   // t347u
                     .padding(CoverButtons.inset)
                 }
-                .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom, closing: closing,
-                                         landed: landed || reduceMotion, miniOwner: miniOwner))
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(key: SleeveFrameKey.self,
-                                               value: geo.frame(in: .global))
-                    }
-                )
-                // t131u：只在封面区横滑翻专辑（位移在 SleeveFrameKey 测量之后，不影响转场终点）
-                .offset(x: swipeX)
-                .opacity(jumpFade)
+                .onChange(of: coverPlayVisible, initial: true) { _, v in if !swipeBusy { playShown = v } }
+                .onChange(of: swipeSettle) { _, _ in playShown = coverPlayVisible }
                 .simultaneousGesture(albumSwipe, including: landed && !closing ? .all : .subviews)
                 .sensoryFeedback(.impact(weight: .light), trigger: swipeSettle)
                 .sensoryFeedback(.impact(weight: .light), trigger: returnTick)   // t341u
@@ -315,7 +330,10 @@ struct AlbumDetailView: View {
                     // t269u: manual lyrics scroll -> bar slides below the screen edge, returns when idle
                     .offset(y: lyricsHidesBar ? barTravel : 0)
             }
-            .onChange(of: lyricsMode) { _, on in if !on { lyricsManual = false } }
+            .onChange(of: lyricsMode, initial: true) { _, on in
+                if !on { lyricsManual = false }
+                lyricsSideUp = on   // t354u
+            }
             .coordinateSpace(.named(TrackInset.space))
             // 不再给整列加 contentAlpha：封套只受 ArtworkHandoff 控制（全显 / 全隐），
             // 不会出现半透明封套透出唱片的「鬼影」帧；其余内容各自按 stage() 淡入。
@@ -349,10 +367,13 @@ struct AlbumDetailView: View {
             }
             withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(duration: 0.4, bounce: 0)) { barIn = 1 }
             setCopy(1, animated: !reduceMotion)
-            firstOpenHints()   // t343u / t350u
+            hintStage = isPresented && !closing
+            firstOpenHints()   // t343u / t350u / t354u
         }
         // t251u：关闭 → 标题 / 曲目表 0.15s 快速淡出，封面飞回期间不可见
-        .onChange(of: closing) { _, now in if now { setCopy(0, animated: true) } }
+        .onChange(of: closing) { _, now in
+            if now { setCopy(0, animated: true); hintStage = false; hintToken += 1; hintPeek = false }   // t354u
+        }
         // t286u: start the row stagger once the reveal is due AND the rows are in the hierarchy
         .onChange(of: rowsShown) { _, _ in goLiveIfReady() }
         .onChange(of: songs == nil) { _, _ in goLiveIfReady() }
@@ -589,35 +610,78 @@ struct AlbumDetailView: View {
 
     /// Any user touch on the pager / cover / its buttons cancels the first-open hints and marks them done.
     private func userInteracted() {
+        if !hintLearned { hintLog("learned (user interaction)") }
         hintToken += 1
+        if hintPeek { hintPeek = false }
         if !hintLearned { hintLearned = true }   // a user swipe / flip / button = learned → no more hints
     }
 
-    /// t343u / t350u / t352u: on each of the first 3 detail opens (until learned): 0.6s after landing the pager
-    /// nudges 30pt left and springs back, then 0.5s later the cover flips to the lyrics side, holds 1s, flips back.
+    @ViewBuilder private var hintPeeks: some View {
+        let w = pageWidth > 0 ? pageWidth : UIScreen.main.bounds.width
+        if hintPeek {
+            ZStack {
+                ForEach([-1, 1], id: \.self) { dir in
+                    if let n = neighbour(dir) {
+                        SleeveCutout(coverName: n.coverName, artwork: n.artwork, official: n.official)
+                            .equatable()
+                            .offset(x: CGFloat(dir) * w)
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .transition(.opacity)
+        }
+    }
+
+    private func hintLog(_ s: @autoclosure () -> String) { if SwipeHint.log { print("[t354u] hints: \(s())") } }
+
+    /// t343u / t350u / t352u / t354u: on each of the first 3 detail opens (until learned): 0.6s after landing the
+    /// pager swings left to show the next CD (40% of the page), then right to show the previous one (skipped when
+    /// there is none), then settles at centre; 0.5s later the cover flips to the lyrics side, holds 1s, flips back.
     private func firstOpenHints() {
-        if SwipeHint.resetRequested { SwipeHint.resetRequested = false; hintOpens = 0; hintLearned = false }
-        guard !reduceMotion, !hintLearned, hintOpens < SwipeHint.opens else { return }
+        if SwipeHint.resetRequested { SwipeHint.resetRequested = false; hintOpens = 0; hintLearned = false; hintLog("reset by --reset-swipe-hint") }
+        hintLog("open: count=\(hintOpens)/\(SwipeHint.opens) learned=\(hintLearned) reduceMotion=\(reduceMotion) next=\(neighbour(1) != nil) prev=\(neighbour(-1) != nil) swipeBusy=\(swipeBusy) swipeX=\(swipeX)")
+        guard !reduceMotion, !hintLearned, hintOpens < SwipeHint.opens else { hintLog("skip"); return }
         hintOpens += 1
-        let nudge = neighbour(1) != nil
+        let next = neighbour(1) != nil, prev = neighbour(-1) != nil
         hintToken += 1
         let token = hintToken
-        func live() -> Bool { token == hintToken && landed && !closing && !swipeBusy && isPresented }
+        func live(_ step: String) -> Bool {
+            let ok = token == hintToken && hintStage && !swipeBusy
+            if !ok { hintLog("stop before \(step): token \(token == hintToken) stage \(hintStage) swipeBusy \(swipeBusy)") }
+            return ok
+        }
+        hintLog("run #\(hintOpens)")
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(SwipeHint.delay))
-            if nudge {
-                guard live(), swipeX == 0 else { return }
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { swipeX = -SwipeHint.nudge }
-                try? await Task.sleep(for: .seconds(0.28))
-                guard token == hintToken, swipeX == -SwipeHint.nudge else { return }
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.7)) { swipeX = 0 }
+            let w = pageWidth > 0 ? pageWidth : UIScreen.main.bounds.width
+            let swing = w * SwipeHint.swing
+            if next || prev {
+                guard live("nudge") else { return }
+                withAnimation(.easeOut(duration: 0.15)) { hintPeek = true }
+                if next {
+                    withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) { swipeX = -swing }
+                    try? await Task.sleep(for: .seconds(0.55 + SwipeHint.hold))
+                    guard live("swing right") else { hintPeek = false; return }
+                }
+                if prev {
+                    withAnimation(.spring(response: 0.7, dampingFraction: 0.86)) { swipeX = swing }
+                    try? await Task.sleep(for: .seconds(0.7 + SwipeHint.hold))
+                    guard live("centre") else { hintPeek = false; return }
+                }
+                withAnimation(.spring(response: 0.55, dampingFraction: 0.9)) { swipeX = 0 }
+                try? await Task.sleep(for: .seconds(0.55))
+                withAnimation(.easeOut(duration: 0.15)) { hintPeek = false }
                 try? await Task.sleep(for: .seconds(SwipeHint.gap))
             }
-            guard live(), !lyricsMode else { return }
+            guard live("flip"), !lyricsSideUp else { return }
+            hintLog("demo flip")
             coverTapped(user: false)
             try? await Task.sleep(for: .seconds(Lyrics.merge + Lyrics.flip + SwipeHint.lyricsHold))
-            guard live(), lyricsMode else { return }
+            guard live("flip back"), lyricsSideUp else { return }
             coverTapped(user: false)
+            hintLog("done")
         }
     }
 
@@ -628,7 +692,7 @@ struct AlbumDetailView: View {
     private func returnToPlaying() {
         guard landed, !closing, !swipeBusy, !albumIsPlaying, let target = playingPage(),
               target.collection.id != collection?.id else { return }
-        returnTick += 1; userInteracted()
+        returnTick += 1   // t354u: programmatic page change — not a learned swipe
         if let off = target.offset, off != 0, abs(off) <= Self.returnSwipePages {
             commitJump(to: target.collection, dir: off > 0 ? 1 : -1)
             return
@@ -2358,8 +2422,13 @@ struct PagerPeek {
     let official: OfficialCoverQuery?
 }
 enum SwipeHint {
-    static let countKey = "detailHintOpens"
-    static let learnedKey = "detailHintLearned"
+    /// t354u: v2 keys — values written while testing 196 are ignored
+    static let countKey = "detailHintOpens.v2"
+    static let learnedKey = "detailHintLearned.v2"
+    static let swing: CGFloat = 0.4    // t354u: pager swings 40% of the page width each way
+    static let hold: Double = 0.25     // s held at each side
+    static let log = ProcessInfo.processInfo.arguments.contains("--log-hints")
+        || ProcessInfo.processInfo.arguments.contains("--log-prefetch")
     static let opens = 3               // t352u: hints on the first 3 detail opens
     static let nudge: CGFloat = 30     // pt the pager shifts left once
     static let delay: Double = 0.6     // s after the cover lands
