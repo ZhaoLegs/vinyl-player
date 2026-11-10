@@ -546,6 +546,7 @@ struct LibraryView: View {
                 let songs = try await collection.songs()
                 guard selectedCollection?.id == collection.id else { return }
                 collectionSongs = songs
+                upgradeToCatalogTracks(collection, shown: songs)
                 if startPlayback, let first = songs.first(where: { $0.playParameters != nil }) {
                     nowPlayingCollection = collection
                     await music.play(first, in: songs, fromCatalog: collection.isCatalog)
@@ -894,6 +895,7 @@ struct LibraryView: View {
                     let songs = (try? await c.songs()) ?? []
                     guard selectedCollection?.id == c.id else { return }
                     collectionSongs = songs
+                    upgradeToCatalogTracks(c, shown: songs)
                     // t185u：换到新专辑后自动从第一首开始播放；t223u：仅当当前没有在播放时（否则只展示，不打断）
                     if shouldAutoplay(c), let first = songs.first(where: { $0.playParameters != nil }) {
                         nowPlayingCollection = c
@@ -909,6 +911,17 @@ struct LibraryView: View {
             // t222u：不再滚动首页网格去找格子；关闭时格子可见就飞回它，否则飞回 mini player
         }
     }
+    /// t283u: library tracks show immediately; the full catalog tracklist replaces them when it arrives
+    /// (only if it is longer and the same album is still open). Failures keep the library tracks.
+    private func upgradeToCatalogTracks(_ c: MusicCollection, shown: [Song]) {
+        guard case .album(_, catalog: false) = c else { return }
+        Task {
+            guard let full = await c.catalogSongs(), full.count > shown.count,
+                  selectedCollection?.id == c.id, collectionSongs?.count == shown.count else { return }
+            collectionSongs = full
+        }
+    }
+
     /// t214u：从「相似专辑」换到任意专辑（可以不在首页里）：与 pageAlbum 相同的换专辑 + 自动播第一首。
     /// 若该专辑在首页里 → 关闭时飞回它的格子；不在 → 关闭时飞回上一次的格子位置。
     private func jumpToAlbum(_ c: MusicCollection) {
@@ -930,6 +943,7 @@ struct LibraryView: View {
             let songs = (try? await c.songs()) ?? []
             guard selectedCollection?.id == c.id else { return }
             collectionSongs = songs
+            upgradeToCatalogTracks(c, shown: songs)
             if shouldAutoplay(c), let first = songs.first(where: { $0.playParameters != nil }) {   // t223u
                 nowPlayingCollection = c
                 await music.play(first, in: songs, fromCatalog: c.isCatalog)

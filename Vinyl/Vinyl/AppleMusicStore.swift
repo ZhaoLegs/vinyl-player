@@ -891,6 +891,40 @@ extension AppleMusicStore {
 }
 
 extension MusicCollection {
+    /// t283u: a library album only lists the songs the user saved. Resolve its catalog album
+    /// (① /v1/me/library/albums/{id}/catalog → ② catalog search by title + artist) and read the full,
+    /// paged tracklist. nil = not a library album / not found / failed (callers keep the library tracks).
+    func catalogSongs() async -> [Song]? {
+        guard case .album(let album, let catalog) = self, !catalog else { return nil }
+        var found: Album?
+        if let url = URL(string: "https://api.music.apple.com/v1/me/library/albums/\(album.id.rawValue)/catalog"),
+           let r = try? await MusicDataRequest(urlRequest: URLRequest(url: url)).response(),
+           let items = try? JSONDecoder().decode(MusicItemCollection<Album>.self, from: r.data) {
+            found = items.first
+        }
+        if found == nil {
+            let norm = { (x: String) in x.lowercased().filter { !$0.isWhitespace } }
+            var req = MusicCatalogSearchRequest(term: "\(album.title) \(album.artistName)", types: [Album.self])
+            req.limit = 10
+            if let res = try? await req.response() {
+                found = res.albums.first { norm($0.title) == norm(album.title) && norm($0.artistName) == norm(album.artistName) }
+                    ?? res.albums.first { norm($0.title) == norm(album.title) }
+            }
+        }
+        guard let found else {
+            print("[t283u] no catalog album for \(album.title)")
+            return nil
+        }
+        var tracks = try? await found.with(.tracks).tracks
+        var songs: [Song] = []
+        while let batch = tracks {
+            songs.append(contentsOf: batch.compactMap { if case .song(let s) = $0 { return s }; return nil })
+            tracks = batch.hasNextBatch ? (try? await batch.nextBatch()) : nil
+        }
+        print("[t283u] \(album.title): catalog \(found.id.rawValue) -> \(songs.count) tracks")
+        return songs.isEmpty ? nil : songs
+    }
+
     var shareURL: URL? {
         switch self {
         case .album(let a, _): return a.url
