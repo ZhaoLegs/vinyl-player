@@ -502,7 +502,7 @@ struct LibraryView: View {
         }
         // t192u：长按 = 系统原生上下文菜单（抬起预览 + 玻璃材质由系统渲染）；点按仍是 Button 打开详情，滚动不受影响
         .contextMenu {
-            collectionMenu(collection)
+            collectionMenu(collection).menuItemDefaults()
         } preview: {
             ArtworkFill(artwork: collection.artwork, official: collection.officialQuery)
                 .frame(width: 280, height: 280)

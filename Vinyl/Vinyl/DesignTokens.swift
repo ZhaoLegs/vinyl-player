@@ -417,13 +417,13 @@ struct GlassCircleMenu<MenuContent: View>: View {
     @ViewBuilder
     var body: some View {
         if #available(iOS 26.0, *) {
-            Menu { content() } label: { label }
+            // t272u: tint only the glyph; a .tint on the Menu itself leaks into the presented menu items
+            Menu { content().menuItemDefaults() } label: { label.foregroundStyle(DS.ink) }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
-                .tint(DS.ink)
                 .accessibilityLabel(accessibilityText)
         } else {
-            Menu { content() } label: {
+            Menu { content().menuItemDefaults() } label: {
                 label.foregroundStyle(DS.ink)
                     .padding(7)
                     .background(.ultraThinMaterial, in: Circle())
@@ -643,5 +643,13 @@ enum FlightCurves {
             if bx(t) < u { lo = t } else { hi = t }
         }
         return by(t)
+    }
+}
+
+extension View {
+    /// t272u: menu / context-menu items use the system default label colour (black in light mode);
+    /// clears any tint / foreground style inherited from the trigger or its ancestors.
+    func menuItemDefaults() -> some View {
+        self.tint(nil).foregroundStyle(.primary)
     }
 }

@@ -728,7 +728,7 @@ struct AlbumDetailView: View {
         .disabled(!row.playable)
         .opacity(row.playable ? 1 : 0.45)
         // t229u：歌曲长按菜单（结构对齐 Apple Music）
-        .contextMenu { songMenu(song) }
+        .contextMenu { songMenu(song).menuItemDefaults() }
         .animation(.easeInOut(duration: 0.15), value: current)
         .animation(.easeInOut(duration: 0.15), value: current && music.isPlaying)
         .accessibilityLabel("\(current && music.isPlaying ? "暂停" : "播放") \(song.title)，\(song.artistName)")
