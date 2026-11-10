@@ -615,10 +615,18 @@ struct LibraryView: View {
         selectedCollection = collection
         // t223u：只有真的开始播放这张时才记为 nowPlayingCollection（打开但不播放 ≠ 正在播放）
         let startPlayback = startPlayback && shouldAutoplay(collection)
-        collectionSongs = nil
+        collectionSongs = TrackPrefetch.shared.cached(collection)   // t330u
         open()
+        prefetchNeighbours()
         Task {
             do {
+                if let cached = TrackPrefetch.shared.cached(collection) {
+                    if startPlayback, let first = cached.first(where: { $0.playParameters != nil }) {
+                        nowPlayingCollection = collection
+                        await music.play(first, in: cached, fromCatalog: collection.isCatalog)
+                    }
+                    return
+                }
                 let songs = try await collection.songs()
                 guard selectedCollection?.id == collection.id else { return }
                 collectionSongs = songs
@@ -881,9 +889,11 @@ struct LibraryView: View {
         if !zm.openFromMini && !reduceMotion {
             zm.pushAnchor = origin
             zm.pushFrames = cellFrames
-            withAnimation(TilePushAway.open) { zm.pushAway = true }
-            // t327u: Cove.X 0.38s easeOut fade restored (removed in t322u)
-            withAnimation(TilePushAway.fade) { zm.pushOpacity = 0 }
+            if TilePushAway.pushOut {
+                withAnimation(TilePushAway.open) { zm.pushAway = true }
+                // t327u: Cove.X 0.38s easeOut fade restored (removed in t322u)
+                withAnimation(TilePushAway.fade) { zm.pushOpacity = 0 }
+            }
         } else { zm.pushAnchor = nil }
         if DetailReveal.log { print("[t251u] zoom start t=\(Date().timeIntervalSince1970) fluidOpen=\(Motion.fluidOpen)") }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open),
@@ -975,12 +985,19 @@ struct LibraryView: View {
             if key >= 1000 {
                 let c = music.collections[key - 1000]
                 selectedCollection = c
-                collectionSongs = nil
+                // t330u: a prefetched neighbour renders its full tracklist at once (no loading state)
+                let cached = TrackPrefetch.shared.cached(c)
+                collectionSongs = cached
+                TrackPrefetch.shared.pageChanged(prefetched: cached != nil)
                 Task {
-                    let songs = (try? await c.songs()) ?? []
+                    let songs: [Song]
+                    if let cached { songs = cached } else { songs = await TrackPrefetch.shared.quick(c) }
                     guard selectedCollection?.id == c.id else { return }
-                    collectionSongs = songs
-                    upgradeToCatalogTracks(c, shown: songs)
+                    if cached == nil {
+                        collectionSongs = songs
+                        TrackPrefetch.shared.tracksShown()
+                        upgradeToCatalogTracks(c, shown: songs)
+                    }
                     // t185u：换到新专辑后自动从第一首开始播放；t223u：仅当当前没有在播放时（否则只展示，不打断）
                     if shouldAutoplay(c), let first = songs.first(where: { $0.playParameters != nil }) {
                         nowPlayingCollection = c
@@ -1001,9 +1018,16 @@ struct LibraryView: View {
     private func upgradeToCatalogTracks(_ c: MusicCollection, shown: [Song]) {
         guard case .album(_, catalog: false) = c else { return }
         Task {
-            guard let full = await c.catalogSongs(librarySongs: shown), full.count > shown.count,
-                  selectedCollection?.id == c.id, collectionSongs?.count == shown.count else { return }
+            let fetched = await c.catalogSongs(librarySongs: shown)
+            guard let full = fetched, full.count > shown.count else {
+                TrackPrefetch.shared.store(c, shown)   // t330u: no longer catalog list → library tracks are the full list
+                return
+            }
+            guard selectedCollection?.id == c.id, collectionSongs?.count == shown.count else {
+                TrackPrefetch.shared.store(c, full); return
+            }
             collectionSongs = full
+            TrackPrefetch.shared.store(c, full)
         }
     }
 
@@ -1022,13 +1046,15 @@ struct LibraryView: View {
                 if let f = cellFrames[1000 + i] { origin = f }
             }
             selectedCollection = c
-            collectionSongs = nil
+            collectionSongs = TrackPrefetch.shared.cached(c)   // t330u
         }
+        TrackPrefetch.shared.pageChanged(prefetched: collectionSongs != nil)
         Task {
-            let songs = (try? await c.songs()) ?? []
+            let cached = TrackPrefetch.shared.cached(c)
+            let songs: [Song]
+            if let cached { songs = cached } else { songs = await TrackPrefetch.shared.quick(c) }
             guard selectedCollection?.id == c.id else { return }
-            collectionSongs = songs
-            upgradeToCatalogTracks(c, shown: songs)
+            if cached == nil { collectionSongs = songs; TrackPrefetch.shared.tracksShown(); upgradeToCatalogTracks(c, shown: songs) }
             if shouldAutoplay(c), let first = songs.first(where: { $0.playParameters != nil }) {   // t223u
                 nowPlayingCollection = c
                 await music.play(first, in: songs, fromCatalog: c.isCatalog)
@@ -1066,7 +1092,22 @@ struct LibraryView: View {
         return f.midY > top && f.midY < bottom && f.minX >= -1 && f.maxX <= screen.width + 1
     }
     /// 新封套落定：0.15s 后唱片用原有弹簧抽出
+    /// t330u: warm the full tracklists (library + catalog completion) of the ±2 neighbours of the page on screen;
+    /// prefetches for albums outside that window are cancelled.
+    private func prefetchNeighbours() {
+        guard !music.collections.isEmpty else { return }
+        let keys = pageKeys
+        guard let i = keys.firstIndex(of: currentPageKey) else { return }
+        let window = (-2...2).compactMap { d -> MusicCollection? in
+            let j = i + d
+            guard d != 0, keys.indices.contains(j), keys[j] >= 1000 else { return nil }
+            return music.collections[keys[j] - 1000]
+        }
+        TrackPrefetch.shared.prefetch(window)
+    }
     private func swipeSettled() {
+        TrackPrefetch.shared.settled(hasTracks: collectionSongs != nil)
+        prefetchNeighbours()
         demoToken += 1
         let token = demoToken
         Task { @MainActor in
@@ -1081,8 +1122,21 @@ struct LibraryView: View {
         // t290u: tiles come back first; the un-pushed frames are the close-flight targets
         if zm.pushAnchor != nil {
             cellFrames = cellFrames.merging(zm.pushFrames) { _, unpushed in unpushed }
-            withAnimation(TilePushAway.close) { zm.pushAway = false }
-            withAnimation(TilePushAway.fade) { zm.pushOpacity = 1 }
+            if !TilePushAway.pushOut {
+                // t329u: jump to the pushed-out state with no animation (the grid is still fully covered by the
+                // opaque detail backdrop at this instant, so nothing flashes), then play the return as before
+                var snap = Transaction(); snap.disablesAnimations = true
+                withTransaction(snap) { zm.pushAway = true; zm.pushOpacity = 0 }
+                // the pushed state must be committed (rendered once) before the return starts, else SwiftUI
+                // coalesces true → false into no change and nothing animates
+                DispatchQueue.main.async {
+                    withAnimation(TilePushAway.close) { zm.pushAway = false }
+                    withAnimation(TilePushAway.fade) { zm.pushOpacity = 1 }
+                }
+            } else {
+                withAnimation(TilePushAway.close) { zm.pushAway = false }
+                withAnimation(TilePushAway.fade) { zm.pushOpacity = 1 }
+            }
         }
         // t131u：飞回「当前显示的那张专辑」的格子（实时 frame）
         // t222u：从 mini player 打开 → 飞回 mini 唱片；从格子打开 → 当前专辑格子在屏幕上可见就飞回它，否则飞回 mini 唱片
@@ -1538,6 +1592,9 @@ struct TilePushAway: ViewModifier {
     let key: Int
     /// t327u: back to Cove.X's full push (0.8 × longer screen side); t322u's 0.18 short push looked buggy
     static let factor: CGFloat = 0.8
+    /// t329u: single switch for the push-OUT on open. false = tiles stay put on open (grid blur / dim only);
+    /// the return on close is kept either way (tiles snap invisibly to the pushed state, then spring back).
+    static let pushOut = false
     static let open = Animation.spring(response: 0.36, dampingFraction: 0.88)
     static let close = Animation.spring(response: 0.38, dampingFraction: 0.9)
     static let fade = Animation.easeOut(duration: 0.38)
@@ -2068,5 +2125,71 @@ private struct CardGlass: ViewModifier {
         } else {
             content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
+    }
+}
+
+
+/// t330u: in-memory tracklist cache for detail-page swiping, keyed by collection ID. `full` = library tracks,
+/// replaced by the longer catalog completion when there is one (same rule as upgradeToCatalogTracks).
+/// `--log-prefetch` prints settle → tracks-shown timings.
+@MainActor
+final class TrackPrefetch {
+    static let shared = TrackPrefetch()
+    static let log = ProcessInfo.processInfo.arguments.contains("--log-prefetch")
+    private var cache: [String: [Song]] = [:]
+    private var tasks: [String: Task<[Song], Never>] = [:]
+    private var settleAt: Date?
+    private var pendingPrefetched: Bool?
+
+    func cached(_ c: MusicCollection) -> [Song]? { cache[c.id] }
+    func store(_ c: MusicCollection, _ songs: [Song]) { if !songs.isEmpty { cache[c.id] = songs } }
+
+    /// Not cached: join an in-flight prefetch if there is one, else read the library tracks directly
+    /// (shown at once; the caller then upgrades to the catalog completion, which also fills the cache).
+    func quick(_ c: MusicCollection) async -> [Song] {
+        if let hit = cache[c.id] { return hit }
+        if let task = tasks[c.id] { return await task.value }
+        let songs = (try? await c.songs()) ?? []
+        if case .album(_, catalog: false) = c {} else { store(c, songs) }   // library albums: cached after completion
+        return songs
+    }
+
+    func prefetch(_ window: [MusicCollection]) {
+        let keep = Set(window.map(\.id))
+        for (id, task) in tasks where !keep.contains(id) { task.cancel(); tasks[id] = nil }
+        for c in window where cache[c.id] == nil && tasks[c.id] == nil { _ = start(c) }
+    }
+
+    private func start(_ c: MusicCollection) -> Task<[Song], Never> {
+        let id = c.id
+        let t0 = Date()
+        let task = Task<[Song], Never> { @MainActor in
+            defer { self.tasks[id] = nil }
+            let library = (try? await c.songs()) ?? []
+            guard !Task.isCancelled else { return library }
+            var songs = library
+            if let fuller = await c.catalogSongs(librarySongs: library), fuller.count > library.count { songs = fuller }
+            guard !Task.isCancelled else { return songs }
+            self.store(c, songs)
+            if Self.log { print("[t330u] prefetched \(c.title): \(songs.count) tracks in \(Int(Date().timeIntervalSince(t0) * 1000))ms") }
+            return songs
+        }
+        tasks[id] = task
+        return task
+    }
+
+    // timing probe
+    func pageChanged(prefetched: Bool) { settleAt = nil; pendingPrefetched = prefetched }
+    func settled(hasTracks: Bool) {
+        guard let pre = pendingPrefetched else { return }
+        if hasTracks {
+            if Self.log { print("[t330u] settle → tracks 0ms (\(pre ? "prefetched" : "loaded before settle"))") }
+            pendingPrefetched = nil
+        } else { settleAt = Date() }
+    }
+    func tracksShown() {
+        guard let at = settleAt else { return }   // arrived before the settle: reported by settled()
+        if Self.log { print("[t330u] settle → tracks \(Int(Date().timeIntervalSince(at) * 1000))ms (not prefetched)") }
+        settleAt = nil; pendingPrefetched = nil
     }
 }
