@@ -2081,12 +2081,20 @@ struct LyricsPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onChange(of: timeline.position) { _, p in anchorPos = p; anchorDate = Date() }
-        .onAppear { anchorPos = timeline.position; anchorDate = Date() }
+        // t401u: anchor at the sample's read time (was Date() at delivery / appearance → up to one 250ms sample late,
+        // then a forward correction at the next sample)
+        .onChange(of: timeline.position) { _, p in anchorPos = p; anchorDate = timeline.sampledAt }
+        .onAppear { anchorPos = timeline.position; anchorDate = timeline.sampledAt }
+        // t401u: play / pause re-anchors on a fresh player read. While paused the sample doesn't change, so on resume the
+        // old anchorDate made the extrapolation jump straight to the 0.5s cap until the next sample (lyrics +0.5s early).
+        .onChange(of: music.isPlaying) { _, _ in
+            anchorPos = music.isCurrent(song) ? music.livePlaybackTime : timeline.position
+            anchorDate = Date()
+        }
         // t319u: new track → old lyrics cleared at once, clock re-anchored; the .task below restarts (old one cancelled)
         .onChange(of: song.id) { _, _ in
             result = nil; loadedID = nil; loadFailed = false
-            anchorPos = timeline.position; anchorDate = Date()
+            anchorPos = timeline.position; anchorDate = timeline.sampledAt   // t401u
             boundaryTick &+= 1
         }
         .task(id: "\(song.id.rawValue):\(retryID)") {
@@ -2128,12 +2136,18 @@ struct LyricsPanel: View {
 
     private func synced(_ lines: [LyricLine]) -> some View {
         let current = currentIndex(lines)
+        // t400u: before the first line starts (intro) the playing song had current = -1 → followY 0 (lines stacked from the
+        // top inset), no scale, no blur; at the first timestamp everything switched at once and the lyrics jumped down.
+        // `focus` pre-lays the intro exactly like "line 0 current, nothing sung yet": line 0 already at the 1/3 anchor,
+        // enlarged (KaraokeLine at n = 0 → all glyphs at the unsung 0.5), the rest dimmed + blurred by distance.
+        // When line 0's time arrives only the wipe starts. Timing (`current`) is unchanged.
+        let focus = current < 0 && music.isCurrent(song) && !lines.isEmpty ? 0 : current
         return GeometryReader { geo in
             ZStack(alignment: .top) {
                 VStack(alignment: .center, spacing: Lyrics.lineGap) {
                     ForEach(lines) { line in
-                        let isCurrent = line.id == current
-                        let d = current < 0 ? 0 : abs(line.id - current)
+                        let isCurrent = line.id == focus
+                        let d = focus < 0 ? 0 : abs(line.id - focus)
                         Group {
                             if isCurrent {
                                 KaraokeLine(line: line, end: lineEnd(lines, line.id),
@@ -2159,7 +2173,7 @@ struct LyricsPanel: View {
                         }
                         .scaleEffect(isCurrent ? Lyrics.activeScale : 1, anchor: .center)
                         .animation(Lyrics.scaleSpring, value: isCurrent)
-                        .opacity(isCurrent ? 1 : (manual ? Lyrics.manualOpacity : (current < 0 ? Lyrics.unsungOpacity : Lyrics.dimOpacity)))
+                        .opacity(isCurrent ? 1 : (manual ? Lyrics.manualOpacity : (focus < 0 ? Lyrics.unsungOpacity : Lyrics.dimOpacity)))
                         .blur(radius: manual ? 0 : Lyrics.blur(distance: d))
                         // t252u：同一 followY，离当前行越远 delay 越大 → 上滚时逐行迟一点跟上
                         .offset(y: followY)
@@ -2172,7 +2186,7 @@ struct LyricsPanel: View {
                 .padding(.horizontal, DS.contentInset)
                 .padding(.top, Lyrics.topInset + topExtend)
                 .padding(.bottom, Lyrics.bottomGap)
-                .animation(Lyrics.scroll, value: current)   // 透明度 / 模糊随换行一起走
+                .animation(Lyrics.scroll, value: focus)   // 透明度 / 模糊随换行一起走
                 .frame(maxWidth: .infinity, alignment: .top)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -2217,10 +2231,10 @@ struct LyricsPanel: View {
                 withAnimation(.spring(duration: Lyrics.fling, bounce: 0)) { manualY = clampManual(-240, lines: lines) }
                 dragBase = manualY
             }
-            .onAppear { viewportH = geo.size.height; snapFollow(current, lines: lines, animated: false) }
-            .onChange(of: geo.size.height) { _, h in viewportH = h; snapFollow(current, lines: lines, animated: false) }
-            .onPreferenceChange(LyricHeightKey.self) { lineHeights.merge($0) { _, n in n }; snapFollow(current, lines: lines, animated: false) }
-            .onChange(of: current) { _, i in
+            .onAppear { viewportH = geo.size.height; snapFollow(focus, lines: lines, animated: false) }
+            .onChange(of: geo.size.height) { _, h in viewportH = h; snapFollow(focus, lines: lines, animated: false) }
+            .onPreferenceChange(LyricHeightKey.self) { lineHeights.merge($0) { _, n in n }; snapFollow(focus, lines: lines, animated: false) }
+            .onChange(of: focus) { _, i in   // t400u: follows `focus` (intro → 0), so the first line start no longer moves anything
                 // t269u: while scrolling by hand keep the view still (manualY absorbs the follow change)
                 if manual {
                     let before = followY

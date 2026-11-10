@@ -6,6 +6,9 @@ import SwiftUI
 @MainActor
 final class PlaybackTimeline: ObservableObject {
     @Published var position: TimeInterval = 0
+    /// t401u: wall-clock time the current `position` sample was read from the player (not published). Lyrics anchor
+    /// their extrapolation here instead of at the later SwiftUI onChange delivery / view appearance.
+    var sampledAt = Date()
     @Published var demoElapsed: Double = 0.18 * AppleMusicStore.demoDuration
 }
 
@@ -73,7 +76,7 @@ final class AppleMusicStore: ObservableObject {
     let sleep = SleepTimer()
     private(set) var position: TimeInterval {
         get { timeline.position }
-        set { if timeline.position != newValue { timeline.position = newValue } }
+        set { if timeline.position != newValue { timeline.sampledAt = Date(); timeline.position = newValue } }
     }
     @Published private(set) var duration: TimeInterval = 0
     @Published var errorMessage: String?
