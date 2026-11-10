@@ -2,6 +2,36 @@ import Foundation
 import CryptoKit
 
 /// t287u: lyrics latency trace. `--log-lyrics` prints ms since the last mark (lyrics toggle / album open).
+/// t308u: catalog tracks come back in the storefront's default language (e.g. "Khalil Fong") while the
+/// library header is localized ("方大同"). One display name per artist within an album:
+/// library song's artist > header name when the catalog artist is the catalog album artist > catalog artist.
+enum ArtistNames {
+    /// catalog song ID → display artist (main actor only; written when a catalog tracklist is merged)
+    static var overrides: [String: String] = [:]
+
+    static func display(id: String?, raw: String) -> String {
+        guard let id, let name = overrides[id] else { return raw }
+        return name
+    }
+
+    static func key(_ s: String) -> String {
+        s.folding(options: [.caseInsensitive, .widthInsensitive, .diacriticInsensitive], locale: nil)
+            .filter { !$0.isWhitespace }
+    }
+
+    static func localized(catalog: String, catalogAlbumArtist: String, header: String, library: String?) -> String {
+        if let library, !library.isEmpty { return library }
+        let album = catalogAlbumArtist.trimmingCharacters(in: .whitespaces)
+        guard !header.isEmpty, !album.isEmpty, key(header) != key(album) else { return catalog }
+        if key(catalog) == key(album) { return header }
+        // "Khalil Fong & X" → "方大同 & X"
+        if catalog.range(of: album, options: [.caseInsensitive]) != nil {
+            return catalog.replacingOccurrences(of: album, with: header, options: [.caseInsensitive])
+        }
+        return catalog
+    }
+}
+
 enum LyricsTrace {
     static let on = ProcessInfo.processInfo.arguments.contains("--log-lyrics")
     nonisolated(unsafe) static var t0 = CFAbsoluteTimeGetCurrent()
@@ -73,6 +103,13 @@ public struct LyricsQuery: Sendable {
             with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: #"(?i)\s+(?:feat\.?|ft\.?|featuring)\s+.*$"#,
                                          with: "", options: .regularExpression)
+        // t309u: bare suffixes ("… Live", "… 现场版", "… Remastered 2011") — only if something is left
+        if !LyricsTrace.legacy {
+            let stripped = text.replacingOccurrences(
+                of: #"(?i)\s*(?:[-–—]\s*)?(?:现场版?|演唱会版?|live版|\blive\b(?:\s+version)?|\bremaster(?:ed)?\b(?:\s*\d{4})?|\d{4}\s+remaster(?:ed)?)\s*$"#,
+                with: "", options: .regularExpression)
+            if stripped.contains(where: { $0.isLetter || $0.isNumber }) { text = stripped }
+        }
         return text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -108,7 +145,10 @@ public struct LyricsQuery: Sendable {
             let l = words(x), r = words(y)
             return !l.isEmpty && l == r ? 1 : 0
         }
-        return max(editSimilarity(a, b), ws(a, b), ws(a.components(separatedBy: ",").reversed().joined(separator: " "), b))
+        // t309u: one name containing the other ("Step.Jad" / "step.jad依加"), ≥5 chars
+        let ca = canonical(primaryArtist(a)), cb = canonical(primaryArtist(b))
+        let contains = min(ca.count, cb.count) >= 5 && (ca.contains(cb) || cb.contains(ca)) ? 0.9 : 0
+        return max(editSimilarity(a, b), ws(a, b), ws(a.components(separatedBy: ",").reversed().joined(separator: " "), b), contains)
     }
     static func editSimilarity(_ a: String, _ b: String) -> Double {
         let lhs = Array(canonical(primaryArtist(a))), rhs = Array(canonical(primaryArtist(b)))
@@ -132,10 +172,18 @@ public struct LyricsQuery: Sendable {
     struct Variant: Equatable, Sendable { let title: String; let artist: String }
     var variants: [Variant] {
         let t = Self.clean(title), a = Self.primaryArtist(artist)
-        return [Variant(title: t, artist: a),
+        return ([Variant(title: t, artist: a),
                 Variant(title: Self.simplified(t), artist: Self.simplified(a)),
                 Variant(title: Self.traditional(t), artist: Self.traditional(a))]
+            + (LyricsTrace.legacy ? [] : Self.segments(t).prefix(1).map { Variant(title: $0, artist: a) }))
             .reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+    }
+    /// t309u: "Hey Hey You + Angel vs Devil" → ["Hey Hey You", "Angel vs Devil"] (only when there is a separator)
+    static func segments(_ title: String) -> [String] {
+        let parts = clean(title).components(separatedBy: CharacterSet(charactersIn: "+＋/／|｜&＆"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { canonical($0).count >= 4 }
+        return parts.count >= 2 ? parts : []
     }
     var cacheKey: String { cacheKeys[0] }
     /// t287u: the exact key first, then ±1s neighbours — library and catalog copies of a track differ by
@@ -151,6 +199,44 @@ public struct LyricsQuery: Sendable {
 }
 
 enum LyricsParser {
+    /// t309u: NetEase YRC → enhanced LRC. Line format (go-musicfox internal/lyric/yrc.go, parseLRCStyleYRCLine):
+    /// `[lineStartMs,lineDurMs](wordStartMs,wordDurMs,0)word(…)word…`; JSON lines (`{"t":…,"c":[…]}`) are
+    /// credits and are skipped. Each word becomes `<start>word<end>`, so the wipe holds through gaps between
+    /// words. nil when fewer than `minSyncedLines` timed lines.
+    static func yrcToLRC(_ yrc: String) -> String? {
+        func stamp(_ ms: Double) -> String {
+            let s = max(0, ms) / 1000
+            return String(format: "%02d:%06.3f", Int(s) / 60, s - Double(Int(s) / 60 * 60))
+        }
+        var out: [String] = []
+        for raw in yrc.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("["), let close = line.firstIndex(of: "]") else { continue }
+            let head = line[line.index(after: line.startIndex)..<close].split(separator: ",")
+            guard head.count >= 2, let start = Double(head[0].trimmingCharacters(in: .whitespaces)) else { continue }
+            var rest = line[line.index(after: close)...]
+            var body = ""
+            var last = start
+            while let open = rest.firstIndex(of: "("), let cp = rest[open...].firstIndex(of: ")") {
+                let nums = rest[rest.index(after: open)..<cp].split(separator: ",")
+                let after = rest.index(after: cp)
+                let next = rest[after...].firstIndex(of: "(") ?? rest.endIndex
+                let word = String(rest[after..<next])
+                rest = rest[next...]
+                guard nums.count >= 2, var ws = Double(nums[0].trimmingCharacters(in: .whitespaces)),
+                      let wd = Double(nums[1].trimmingCharacters(in: .whitespaces)), !word.isEmpty else { continue }
+                ws = max(ws, last)                       // keep marks monotonic
+                let we = max(ws, ws + wd)
+                body += "<\(stamp(ws))>\(word)<\(stamp(we))>"
+                last = we
+            }
+            guard !body.isEmpty else { continue }
+            out.append("[\(stamp(start))]" + body)
+        }
+        guard out.count >= LyricsRepository.minSyncedLines else { return nil }
+        return out.joined(separator: "\n")
+    }
+
     /// Existing LRC parsing and character timestamps, moved without changing timing behavior.
     static func parseLRC(_ text: String) -> [LyricLine] {
         let stamp = try! NSRegularExpression(pattern: #"\[(\d{1,3}):(\d{1,2}(?:[\.:]\d{1,3})?)\]"#)
@@ -223,11 +309,20 @@ struct LyricsRecord: Decodable, Sendable {
         // t295u: bilingual titles ("美好的舊時光 In My Heart" for "In My Heart"): containment is accepted only with a
         // matching artist and a duration within 3s
         let contained = !LyricsTrace.legacy && qt != rt && min(qt.count, rt.count) >= 4 && (rt.contains(qt) || qt.contains(rt))
-        guard qt == rt || contained else { return false }
         func within(_ limit: Double) -> Bool {
             guard let expected = query.duration else { return true }
             guard let duration, duration.isFinite, duration > 0 else { return false }
             return abs(duration - expected) <= limit
+        }
+        guard qt == rt || contained else {
+            // t309u: medleys / half-translated titles ("Hey Hey You + Angel vs Devil (Live)" vs
+            // "Hey Hey You + 天使与魔鬼的对话 (Live)"): a shared ≥4-char segment, a real duration within 1.5s,
+            // and the artist (or a different-script alias)
+            guard !LyricsTrace.legacy, query.duration != nil, within(1.5) else { return false }
+            let qs = Set((LyricsQuery.segments(query.title).isEmpty ? [query.title] : LyricsQuery.segments(query.title)).map(LyricsQuery.canonical))
+            let rs = Set((LyricsQuery.segments(trackName).isEmpty ? [trackName] : LyricsQuery.segments(trackName)).map(LyricsQuery.canonical))
+            guard qs.count + rs.count > 2, !qs.isDisjoint(with: rs) else { return false }
+            return LyricsQuery.artistSimilarity(artistName, query.artist) >= 0.85 || Self.differentScripts(artistName, query.artist)
         }
         if LyricsQuery.artistSimilarity(artistName, query.artist) >= 0.85 { return within(contained ? min(3, tolerance) : tolerance) }
         // alias path needs a real duration on both sides
@@ -289,6 +384,7 @@ public actor LyricsHTTPClient {
     static let longTimeout: Double = 8
     static let hedgeAfter: Double = 1.5
     static let foregroundRetries = 1, backgroundRetries = 2
+    static let rateLimitExtraRetries = 1
     private let transport: Transport
     private let sleep: Sleeper
     private var active = 0
@@ -331,7 +427,8 @@ public actor LyricsHTTPClient {
 
     private func perform(_ request: URLRequest, foreground: Bool, label: String) async throws -> (Data, Int) {
         let retries = foreground ? Self.foregroundRetries : Self.backgroundRetries
-        for attempt in 0...retries {
+        var limited = 0
+        for attempt in 0...(retries + Self.rateLimitExtraRetries) {
             try Task.checkCancellation()
             var retryAfter: Double = 0
             do {
@@ -360,8 +457,15 @@ public actor LyricsHTTPClient {
                 } else if case Failure.status(let status) = error {
                     retryable = status == 429 || (500...599).contains(status)
                 } else { retryable = false }
-                guard retryable, attempt < retries else { throw error }
-                let delay = foreground ? max(0.3, min(retryAfter, 2)) : max(0.5 * pow(2, Double(attempt)), retryAfter)
+                let rateLimited: Bool
+                if case .status(429)? = error as? Failure { rateLimited = true } else { rateLimited = false }
+                if rateLimited { limited += 1 }
+                // t309u: HTTP 429 gets its own back-off (1s, 2s… or Retry-After, ±20% jitter) and one extra attempt
+                guard retryable, attempt < retries + (rateLimited ? Self.rateLimitExtraRetries : 0) else { throw error }
+                let jitter = Double.random(in: 0.8...1.2)
+                let delay = rateLimited
+                    ? (foreground ? min(3, max(1, retryAfter)) : max(pow(2, Double(limited - 1)), retryAfter)) * jitter
+                    : foreground ? max(0.3, min(retryAfter, 2)) : max(0.5 * pow(2, Double(attempt)), retryAfter)
                 print("[lyrics] retry \(attempt + 1)/\(retries) after \(delay)s: \(error.localizedDescription)")
                 try await sleep(delay)
             }
@@ -514,6 +618,19 @@ public actor LyricsRepository {
         return try await client.request(request, foreground: foreground)
     }
 
+    /// t309u: POST https://interface3.music.163.com/api/song/lyric/v1 (form, no cookies) → lrc / klyric / yrc
+    private static func lyricV1(_ id: Int, client: LyricsHTTPClient, foreground: Bool) async throws -> (Data, Int) {
+        var request = URLRequest(url: URL(string: "https://interface3.music.163.com/api/song/lyric/v1")!,
+                                 timeoutInterval: LyricsHTTPClient.longTimeout)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("Vinyl/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue("https://music.163.com/", forHTTPHeaderField: "Referer")
+        request.httpShouldHandleCookies = false
+        request.httpBody = "id=\(id)&cp=false&tv=0&lv=0&rv=0&kv=0&yv=0&ytv=0&yrv=0".data(using: .utf8)
+        return try await client.request(request, foreground: foreground)
+    }
+
     private static func lrclib(_ path: String, _ items: [URLQueryItem],
                                client: LyricsHTTPClient, foreground: Bool) async throws -> Data? {
         let (data, status) = try await request("https://lrclib.net", "/api/" + path, items, client: client, foreground: foreground)
@@ -546,6 +663,8 @@ public actor LyricsRepository {
     private static func isSynced(_ f: LyricsFetch) -> Bool { if case .synced = f.result { return true }; return false }
     /// t295u: a synced answer with only a few lines (seen: NetEase 4 lines vs LRCLIB 38) is a fragment, not lyrics
     static let minSyncedLines = 8
+    static let yrcSource = "NetEase YRC"
+    static func isYRC(_ f: LyricsFetch) -> Bool { f.source == yrcSource && isFullSynced(f) }
     private static func isFullSynced(_ f: LyricsFetch) -> Bool {
         if case .synced(let l) = f.result { return l.count >= minSyncedLines }; return false
     }
@@ -645,9 +764,14 @@ public actor LyricsRepository {
                 }
             }
             var best: [Leg: LyricsFetch] = [:], failure: Error?, graceArmed = false
+            func pick() -> LyricsFetch? {
+                if let n = best[.netease], isFullSynced(n) { return n }
+                if let l = best[.lrclib] { return l }
+                return best[.netease]
+            }
             while let item = try await group.next() {
                 guard let answer = item else {          // grace window over
-                    if let n = best[.netease], isFullSynced(n) { group.cancelAll(); LyricsTrace.log("race: NetEase (LRCLIB >300ms late)"); return n }
+                    if let p = pick(), isSynced(p) { group.cancelAll(); LyricsTrace.log("race: \(p.source) (other leg >300ms late)"); return p }
                     continue
                 }
                 let (leg, result) = answer
@@ -660,16 +784,17 @@ public actor LyricsRepository {
                     failure = e
                     print("[lyrics] \(leg == .lrclib ? "LRCLIB" : "NetEase") failed: \(query.title) — \(e.localizedDescription)")
                 }
-                if let l = best[.lrclib], isSynced(l) { group.cancelAll(); return l }
+                // t309u: word-timed NetEase (YRC) wins outright; LRCLIB synced now waits ≤ preferenceGrace for it
+                if let n = best[.netease], isYRC(n) { group.cancelAll(); return n }
+                if LyricsTrace.legacy, let l = best[.lrclib], isSynced(l) { group.cancelAll(); return l }
                 if pending == 0 { group.cancelAll(); break }
-                if let n = best[.netease], isFullSynced(n), !graceArmed {
+                let lrclibSynced = best[.lrclib].map(isSynced) ?? false
+                if (lrclibSynced || (best[.netease].map(isFullSynced) ?? false)), !graceArmed {
                     graceArmed = true
                     group.addTask { try? await Task.sleep(for: .seconds(preferenceGrace)); return nil }
                 }
             }
-            if let n = best[.netease], isFullSynced(n) { return n }
-            if let l = best[.lrclib] { return l }
-            if let n = best[.netease] { return n }
+            if let p = pick() { return p }
             // Only all-successful empty lookups can become a three-day negative cache.
             if let failure { throw failure }
             return LyricsFetch(result: .none, source: "none", recordID: nil, matchedDuration: nil)
@@ -699,6 +824,7 @@ public actor LyricsRepository {
         let code: Int
         let lrc: Text?
         let klyric: Text?
+        let yrc: Text?
         let nolyric: Bool?
         let uncollected: Bool?
         struct Text: Decodable { let lyric: String? }
@@ -740,15 +866,15 @@ public actor LyricsRepository {
             }
             for song in songs.prefix(4) where checked.insert(song.id).inserted {
                 do {
-                    let (data, status) = try await request(host, "/api/song/lyric",
-                        [.init(name: "id", value: String(song.id)), .init(name: "lv", value: "-1"),
-                         .init(name: "kv", value: "-1"), .init(name: "tv", value: "-1")], client: client, foreground: foreground)
+                    // t309u: the v1 endpoint also carries YRC (word-level timings) when NetEase has it
+                    let (data, status) = try await lyricV1(song.id, client: client, foreground: foreground)
                     guard status == 200 else { throw LyricsHTTPClient.Failure.status(status) }
                     let response = try JSONDecoder().decode(NetEaseLyrics.self, from: data)
                     guard response.code == 200 else { throw LyricsHTTPClient.Failure.invalidResponse }
                     if response.nolyric == true || response.uncollected == true { LyricsTrace.why("\(query.title): NetEase \(song.id) nolyric/uncollected"); continue }
                     let enhanced = response.klyric?.lyric.flatMap { $0.contains("<") ? $0 : nil }
-                    let text = enhanced ?? response.lrc?.lyric
+                    let yrc = LyricsTrace.legacy ? nil : response.yrc?.lyric.flatMap(LyricsParser.yrcToLRC)
+                    let text = yrc ?? enhanced ?? response.lrc?.lyric
                     let plain = text.flatMap { raw -> String? in
                         guard LyricsParser.parseLRC(raw).isEmpty else { return nil }
                         let body = raw.replacingOccurrences(
@@ -762,7 +888,7 @@ public actor LyricsRepository {
                         duration: song.duration / 1000, instrumental: nil,
                         plainLyrics: plain,
                         syncedLyrics: text)
-                    if let value = hit(record, source: "NetEase") { return value }
+                    if let value = hit(record, source: yrc != nil ? yrcSource : "NetEase") { return value }
                 } catch {
                     if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
                     failure = error

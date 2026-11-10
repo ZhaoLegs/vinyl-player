@@ -267,4 +267,58 @@ final class LyricsCoreTests: XCTestCase {
         let lines = LyricsParser.parseLRC("[offset:500]\n[00:10.00]a\n[00:20.00]b")
         XCTAssertEqual(lines.map(\.time), [9.5, 19.5])
     }
+
+    func testArtistNamesOneLanguagePerAlbum() {
+        // 未来 / 方大同 → catalog "Wonderland / Khalil Fong"
+        XCTAssertEqual(ArtistNames.localized(catalog: "Khalil Fong", catalogAlbumArtist: "Khalil Fong", header: "方大同", library: nil), "方大同")
+        XCTAssertEqual(ArtistNames.localized(catalog: "Khalil Fong", catalogAlbumArtist: "Khalil Fong", header: "方大同", library: "方大同"), "方大同")
+        XCTAssertEqual(ArtistNames.localized(catalog: "Khalil Fong & Faye Wong", catalogAlbumArtist: "Khalil Fong", header: "方大同", library: nil), "方大同 & Faye Wong")
+        XCTAssertEqual(ArtistNames.localized(catalog: "Someone Else", catalogAlbumArtist: "Khalil Fong", header: "方大同", library: nil), "Someone Else")
+        XCTAssertEqual(ArtistNames.localized(catalog: "方大同", catalogAlbumArtist: "方大同", header: "方大同", library: nil), "方大同")
+        ArtistNames.overrides["1"] = "方大同"
+        XCTAssertEqual(ArtistNames.display(id: "1", raw: "Khalil Fong"), "方大同")
+        XCTAssertEqual(ArtistNames.display(id: "2", raw: "Khalil Fong"), "Khalil Fong")
+        ArtistNames.overrides = [:]
+    }
+
+    func testYRCBecomesWordMarksWithGaps() {
+        let yrc = (0..<8).map { k in "[\(k * 4000),3000](\(k * 4000),500,0)你(\(k * 4000 + 1000),500,0)好" }
+            .joined(separator: "\n")
+        let lrc = LyricsParser.yrcToLRC(#"{"t":0,"c":[{"tx":"作词: "}]}"# + "\n" + yrc)
+        XCTAssertNotNil(lrc)
+        let lines = LyricsParser.parseLRC(lrc!)
+        XCTAssertEqual(lines.count, 8)
+        XCTAssertEqual(lines[1].text, "你好")
+        XCTAssertEqual(lines[1].time, 4, accuracy: 0.001)
+        // start/end of each word: 你 4.0–4.5, gap held at char 1 until 好 starts at 5.0
+        XCTAssertEqual(lines[1].marks?.map(\.char), [0, 1, 1, 2])
+        XCTAssertEqual(lines[1].marks?.map(\.time) ?? [], [4, 4.5, 5, 5.5])
+        XCTAssertNil(LyricsParser.yrcToLRC("[0,100](0,100,0)a"))   // fragment
+    }
+
+    func testMedleySegmentAndLiveSuffix() {
+        let q = LyricsQuery(title: "Hey Hey You + Angel vs Devil (Live)", artist: "Tanya Chua", album: nil, duration: 335)
+        let ne = LyricsRecord(id: 1, trackName: "Hey Hey You + 天使与魔鬼的对话 (Live)", artistName: "蔡健雅", albumName: nil,
+                              duration: 335.2, instrumental: nil, plainLyrics: nil, syncedLyrics: nil)
+        XCTAssertTrue(ne.matches(q))
+        let studio = LyricsRecord(id: 2, trackName: "Hey Hey You", artistName: "蔡健雅", albumName: nil,
+                                  duration: 162, instrumental: nil, plainLyrics: nil, syncedLyrics: nil)
+        XCTAssertFalse(studio.matches(q))
+        XCTAssertTrue(q.variants.contains { $0.title == "Hey Hey You" })
+        XCTAssertEqual(LyricsQuery.clean("后来 现场版"), "后来")
+        XCTAssertEqual(LyricsQuery.clean("Yesterday Remastered 2009"), "Yesterday")
+        XCTAssertEqual(LyricsQuery.clean("Live"), "Live")
+    }
+
+    func testRateLimitBacksOffAndRetries() async throws {
+        let stub = HTTPStub { request in
+            if request.url!.host == "music.163.com" { return (200, #"{"code":200,"result":{"songs":[]}}"#) }
+            return (429, "{}")
+        }
+        let client = await stub.client()
+        do { _ = try await client.request(URLRequest(url: URL(string: "https://lrclib.net/api/get")!), foreground: true) }
+        catch {}
+        let n = await stub.requests.count
+        XCTAssertEqual(n, 1 + LyricsHTTPClient.foregroundRetries + LyricsHTTPClient.rateLimitExtraRetries)
+    }
 }

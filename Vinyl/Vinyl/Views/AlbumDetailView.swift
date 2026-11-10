@@ -750,7 +750,7 @@ struct AlbumDetailView: View {
             }
             if let url = song.artistURL {
                 Button { openURL(url) } label: {
-                    Label { Text("前往艺人"); Text(song.artistName) } icon: { Image(systemName: "music.microphone") }
+                    Label { Text("前往艺人"); Text(ArtistNames.display(id: song.id.rawValue, raw: song.artistName)) } icon: { Image(systemName: "music.microphone") }
                 }
             }
         }
@@ -775,6 +775,12 @@ struct AlbumDetailView: View {
                 }
             } label: {
                 Label("睡眠定时", systemImage: "moon.zzz")
+            }
+            // t309u: 更多 › 歌词 › 歌词偏移 (moves to Settings later)
+            Menu {
+                LyricsOffsetMenu()
+            } label: {
+                Label("歌词", systemImage: "quote.bubble")
             }
         }
         if let url = c.artistURL {
@@ -1121,7 +1127,7 @@ final class TrackRows: ObservableObject {
             return TrackRowModel(song: song, index: index,
                                  side: index == 0 ? "A" : (index == half && songs.count > 1 ? "B" : ""),
                                  time: musicTime(song.duration ?? 0),
-                                 title: "\(song.artistName) - \(song.title)",
+                                 title: "\(ArtistNames.display(id: song.id.rawValue, raw: song.artistName)) - \(song.title)",
                                  playable: song.playParameters != nil)
         }
     }
@@ -1182,8 +1188,8 @@ private struct DetailWaveform: View {
                             Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
                         },
                         seek: { music.seek(to: $0 * music.duration) }, duration: music.duration,
-                        nowPlayingLabel: music.currentArtist.isEmpty ? music.currentTitle
-                            : "\(music.currentTitle) · \(music.currentArtist)",
+                        nowPlayingLabel: music.currentArtistDisplay.isEmpty ? music.currentTitle
+                            : "\(music.currentTitle) · \(music.currentArtistDisplay)",
                         labelPulse: landed ? 1 : 0)
         } else if collection != nil, !albumIsPlaying {
             let first = songs?.first { $0.playParameters != nil }
@@ -1950,8 +1956,41 @@ enum LyricsTiming {
         guard playing else { return anchorPos }
         return anchorPos + min(maxExtrapolate, max(0, date.timeIntervalSince(anchorDate)))
     }
-    static var wipeLead: Double { legacy ? 0 : lead }
-    static var switchLead: Double { legacy ? 0.15 : lead + lineLead }
+    /// t309u: user offset (更多 › 歌词 › 歌词偏移), ±1000ms in 50ms steps, UserDefaults; + = lyrics earlier
+    static let offsetKey = "lyricsOffsetMs"
+    static let offsetRange = -1000...1000, offsetStep = 50
+    static func clampOffset(_ ms: Int) -> Int {
+        min(offsetRange.upperBound, max(offsetRange.lowerBound, Int((Double(ms) / Double(offsetStep)).rounded()) * offsetStep))
+    }
+    static var userOffset: Double { Double(clampOffset(UserDefaults.standard.integer(forKey: offsetKey))) / 1000 }
+    static func offsetLabel(_ ms: Int) -> String {
+        ms == 0 ? "0 ms" : ms > 0 ? "提前 \(ms) ms" : "延后 \(-ms) ms"
+    }
+
+    static var wipeLead: Double { legacy ? 0 : lead + userOffset }
+    static var switchLead: Double { legacy ? 0.15 : lead + lineLead + userOffset }
+}
+
+/// t309u: global lyrics offset control. Self-contained (own @AppStorage) so it can move into the Settings sheet as is.
+struct LyricsOffsetMenu: View {
+    @AppStorage(LyricsTiming.offsetKey) private var ms = 0
+    var body: some View {
+        Menu {
+            Section(LyricsTiming.offsetLabel(ms)) {
+                Button("提前 \(LyricsTiming.offsetStep) ms", systemImage: "plus") { ms = LyricsTiming.clampOffset(ms + LyricsTiming.offsetStep) }
+                    .disabled(ms >= LyricsTiming.offsetRange.upperBound)
+                    .menuActionDismissBehavior(.disabled)
+                Button("延后 \(LyricsTiming.offsetStep) ms", systemImage: "minus") { ms = LyricsTiming.clampOffset(ms - LyricsTiming.offsetStep) }
+                    .disabled(ms <= LyricsTiming.offsetRange.lowerBound)
+                    .menuActionDismissBehavior(.disabled)
+            }
+            Section {
+                Button("恢复为 0", systemImage: "arrow.counterclockwise") { ms = 0 }.disabled(ms == 0)
+            }
+        } label: {
+            Label { Text("歌词偏移"); Text(LyricsTiming.offsetLabel(ms)) } icon: { Image(systemName: "timer") }
+        }
+    }
 }
 
 /// 当前行：灰字底 + 逐字黑色。用同一段 Text 拼接（同字重 600），换行 / 居中与普通行完全一致，

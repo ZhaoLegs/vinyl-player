@@ -197,6 +197,9 @@ final class AppleMusicStore: ObservableObject {
     /// 这首歌是否为正在播放（或暂停中的）当前曲目。
     /// 资料库 Song 与播放队列条目的 ID 可能不同（资料库 ID vs 曲库 ID），
     /// 所以先比 ID，再退回比「标题 + 艺人」。
+    /// t308u: the artist to show for the current track (localized via the album's tracklist merge)
+    var currentArtistDisplay: String { ArtistNames.display(id: currentSongID?.rawValue, raw: currentArtist) }
+
     func isCurrent(_ song: Song) -> Bool {
         guard hasCurrentTrack else { return false }
         if let id = currentSongID, id == song.id { return true }
@@ -976,14 +979,75 @@ extension MusicCollection {
             print("\(tag) -> no catalog album")
             return nil
         }
-        var tracks = try? await found.with(.tracks).tracks
-        var songs: [Song] = []
-        while let batch = tracks {
-            songs.append(contentsOf: batch.compactMap { if case .song(let s) = $0 { return s }; return nil })
-            tracks = batch.hasNextBatch ? (try? await batch.nextBatch()) : nil
+        var songs = await Self.localizedTracks(found, tag: tag) ?? []
+        if songs.isEmpty {
+            var tracks = try? await found.with(.tracks).tracks
+            while let batch = tracks {
+                songs.append(contentsOf: batch.compactMap { if case .song(let s) = $0 { return s }; return nil })
+                tracks = batch.hasNextBatch ? (try? await batch.nextBatch()) : nil
+            }
         }
         print("\(tag) -> catalog \(found.id.rawValue) \(found.title) / \(found.artistName): \(songs.count) tracks")
+        guard !songs.isEmpty else { return nil }
+        await Self.localizeArtists(songs, catalogAlbumArtist: found.artistName, header: album.artistName,
+                                   librarySongs: librarySongs, tag: tag)
+        return songs
+    }
+
+    /// t308u: MusicKit's catalog requests use the storefront's default language (no request here forces en/US,
+    /// but a US storefront answers in English). Ask for the album's tracks with `l=` = the system's first
+    /// preferred language; the API falls back to the storefront default if it doesn't support it.
+    /// nil = failed (caller uses MusicKit's .with(.tracks)).
+    private static func localizedTracks(_ album: Album, tag: String) async -> [Song]? {
+        guard let cc = try? await MusicDataRequest.currentCountryCode else { return nil }
+        let lang = Locale.preferredLanguages.first ?? Locale.current.identifier
+        var path: String? = "/v1/catalog/\(cc)/albums/\(album.id.rawValue)/tracks?limit=100"
+        var songs: [Song] = []
+        var pages = 0
+        while let p = path, pages < 5, var comps = URLComponents(string: "https://api.music.apple.com" + p) {
+            var items = comps.queryItems ?? []
+            if !items.contains(where: { $0.name == "l" }) { items.append(URLQueryItem(name: "l", value: lang)) }
+            comps.queryItems = items
+            guard let url = comps.url else { return nil }
+            do {
+                let r = try await MusicDataRequest(urlRequest: URLRequest(url: url)).response()
+                guard r.urlResponse.statusCode == 200 else {
+                    print("\(tag) [t308u] tracks l=\(lang) HTTP \(r.urlResponse.statusCode)"); return nil
+                }
+                let page = try JSONDecoder().decode(MusicItemCollection<Song>.self, from: r.data)
+                songs += page
+                let obj = (try? JSONSerialization.jsonObject(with: r.data)) as? [String: Any]
+                path = obj?["next"] as? String
+                pages += 1
+            } catch {
+                print("\(tag) [t308u] tracks l=\(lang) failed: \(error)"); return nil
+            }
+        }
+        print("\(tag) [t308u] storefront \(cc) l=\(lang): \(songs.count) tracks, artists \(Set(songs.map(\.artistName)).sorted())")
         return songs.isEmpty ? nil : songs
+    }
+
+    /// t308u: library song's artist (matched by catalogId, else title + duration) > header name when the
+    /// catalog artist is the catalog album artist > catalog artist. Registered in `ArtistNames.overrides`.
+    @MainActor
+    private static func localizeArtists(_ songs: [Song], catalogAlbumArtist: String, header: String,
+                                        librarySongs: [Song], tag: String) {
+        var byCatalogID: [String: String] = [:]
+        for s in librarySongs {
+            guard let pp = s.playParameters, let data = try? JSONEncoder().encode(pp),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let cid = (obj["catalogId"] as? String) ?? (obj["purchasedId"] as? String), !cid.isEmpty else { continue }
+            byCatalogID[cid] = s.artistName
+        }
+        for song in songs {
+            let library = byCatalogID[song.id.rawValue] ?? librarySongs.first {
+                norm($0.title) == norm(song.title) && abs(($0.duration ?? 0) - (song.duration ?? 0)) < 2
+            }?.artistName
+            let name = ArtistNames.localized(catalog: song.artistName, catalogAlbumArtist: catalogAlbumArtist,
+                                             header: header, library: library)
+            if name != song.artistName { ArtistNames.overrides[song.id.rawValue] = name }
+            print("\(tag) [t308u] row \(song.title): catalog '\(song.artistName)'\(library.map { ", library '\($0)'" } ?? "") → '\(name)'")
+        }
     }
 
     /// Simplified/Traditional-, case-, width- and whitespace/punctuation-insensitive key.

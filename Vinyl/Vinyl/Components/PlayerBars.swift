@@ -122,7 +122,7 @@ struct MiniPlayer: View {
     /// 没有正在播放的曲目、且不是演示模式时才用默认条目
     private var sug: MiniSuggestion? { music.hasCurrentTrack || DemoMode.enabled ? nil : suggestion }
     private var title: String { music.hasCurrentTrack ? music.currentTitle : (sug?.title ?? music.demoMiniTitle) }
-    private var artist: String { music.hasCurrentTrack ? music.currentArtist : (sug?.artist ?? AlbumData.artist) }
+    private var artist: String { music.hasCurrentTrack ? music.currentArtistDisplay : (sug?.artist ?? AlbumData.artist) }
     private var durationValue: Double { music.hasCurrentTrack ? music.duration : (sug.map { $0.duration } ?? AppleMusicStore.demoDuration) }
     /// 只在换歌时变化（时长后到不会触发动画）
     private var trackKey: String { title + "\u{1}" + artist }
