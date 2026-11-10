@@ -299,8 +299,9 @@ struct AlbumDetailView: View {
         // t169u：详情页打开 / 横滑换专辑 → 预取本专辑歌词（正在播放 / 第一首优先，其余随后）
         .task(id: "\(isPresented)-" + (songs ?? []).map(\.id.rawValue).joined(separator: ",")) {
             guard isPresented, let songs, !songs.isEmpty else { return }
-            let first = lyricsSong.map { [$0] } ?? []
-            LyricsStore.shared.prefetch(first + songs.filter { $0.id != first.first?.id }, reason: "album")
+            // t287u: the lyrics song, then the tracks after it (next up first), then the ones before it
+            let i = lyricsSong.flatMap { s in songs.firstIndex(where: { $0.id == s.id }) } ?? 0
+            LyricsStore.shared.prefetch(Array(songs[i...]) + Array(songs[..<i]), reason: "album")
         }
         .environment(\.detailTheme, theme)
         // t172u：换专辑时主题色 0.25s 交叉过渡
@@ -1430,11 +1431,11 @@ enum Lyrics {
     static let flip: Double = 0.5          // 封套 Y 轴翻转：spring 0.5s，bounce 0
     static let fadeOut: Double = 0.2       // 曲目表淡出
     static let fadeIn: Double = 0.25       // 歌词淡入
-    static let fadeInDelay: Double = merge // t245u：随合拢时长 0.3 → 0.45；t162u：歌词在翻转阶段（合拢 0.3s 之后）淡入
+    static let fadeInDelay: Double = 0.1   // t287u：0.45 → 0.1（歌词不再等合拢结束才淡入；淡入 0.25s 不变）。原：merge // t245u：随合拢时长 0.3 → 0.45；t162u：歌词在翻转阶段（合拢 0.3s 之后）淡入
     static let anchor = UnitPoint(x: 0.5, y: 1.0 / 3)   // 当前行滚到列表高度 1/3 处
-    static let lineGap: CGFloat = 24      // t248u：16 → 24pt
+    static let lineGap: CGFloat = 28      // t289u：24 → 28pt；t248u：16 → 24pt
     // t240u：Apple Music 风格
-    static let fontSize: CGFloat = 19     // t248u：16 → 19pt
+    static let fontSize: CGFloat = 22     // t289u：19 → 22pt；t248u：16 → 19pt
     static let activeScale: CGFloat = 1.12
     static let dimOpacity: Double = 0.42     // 非当前行（t243u：0.35 → 0.42，6–8 行可读）
     static let unsungOpacity: Double = 0.5   // 当前行未唱部分
@@ -1451,9 +1452,9 @@ enum Lyrics {
         min(staggerMax, Double(max(0, distance)) * staggerStep)
     }
     /// 未量到高度时的估算（19pt 粗体单行 ≈ 26，加一点行距）
-    static let estimatedLineH: CGFloat = 28
+    static let estimatedLineH: CGFloat = 32   // t289u：22pt 粗体单行 ≈ 30
     /// 两侧平分放大余量：当前行居中放大后仍不出界，且换行位置与非当前行一致（不重排）
-    static let scaleRoom: CGFloat = 44    // t248u：40 → 44（19pt 行宽 ×1.12 仍在内容宽内，不重排）
+    static let scaleRoom: CGFloat = 44    // t248u：40 → 44。与字号无关：行宽 w = 内容宽 − 44，1.12w ≤ 内容宽 需 44 ≥ 0.107 × 内容宽（≈362pt → 39pt），22pt 仍不裁切
     /// t243u：非当前行模糊 1.5 / 2 / 2.5pt（最多 2.5）
     /// t247u：再降 → 0.6 / 0.9 / 1.2pt（最多 1.2）
     static func blur(distance d: Int) -> CGFloat { d <= 0 ? 0 : min(1.2, 0.6 + CGFloat(d - 1) * 0.3) }
@@ -1484,26 +1485,35 @@ final class LyricsStore {
     /// 统计（用于日志）
     private(set) var stats = (requested: 0, cached: 0, fetched: 0, found: 0, notFound: 0, failed: 0)
 
-    private func key(_ title: String, _ artist: String, duration: Double?) -> String {
+    /// t287u: whole seconds, plus ±1s neighbours on lookup (library vs catalog copies differ by fractions of a second)
+    private func keys(_ title: String, _ artist: String, duration: Double?) -> [String] {
         // 首帧同步读取只做轻量字符串处理；搜索用的简繁转换交给后台仓库。
-        [title.lowercased(), artist.lowercased(), duration.map(String.init(describing:)) ?? "unknown"]
-            .joined(separator: "\u{1F}")
+        let head = title.lowercased() + "\u{1F}" + artist.lowercased() + "\u{1F}"
+        guard let duration, duration.isFinite else { return [head + "unknown"] }
+        let d = Int(duration.rounded())
+        return [d, d - 1, d + 1].map { head + String($0) }
     }
 
     /// 同步查内存（歌词面板第一帧直接用，命中就不出现 loading）
     func peek(_ title: String, _ artist: String, duration: Double?) -> LyricsResult? {
-        let key = key(title, artist, duration: duration)
-        guard let entry = memory[key], entry.valid(at: Date()) else { memory[key] = nil; return nil }
-        return entry.value.result
+        for key in keys(title, artist, duration: duration) {
+            if let entry = memory[key] {
+                if entry.valid(at: Date()) { return entry.value.result }
+                memory[key] = nil
+            }
+        }
+        return nil
     }
 
-    func lyrics(title: String, artist: String, album: String?, duration: Double?) async throws -> LyricsResult {
+    /// foreground = the lyrics panel is waiting on it (never queues behind prefetch)
+    func lyrics(title: String, artist: String, album: String?, duration: Double?,
+                foreground: Bool = true) async throws -> LyricsResult {
         let query = LyricsQuery(title: title, artist: artist, album: album, duration: duration)
         stats.requested += 1
         if let hit = peek(title, artist, duration: duration) { stats.cached += 1; return hit }
         do {
-            let entry = try await LyricsRepository.shared.loadEntry(query)
-            memory[key(title, artist, duration: duration)] = entry
+            let entry = try await LyricsRepository.shared.loadEntry(query, foreground: foreground)
+            memory[keys(title, artist, duration: duration)[0]] = entry
             stats.fetched += 1
             if entry.value.isFound { stats.found += 1 } else { stats.notFound += 1 }
             return entry.value.result
@@ -1526,7 +1536,8 @@ final class LyricsStore {
                     let s = todo[next]; next += 1
                     group.addTask { @MainActor in
                         _ = try? await LyricsStore.shared.lyrics(title: s.title, artist: s.artistName,
-                                                                album: s.albumTitle, duration: s.duration)
+                                                                album: s.albumTitle, duration: s.duration,
+                                                                foreground: false)
                     }
                 }
                 for _ in 0..<Self.maxConcurrent { add() }
@@ -1582,7 +1593,7 @@ struct LyricsPanel: View {
         @Environment(\.detailTheme) private var theme
         var body: some View {
         Text("暂无歌词")
-            .font(.system(size: 15))   // t249u：空状态固定 15pt regular（不跟歌词字号）
+            .font(.system(size: 17))   // t289u：15 → 17pt；t249u：空状态固定 regular（不跟歌词字号）
             .foregroundStyle(theme.dim)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.bottom, 80)
@@ -1615,7 +1626,7 @@ struct LyricsPanel: View {
                         retryID = UUID()
                     } label: {
                         Text("歌词加载失败，点按重试")
-                            .font(.system(size: 15))   // t255u: match empty-state 15pt
+                            .font(.system(size: 17))   // t255u / t289u: match empty-state 17pt
                             .foregroundStyle(theme.dim)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .contentShape(Rectangle())
@@ -1635,7 +1646,9 @@ struct LyricsPanel: View {
         .task(id: "\(song.id.rawValue):\(retryID)") {
             let requestID = song.id
             loadFailed = false
+            LyricsTrace.log("panel task \(song.title)")
             if let hit = LyricsStore.shared.peek(song.title, song.artistName, duration: song.duration) {
+                LyricsTrace.log("panel peek HIT \(song.title) → \(LyricsTrace.kind(hit))")
                 result = hit; loadedID = requestID; return
             }
             do {
@@ -1643,9 +1656,11 @@ struct LyricsPanel: View {
                                                            album: song.albumTitle ?? albumTitle,
                                                            duration: song.duration)
                 guard !Task.isCancelled else { return }
+                LyricsTrace.log("panel result \(song.title) → \(LyricsTrace.kind(r))")
                 withAnimation(.easeOut(duration: 0.2)) { result = r; loadedID = requestID }
             } catch {
                 guard !Task.isCancelled else { return }
+                LyricsTrace.log("panel FAILED \(song.title): \(error.localizedDescription)")
                 result = nil; loadedID = requestID; loadFailed = true
             }
         }
@@ -1714,6 +1729,16 @@ struct LyricsPanel: View {
             .gesture(manualDrag(lines))
             .modifier(TopProgressiveBlurMask(height: topExtend + LyricsTopFade.height))
             .onDisappear { if barHidden { barHidden = false; onManual(false) } }
+            .onAppear { LyricsTrace.log("synced view on screen (\(lines.count) lines)") }
+            .task(id: song.id) {
+                // t289u diagnostic (--log-lyrics): is the panel song recognised as the playing one, and what drives the wipe
+                guard LyricsTrace.on else { return }
+                while !Task.isCancelled {
+                    let c = currentIndex(lines)
+                    LyricsTrace.log("karaoke song=\(song.title)[\(song.id.rawValue)] isCurrent=\(music.isCurrent(song)) playing=\(music.isPlaying) pos=\(String(format: "%.2f", timeline.position)) line=\(c) manual=\(manual) marks=\(c >= 0 ? (lines[c].marks?.count ?? 0) : -1) nowID=\(music.currentSongID?.rawValue ?? "nil") nowCat=\(music.currentSongCatalogID?.rawValue ?? "nil")")
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
             .task {
                 // diagnostic: --debug-lyrics-drag simulates a manual fling 7s after lyrics appear
                 guard ProcessInfo.processInfo.arguments.contains("--debug-lyrics-drag") else { return }

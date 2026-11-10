@@ -20,6 +20,8 @@ struct VinylApp: App {
         // backgroundEffect / backgroundColor —— 那会把系统原生 Liquid Glass
         // 降格成一层平涂模糊。系统 TabView 自己会渲染折射玻璃胶囊。
         TabBarAppearance.configure()
+        LyricsTrace.wipeIfCold()
+        if LyricsTrace.on { setbuf(stdout, nil) }
     }
 
     var body: some Scene {

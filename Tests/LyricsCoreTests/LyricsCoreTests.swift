@@ -46,7 +46,7 @@ final class LyricsCoreTests: XCTestCase {
         HTTPStub { $0.url!.path == "/api/get" ? (404, "{}") : (200, "[]") }
     }
 
-    // Regression: -1005 must throw, retry exactly three times, and never enter either cache.
+    // Regression: -1005 must throw, retry (t287u: foreground = once, after 0.3s), and never enter either cache.
     func testConnectionFailureRetriesThreeTimesAndTapRetryCanRecover() async throws {
         let stub = HTTPStub { _ in (200, Self.hit) }
         await stub.fail(true)
@@ -55,14 +55,14 @@ final class LyricsCoreTests: XCTestCase {
         catch { XCTAssertTrue(error is URLError) }
         let requests = await stub.requests
         let waits = await stub.waits
-        XCTAssertEqual(requests.count, 4)
-        XCTAssertEqual(waits, [0.5, 1, 2])
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(waits, [0.3])
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
         await stub.fail(false)
         let recovered = try await repository.load(query)
         XCTAssertTrue(recovered.isFound)
         let count = await stub.requests.count
-        XCTAssertEqual(count, 5)
+        XCTAssertEqual(count, 3)
     }
 
     // Regression: server failures cannot masquerade as a cacheable absence.
@@ -74,7 +74,7 @@ final class LyricsCoreTests: XCTestCase {
             catch LyricsHTTPClient.Failure.status(503) {}
         }
         let count = await stub.requests.count
-        XCTAssertEqual(count, 8)
+        XCTAssertEqual(count, 4)   // t287u: 2 loads × (1 try + 1 foreground retry)
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
     }
 
@@ -129,7 +129,7 @@ final class LyricsCoreTests: XCTestCase {
         XCTAssertEqual(value.source, "LRCLIB/search")
         XCTAssertEqual(value.result, .plain("static text\nsecond line"))
         let count = await stub.requests.count
-        XCTAssertEqual(count, 2)
+        XCTAssertEqual(count, 3)   // t287u: 1 get, then both searches in parallel
     }
 
     func testChineseFallbackRejectsCoverAndUsesSameLRCParserWithoutCookies() async throws {

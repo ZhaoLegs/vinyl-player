@@ -132,16 +132,32 @@ struct LibraryView: View {
                     print("[t221u] home titles: " + music.collections.map(\.title).joined(separator: " | "))
                     guard let i = music.collections.firstIndex(where: { $0.title.lowercased().contains(q) }) else { return }
                     try? await Task.sleep(for: .seconds(1))
+                    // t287u: this task re-runs when playback bumps homePageRevision, and a cancelled `try? sleep`
+                    // falls straight through — fire the diagnostic open only once (it used to open + flip twice)
+                    guard !DebugOnce.opened else { return }
+                    DebugOnce.opened = true
                     origin = cellFrames[1000 + i] ?? origin
                     targetKey = 1000 + i
                     // t240u：--debug-play 时打开即播放（截播放态歌词）；默认不播放
                     let debugPlay = ProcessInfo.processInfo.arguments.contains("--debug-play")
+                    LyricsTrace.mark("debug-open \(music.collections[i].title)")
                     openCollection(music.collections[i], startPlayback: debugPlay)
                     // t231u：诊断 —— 加 --debug-lyrics 时落定后翻到歌词页（截图顶部过渡用）
                     // 不随 .task 取消（开始播放会刷新 homePageRevision → 本 task 被取消重跑）
                     if ProcessInfo.processInfo.arguments.contains("--debug-lyrics") { Task { @MainActor in
                         try? await Task.sleep(for: .seconds(2.5))
                         toggleArtwork()
+                        // t287u: --debug-lyrics-bench — 8s later, time lookups for tracks 2–4 one by one (what a track switch waits for)
+                        if ProcessInfo.processInfo.arguments.contains("--debug-lyrics-bench"),
+                           let songs = try? await music.collections[i].songs() {
+                            try? await Task.sleep(for: .seconds(8))
+                            for s in songs.dropFirst().prefix(3) {
+                                let t = CFAbsoluteTimeGetCurrent()
+                                let r = try? await LyricsStore.shared.lyrics(title: s.title, artist: s.artistName,
+                                                                            album: s.albumTitle, duration: s.duration)
+                                print("[t287] BENCH \(s.title): \(LyricsTrace.ms(since: t))ms → \(r.map(LyricsTrace.kind) ?? "FAILED")")
+                            }
+                        }
                         if debugPlay {
                             try? await Task.sleep(for: .seconds(2))
                             if music.duration > 60 { music.seek(to: 50) }
@@ -1082,6 +1098,7 @@ struct LibraryView: View {
             let turn: Animation? = animate ? .spring(duration: Lyrics.flip, bounce: 0) : nil
             let merge: Animation? = animate ? .spring(duration: Lyrics.merge, bounce: 0) : nil
             if flip < 90 {
+                LyricsTrace.mark("lyrics toggle (fade-in delay \(Lyrics.fadeInDelay)s + \(Lyrics.fadeIn)s)")
                 lyricsMode = true
                 if pull > 0.01 {
                     withAnimation(merge) { pull = 0 }
@@ -1693,3 +1710,5 @@ struct LibrarySearchSheet: View {
         songs = songHits.filter { seenS.insert($0.0.id.rawValue).inserted }
     }
 }
+
+@MainActor enum DebugOnce { static var opened = false }

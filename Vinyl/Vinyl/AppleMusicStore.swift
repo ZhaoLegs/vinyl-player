@@ -62,6 +62,11 @@ final class AppleMusicStore: ObservableObject {
     @Published private(set) var currentSongID: MusicItemID?
     /// 队列条目自身的 ID（有时与 Song ID 不同）
     @Published private(set) var currentCatalogID: MusicItemID?
+    /// t289u: catalog id of the playing *library* song (from its playParameters). The detail page swaps a library
+    /// album's tracks for the full catalog tracklist (t284u), whose ids — and often localized artist names — differ
+    /// from the library song that is playing, so without this the lyrics panel never saw its song as current:
+    /// no active line, no wipe, no follow.
+    @Published private(set) var currentSongCatalogID: MusicItemID?
     let timeline = PlaybackTimeline()
     let sleep = SleepTimer()
     private(set) var position: TimeInterval {
@@ -194,6 +199,7 @@ final class AppleMusicStore: ObservableObject {
         guard hasCurrentTrack else { return false }
         if let id = currentSongID, id == song.id { return true }
         if let id = currentCatalogID, id == song.id { return true }
+        if let id = currentSongCatalogID, id == song.id { return true }
         return song.title == currentTitle && (currentArtist.isEmpty || song.artistName == currentArtist)
     }
 
@@ -582,6 +588,7 @@ final class AppleMusicStore: ObservableObject {
             if currentArtwork != nil { currentArtwork = nil }
             if currentSongID != nil { currentSongID = nil }
             if currentCatalogID != nil { currentCatalogID = nil }
+            if currentSongCatalogID != nil { currentSongCatalogID = nil }
             position = 0
             if duration != 0 { duration = 0 }
             if isPlaying { isPlaying = false }
@@ -605,7 +612,17 @@ final class AppleMusicStore: ObservableObject {
             songID = nil
             songDuration = 0
         }
-        if currentSongID != songID { currentSongID = songID }
+        if currentSongID != songID {
+            currentSongID = songID
+            var cid: MusicItemID?
+            if case .song(let song) = entry?.item, let pp = song.playParameters,
+               let data = try? JSONEncoder().encode(pp),
+               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let raw = (obj["catalogId"] as? String) ?? (obj["purchasedId"] as? String), !raw.isEmpty {
+                cid = MusicItemID(raw)
+            }
+            if currentSongCatalogID != cid { currentSongCatalogID = cid }
+        }
         if duration != songDuration { duration = songDuration }
         let time = player.playbackTime
         position = time.isFinite ? max(0, time) : 0
