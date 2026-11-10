@@ -332,4 +332,31 @@ final class LyricsCoreTests: XCTestCase {
         XCTAssertEqual(LyricsTarget.index(count: z.count, isCurrent: { z[$0] == "z2" }, playable: { _ in true }), 1)
         XCTAssertNil(LyricsTarget.index(count: 0, isCurrent: { _ in true }, playable: { _ in true }))
     }
+
+    /// t339u: credit lines at the top are dropped; a real lyric with ':' later on survives
+    func testCreditLinesAreFilteredOnlyNearTheStart() {
+        let lrc = """
+        [00:00.00]夜曲 - 周杰伦
+        [00:00.50]作词：方文山
+        [00:01.00]作曲 : 周杰伦
+        [00:01.50]编曲：林迈可
+        [00:02.00]Producer: Someone
+        [00:02.50]Mixed by Someone Else
+        [00:20.00]一群嗜血的蚂蚁 被腐肉所吸引
+        [00:24.00]我面无表情 看孤独的风景
+        [00:28.00]第三行
+        [00:32.00]第四行
+        [00:36.00]第五行
+        [00:40.00]第六行
+        [00:44.00]第七行
+        [00:48.00]第八行
+        [00:52.00]他说：作曲：其实是歌词
+        """
+        let lines = LyricsParser.parseLRC(lrc)
+        XCTAssertEqual(lines.first?.text, "一群嗜血的蚂蚁 被腐肉所吸引")
+        XCTAssertEqual(lines.count, 9)
+        XCTAssertEqual(lines.last?.text, "他说：作曲：其实是歌词")
+        XCTAssertEqual(lines.map(\.id), Array(0..<9))
+    }
+
 }

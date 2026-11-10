@@ -54,6 +54,10 @@ struct AlbumDetailView: View {
     var onSwipeSettled: () -> Void = {}
     /// t214u：点「相似专辑」→ 走与横滑相同的换专辑流程（封套滑出 / 滑入、标题逐词浮起、自动播第一首）
     var onJump: (MusicCollection) -> Void = { _ in }
+    /// t341u: the album that is playing and its page offset from the one on screen (nil offset = not in the pager)
+    var playingPage: () -> (collection: MusicCollection, offset: Int?)? = { nil }
+    /// t340u: the cover play button started this album (keeps the home's now-playing album in sync)
+    var onPlayedAlbum: (MusicCollection) -> Void = { _ in }
 
     @State private var pageWidth: CGFloat = 402
     /// 封套跟手的横向位移（pt）
@@ -76,6 +80,8 @@ struct AlbumDetailView: View {
     /// t328u: swiping to another album hides the rows at the page change and holds them until the swipe settles,
     /// then the same TrackRowRise entrance replays (no per-frame triggering)
     @State private var rowsHold = false
+    /// t337u: album-swipe entrance = horizontal slide-in (first open keeps the vertical rise)
+    @State private var rowsSlide = false
     /// t247u：封套（封面）下缘 / 歌词区顶 —— 歌词滚动区与顶部渐变模糊向上延伸到封面下缘，不再在半路硬切
     @State private var sleeveBottomY: CGFloat = 0
     @State private var lyricsTopY: CGFloat = 0
@@ -96,6 +102,9 @@ struct AlbumDetailView: View {
     @State private var swipeBusy = false
     @State private var swipeBase: CGFloat = 0
     @State private var swipeSettle = 0
+    /// t342u: far return to the playing album = quick cross-fade of the cover instead of paging through
+    @State private var jumpFade: Double = 1
+    @State private var returnTick = 0
     @State private var favoriteBounce = 0
     /// t172u：专辑主题色（MusicKit Artwork 颜色优先，位图兜底；近白 / 无彩色 → 默认黑）
     @State private var theme = DetailTheme.standard
@@ -169,6 +178,21 @@ struct AlbumDetailView: View {
                         .onChange(of: spin.degrees, initial: true) { _, angle in onSpinAngle(angle) }
                 }
                 .frame(width: DS.sleeve, height: DS.sleeve)
+                // t340u: native glass play button on the cover's bottom-right — only for an album that isn't the one
+                // playing; fades in with the top bar after the cover lands (chromeIn) and out for the playing album
+                .overlay(alignment: .bottomTrailing) {
+                    if collection != nil {
+                        GlassCircleButton(systemImage: "play.fill", accessibilityText: "播放这张专辑", ink: theme.ink) {
+                            guard let songs, let first = songs.first(where: { $0.playParameters != nil }) else { return }
+                            if let collection { onPlayedAlbum(collection) }
+                            Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
+                        }
+                        .padding(10)
+                        .opacity(coverPlayVisible ? chromeIn : 0)
+                        .animation(.easeOut(duration: 0.2), value: coverPlayVisible)
+                        .allowsHitTesting(coverPlayVisible && chromeIn > 0.5)
+                    }
+                }
                 .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom, closing: closing,
                                          landed: landed || reduceMotion, miniOwner: miniOwner))
                 .background(
@@ -179,8 +203,10 @@ struct AlbumDetailView: View {
                 )
                 // t131u：只在封面区横滑翻专辑（位移在 SleeveFrameKey 测量之后，不影响转场终点）
                 .offset(x: swipeX)
+                .opacity(jumpFade)
                 .simultaneousGesture(albumSwipe, including: landed && !closing ? .all : .subviews)
                 .sensoryFeedback(.impact(weight: .light), trigger: swipeSettle)
+                .sensoryFeedback(.impact(weight: .light), trigger: returnTick)   // t341u
                 .onAppear {
                     guard ProcessInfo.processInfo.arguments.contains("--demo-swipe") else { return }
                     Task { @MainActor in
@@ -323,7 +349,7 @@ struct AlbumDetailView: View {
             // t156u：关闭完成后把逐行时间轴归零，下次打开从头错峰
             guard !shown else { return }
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { reveal = 0; barIn = 0; titleIn = 0; chromeIn = 0; listIn = 0; rowsShown = false; rowsLive = false; rowsHold = false }
+            withTransaction(t) { reveal = 0; barIn = 0; titleIn = 0; chromeIn = 0; listIn = 0; rowsShown = false; rowsLive = false; rowsHold = false; rowsSlide = false }
         }
         .task {
             guard demoLevels == nil,
@@ -504,7 +530,7 @@ struct AlbumDetailView: View {
             swipeX = out
         } completion: {
             // t328u: new album's rows start hidden; they rise once the swipe settles
-            do { var h = Transaction(); h.disablesAnimations = true; withTransaction(h) { rowsHold = true; rowsLive = false } }
+            do { var h = Transaction(); h.disablesAnimations = true; withTransaction(h) { rowsHold = true; rowsSlide = true; rowsLive = false } }
             onPage(dir)
             // t154u：新专辑的曲目表同样逐行出现（随新封套滑入开始）
             startReveal(delay: 0.08)
@@ -521,16 +547,42 @@ struct AlbumDetailView: View {
         }
     }
 
-    /// t214u：与 commitSwipe 同一套动画，只是目标专辑由外部给定
-    private func commitJump(to c: MusicCollection) {
+    /// t341u/t342u: now-playing bubble tap → back to the playing album. ≤ 3 pages away: the normal swipe animation
+    /// straight to it (direction of the offset); farther or outside the pager: 0.12s fade out → jump → 0.18s fade in,
+    /// never paging through the albums in between. Already on the playing album: nothing.
+    static let returnSwipePages = 3
+    private func returnToPlaying() {
+        guard landed, !closing, !swipeBusy, !albumIsPlaying, let target = playingPage(),
+              target.collection.id != collection?.id else { return }
+        returnTick += 1
+        if let off = target.offset, off != 0, abs(off) <= Self.returnSwipePages {
+            commitJump(to: target.collection, dir: off > 0 ? 1 : -1)
+            return
+        }
         swipeBusy = true
-        let dir = 1
+        withAnimation(.easeOut(duration: 0.12), completionCriteria: .logicallyComplete) { jumpFade = 0 } completion: {
+            do { var h = Transaction(); h.disablesAnimations = true; withTransaction(h) { rowsHold = true; rowsSlide = true; rowsLive = false } }
+            onJump(target.collection)
+            startReveal(delay: 0.08)
+            withAnimation(.easeOut(duration: 0.18), completionCriteria: .logicallyComplete) { jumpFade = 1 } completion: {
+                swipeBusy = false
+                swipeSettle += 1
+                rowsHold = false; goLiveIfReady()
+                onSwipeSettled()
+            }
+        }
+    }
+    private var onReturnToPlaying: () -> Void { { returnToPlaying() } }
+
+    /// t214u：与 commitSwipe 同一套动画，只是目标专辑由外部给定
+    private func commitJump(to c: MusicCollection, dir: Int = 1) {
+        swipeBusy = true
         let out = -CGFloat(dir) * (pageWidth + 40)
         withAnimation(.easeIn(duration: 0.16), completionCriteria: .logicallyComplete) {
             swipeX = out
         } completion: {
             // t328u: new album's rows start hidden; they rise once the swipe settles
-            do { var h = Transaction(); h.disablesAnimations = true; withTransaction(h) { rowsHold = true; rowsLive = false } }
+            do { var h = Transaction(); h.disablesAnimations = true; withTransaction(h) { rowsHold = true; rowsSlide = true; rowsLive = false } }
             onJump(c)
             startReveal(delay: 0.08)
             var t = Transaction(); t.disablesAnimations = true
@@ -654,6 +706,12 @@ struct AlbumDetailView: View {
         return spinBase + ramped
     }
 
+    /// t340u: cover play button — an album with playable tracks that is not the current one
+    private var coverPlayVisible: Bool {
+        guard collection != nil, !closing, let songs, songs.contains(where: { $0.playParameters != nil }) else { return false }
+        return !albumIsPlaying
+    }
+
     /// t223u：正在播放的是不是这张专辑（只看本专辑曲目里有没有当前曲目）
     private var albumIsPlaying: Bool {
         guard collection != nil, music.hasCurrentTrack, let songs else { return false }
@@ -663,7 +721,8 @@ struct AlbumDetailView: View {
     private var waveform: some View {
         let _ = TracklistProfile.count("DetailWaveform.builder")
         return DetailWaveform(collection: collection, songs: songs,
-                              albumIsPlaying: albumIsPlaying, demoLevels: demoLevels, landed: landed)
+                              albumIsPlaying: albumIsPlaying, demoLevels: demoLevels, landed: landed,
+                              onReturnToPlaying: onReturnToPlaying)
     }
 
     /// 内置演示没有音频文件；若包内放入 demo-audio.m4a/.wav，则用 AVAssetReader 实测 RMS。
@@ -693,7 +752,7 @@ struct AlbumDetailView: View {
                             // 行身份 = 歌曲 ID（稳定），切歌时只有两行的颜色 / 图标变化，列表本身不重建
                             ForEach(trackRows.rows, id: \.id) { row in
                                 realRow(row, in: songs)
-                                    .modifier(TrackRowRise(index: row.index + 1, shown: rowsLive))
+                                    .modifier(TrackRowRise(index: row.index + 1, shown: rowsLive, slide: rowsSlide))
                             }
                         }
                         .padding(.horizontal, DS.contentInset)
@@ -745,7 +804,7 @@ struct AlbumDetailView: View {
         }
         .padding(.horizontal, DS.contentInset)
         .padding(.bottom, TL.headerGap)
-        .modifier(TrackRowRise(index: 0, shown: rowsLive))
+        .modifier(TrackRowRise(index: 0, shown: rowsLive, slide: rowsSlide))
     }
 
     /// 歌曲菜单：喜欢 / 共享 → 前往专辑 / 艺人。
@@ -870,7 +929,8 @@ struct AlbumDetailView: View {
                     .lineLimit(1)
                 Group {
                     if current {
-                        EqualizerGlyph(playing: playing, color: ink, height: TL.glyph * 0.85)
+                        // t338u: neutral grey = the standard theme's secondary row grey (#7A787B), never the theme / accent tint
+                        EqualizerGlyph(playing: playing, color: DetailTheme.standard.mid, height: TL.glyph * 0.85)
                     } else {
                         Image(systemName: "play.fill")
                             .font(.system(size: TL.glyph, weight: .regular))
@@ -1053,6 +1113,10 @@ enum Reveal {
 struct TrackRowRise: ViewModifier {
     let index: Int
     let shown: Bool
+    /// t337u: after an album swipe rows slide in from the right (32pt → 0, same easeOut 0.3s / 35ms stagger,
+    /// first row first); the Side / Time / Tracklist header (index 0) only fades
+    var slide: Bool = false
+    static let slideX: CGFloat = 32
     static let rise: CGFloat = 12
     static let duration: Double = 0.3
     static let stagger: Double = 0.035
@@ -1064,7 +1128,8 @@ struct TrackRowRise: ViewModifier {
         let step = max(0, index - 1)   // header (0) and first row (1) start together
         content
             .opacity(shown ? 1 : 0)
-            .offset(y: shown ? 0 : Self.rise)
+            .offset(x: shown || !slide || index == 0 ? 0 : Self.slideX,
+                    y: shown || slide ? 0 : Self.rise)
             .animation(animates ? .easeOut(duration: Self.duration).delay(Double(min(step, Self.maxSteps)) * Self.stagger) : nil,
                        value: shown)
     }
@@ -1193,6 +1258,8 @@ private struct DetailWaveform: View {
     let demoLevels: [Double]?
     /// t306u: shown (in the scrub-bubble style) when the cover has landed and on a tap of the bar
     let landed: Bool
+    /// t341u: now-playing bubble tap → back to the playing album
+    var onReturnToPlaying: (() -> Void)? = nil
     var body: some View { bar }
     @ViewBuilder private var bar: some View {
         let _ = TracklistProfile.count("DetailWaveform.body")
@@ -1211,7 +1278,8 @@ private struct DetailWaveform: View {
                         seek: { music.seek(to: $0 * music.duration) }, duration: music.duration,
                         nowPlayingLabel: music.currentArtistDisplay.isEmpty ? music.currentTitle
                             : "\(music.currentTitle) · \(music.currentArtistDisplay)",
-                        labelPulse: landed ? 1 : 0)
+                        labelPulse: landed ? 1 : 0,
+                        onLabelTap: onReturnToPlaying)
         } else if collection != nil, !albumIsPlaying {
             let first = songs?.first { $0.playParameters != nil }
             WaveformBar(progress: 0,

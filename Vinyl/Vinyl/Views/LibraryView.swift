@@ -802,7 +802,9 @@ struct LibraryView: View {
             onSwipeBegan: { swipeBegan() },
             onPage: { dir in pageAlbum(dir) },
             onSwipeSettled: { swipeSettled() },
-            onJump: { c in jumpToAlbum(c) }
+            onJump: { c in jumpToAlbum(c) },
+            playingPage: { playingPage() },
+            onPlayedAlbum: { c in nowPlayingCollection = c }
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // t203u：详情层（含顶部专辑名 / 艺人）只在打开 / 关闭转场期间渲染，关闭后绝不残留在首页顶部
@@ -967,6 +969,15 @@ struct LibraryView: View {
         guard let i = keys.firstIndex(of: currentPageKey) else { return nil }
         let j = i + dir
         return keys.indices.contains(j) ? keys[j] : nil
+    }
+    /// t341u: the playing album (home's now-playing collection) and its page offset from the page on screen
+    private func playingPage() -> (collection: MusicCollection, offset: Int?)? {
+        guard music.hasCurrentTrack, let c = nowPlayingCollection else { return nil }
+        let keys = pageKeys
+        guard let here = keys.firstIndex(of: currentPageKey),
+              let i = music.collections.firstIndex(where: { $0.id == c.id }),
+              let there = keys.firstIndex(of: 1000 + i) else { return (c, nil) }
+        return (c, there - here)
     }
     /// 开始横滑：唱片先收回封套
     private func swipeBegan() {

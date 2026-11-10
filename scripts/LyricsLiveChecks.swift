@@ -57,7 +57,7 @@ enum LyricsLiveChecks {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("vinyl-hit20-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let repository = LyricsRepository(directory: directory)
-        var hits = 0, synced = 0, yrc = 0
+        var hits = 0, synced = 0, yrc = 0, credits = 0
         for (n, (title, artist, album, duration)) in songs.enumerated() {
             let t = Date()
             do {
@@ -71,10 +71,13 @@ enum LyricsLiveChecks {
                 if value.isFound { hits += 1 }
                 if value.source == "NetEase YRC" { yrc += 1 }
                 print("HIT20 #\(n + 1) \(value.isFound ? "HIT " : "MISS") \(title) — \(artist) → \(kind) via \(value.source) in \(Int(Date().timeIntervalSince(t) * 1000))ms")
+                let removed = LyricsCredits.log.drain()
+                credits += removed.count
+                for r in removed { print("HIT20   credit removed: \(r)") }
             } catch {
                 print("HIT20 #\(n + 1) FAIL \(title) — \(artist) → \(error.localizedDescription) in \(Int(Date().timeIntervalSince(t) * 1000))ms")
             }
         }
-        print("HIT20 TOTAL \(hits)/\(songs.count) found, \(synced) synced, \(yrc) word-timed (YRC)")
+        print("HIT20 TOTAL \(hits)/\(songs.count) found, \(synced) synced, \(yrc) word-timed (YRC), \(credits) credit lines removed")
     }
 }

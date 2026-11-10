@@ -208,6 +208,62 @@ public struct LyricsQuery: Sendable {
     }
 }
 
+/// t339u: credit / metadata lines at the top of LRC / YRC / plain lyrics (NetEase and LRCLIB):
+/// 作词 / 作曲 / 编曲 / 制作人 / 混音 / 母带 / 和声 / 吉他 / 录音 / 监制 / 出品 / OP / SP … with ':' or '：',
+/// "Lyrics by / Composed by / Arranger / Producer …", NetEase JSON credit lines ('{…'), and a leading
+/// "Title - Artist" line. Only the top of the file is examined: the first `scanLines` lines plus any longer
+/// contiguous credit block, so a real lyric containing ':' further down survives.
+public enum LyricsCredits {
+    static let scanLines = 8
+    private static let label = try! NSRegularExpression(pattern:
+        #"^(?:作词|作詞|作曲|编曲|編曲|词|詞|曲|制作人|製作人|制作|製作|混音|母带|母帶|和声|和聲|吉他|贝斯|貝斯|鼓|键盘|鍵盤|弦乐|弦樂|录音|錄音|监制|監製|出品|统筹|統籌|企划|企劃|发行|發行|原唱|配唱|人声|人聲|OP|SP|ISRC|lyrics|lyricist|composer|composed|music|arranger|arranged|arrangement|producer|produced|production|mix|mixed|mixing|master|mastered|mastering|recorded|recording|vocal|guitar|bass|drums|keyboard|strings)[^:：\n]{0,10}[:：]"#,
+        options: [.caseInsensitive])
+    private static let byLine = try! NSRegularExpression(pattern:
+        #"^(?:lyrics|music|words|composed|arranged|produced|mixed|mastered|recorded|written)\s+by\b"#, options: [.caseInsensitive])
+    private static let titleArtist = try! NSRegularExpression(pattern: #"^.{1,80}\s[-–—]\s.{1,80}$"#)
+
+    /// collects removed lines for the live check (`--hit20`)
+    public final class Log: @unchecked Sendable {
+        private let lock = NSLock(); private var lines: [String] = []
+        func add(_ s: String) { lock.lock(); lines.append(s); lock.unlock() }
+        public func drain() -> [String] { lock.lock(); defer { lines = []; lock.unlock() }; return lines }
+    }
+    public static let log = Log()
+
+    static func isCredit(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("{") { return true }
+        let r = NSRange(t.startIndex..., in: t)
+        return label.firstMatch(in: t, range: r) != nil || byLine.firstMatch(in: t, range: r) != nil
+    }
+    static func isTitleArtist(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespaces)
+        return titleArtist.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) != nil
+    }
+
+    /// `items` must be in time order.
+    static func strip<T>(_ items: [T], text: (T) -> String, time: (T) -> Double?) -> [T] {
+        var out: [T] = []
+        var lastWasCredit = false
+        var sawCredit = items.prefix(scanLines).contains { isCredit(text($0)) }
+        for (i, item) in items.enumerated() {
+            let s = text(item)
+            guard i < scanLines || lastWasCredit else { out.append(item); continue }
+            if isCredit(s) { log.add(s); lastWasCredit = true; sawCredit = true; continue }
+            // leading "Title - Artist": the first kept line, at ~0s or heading a credit block
+            if out.isEmpty, isTitleArtist(s), (time(item).map { $0 < 1 } ?? false) || sawCredit {
+                log.add(s); lastWasCredit = true; continue
+            }
+            lastWasCredit = false
+            out.append(item)
+        }
+        return out
+    }
+    static func stripPlain(_ text: String) -> String {
+        strip(text.components(separatedBy: .newlines), text: { $0 }, time: { _ in nil }).joined(separator: "\n")
+    }
+}
+
 enum LyricsParser {
     /// t309u: NetEase YRC → enhanced LRC. Line format (go-musicfox internal/lyric/yrc.go, parseLRCStyleYRCLine):
     /// `[lineStartMs,lineDurMs](wordStartMs,wordDurMs,0)word(…)word…`; JSON lines (`{"t":…,"c":[…]}`) are
@@ -284,6 +340,8 @@ enum LyricsParser {
                 out.append((mm * 60 + ss, body, marks.isEmpty ? nil : marks))
             }
         }
+        out.sort { $0.0 < $1.0 }
+        out = LyricsCredits.strip(out, text: { $0.1 }, time: { $0.0 })
         if shift != 0 {
             out = out.map { (max(0, $0.0 + shift), $0.1, $0.2?.map { .init(char: $0.char, time: max(0, $0.time + shift)) }) }
         }
@@ -360,7 +418,7 @@ struct LyricsRecord: Decodable, Sendable {
             let lines = LyricsParser.parseLRC(syncedLyrics)
             if !lines.isEmpty { return .synced(lines) }
         }
-        if let text = plainLyrics?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+        if let text = plainLyrics.map(LyricsCredits.stripPlain)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
             return .plain(text)
         }
         if instrumental == true { return LyricsResult.none }
@@ -534,11 +592,13 @@ public actor LyricsHTTPClient {
 }
 
 struct LyricsCacheEntry: Codable, Sendable {
+    /// t339u: 3 → 4 so entries cached before the credit filter are fetched and parsed again
+    static let current = 4
     let version: Int
     let savedAt: Date
     let value: LyricsFetch
     func valid(at now: Date) -> Bool {
-        version == 3 && (value.isFound || now.timeIntervalSince(savedAt) < LyricsRepository.notFoundTTL)
+        version == Self.current && (value.isFound || now.timeIntervalSince(savedAt) < LyricsRepository.notFoundTTL)
     }
 }
 
@@ -617,7 +677,7 @@ public actor LyricsRepository {
             // (memory + disk + LyricsStore via notification); it is used the next time the panel loads
             let file0 = files[0]
             let value = try await Self.fetch(query, client: client, foreground: foreground, upgrade: { better in
-                let entry = LyricsCacheEntry(version: 3, savedAt: now(), value: better)
+                let entry = LyricsCacheEntry(version: LyricsCacheEntry.current, savedAt: now(), value: better)
                 try? JSONEncoder().encode(entry).write(to: file0, options: .atomic)
                 await self.storeUpgrade(key, entry)
                 LyricsTrace.log("repo upgrade \(query.title) → \(better.source)")
@@ -627,7 +687,7 @@ public actor LyricsRepository {
                                                 userInfo: info.compactMapValues { $0 })
             })
             LyricsTrace.log("repo fetch done \(query.title) via \(value.source) in \(LyricsTrace.ms(since: t))ms")
-            let entry = LyricsCacheEntry(version: 3, savedAt: now(), value: value)
+            let entry = LyricsCacheEntry(version: LyricsCacheEntry.current, savedAt: now(), value: value)
             do {
                 try FileManager.default.createDirectory(at: files[0].deletingLastPathComponent(), withIntermediateDirectories: true)
                 try JSONEncoder().encode(entry).write(to: files[0], options: .atomic)

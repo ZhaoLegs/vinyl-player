@@ -253,6 +253,8 @@ struct WaveformBar: View {
     /// shown when `labelPulse` changes (cover landed) and on a tap of the bar; stays (t317u)
     var nowPlayingLabel: String? = nil
     var labelPulse: Int = 0
+    /// t341u: tap on the now-playing bubble (detail page: back to the playing album); nil = bubble ignores touches
+    var onLabelTap: (() -> Void)? = nil
     @State private var labelVisible = false
     @State private var globalMinX: CGFloat = 0
     /// t318u: both bubbles sit on the screen's vertical centre line (not the bars' centre, which the play button offsets)
@@ -341,11 +343,13 @@ struct WaveformBar: View {
                     // t314u: hug the text (glass on the padded text itself); the outer fixed-width frame only
                     // caps the proposal at the bar width and centres it — tail "…" only past the cap
                     .modifier(BubbleGlass())
+                    .contentShape(Capsule())
+                    .onTapGesture { onLabelTap?() }
                     .frame(width: max(80, barsFrame.width))
                     .position(x: screenCenterX, y: -(42 * 0.035 / 2 + 12 + 12))
                     .transaction { $0.animation = nil }
                     .transition(.opacity)
-                    .allowsHitTesting(false)
+                    .allowsHitTesting(onLabelTap != nil)
             }
         }
         .animation(.easeOut(duration: 0.2), value: labelVisible)
