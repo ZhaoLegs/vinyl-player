@@ -208,13 +208,8 @@ struct AlbumDetailView: View {
                                                value: geo.frame(in: .global))
                     }
                 )
-                // t354u: neighbour covers one page away, only while the onboarding nudge runs
-                .background { hintPeeks }
-                // t131u：只在封面区横滑翻专辑（位移在 SleeveFrameKey 测量之后，不影响转场终点）
-                .offset(x: swipeX)
-                .opacity(jumpFade)
-                // t355u: attached after the pager offset / jump fade, so the buttons stay fixed on screen while the
-                // cover swipes or nudges; they act on the settled album (play visibility switches on settle)
+                // t363u (reverses t355u): attached BEFORE the pager offset / jump fade → each album page carries its own
+                // two buttons; they swipe out with the cover and the incoming album's buttons swipe in with its cover
                 // t340u / t346u / t349u / t352u: native glass buttons at the sleeve/vinyl frame's bottom-left, side by side
                 // (8pt): lyrics (left; same flip as a cover tap, filled glyph on the lyrics side; all albums) and play
                 // (right; only for an album that isn't the one playing). Both fade in with the top bar after the cover
@@ -250,7 +245,16 @@ struct AlbumDetailView: View {
                     .frame(width: r.width, height: r.height, alignment: .bottomLeading)
                     .offset(x: r.minX, y: r.minY)
                 }
-                .onChange(of: coverPlayVisible, initial: true) { _, v in if !swipeBusy { playShown = v } }
+                // t354u: neighbour covers one page away, only while the onboarding nudge runs
+                .background { hintPeeks }
+                // t131u：只在封面区横滑翻专辑（位移在 SleeveFrameKey 测量之后，不影响转场终点）
+                .offset(x: swipeX)
+                .opacity(jumpFade)
+                // t363u: per page — the new album decides at once (it is off-screen while the page changes → no fade then)
+                .onChange(of: coverPlayVisible, initial: true) { _, v in
+                    if swipeBusy { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { playShown = v } }
+                    else { playShown = v }
+                }
                 .onChange(of: swipeSettle) { _, _ in playShown = coverPlayVisible }
                 .simultaneousGesture(albumSwipe, including: landed && !closing ? .all : .subviews)
                 .sensoryFeedback(.impact(weight: .light), trigger: swipeSettle)
@@ -642,6 +646,8 @@ struct AlbumDetailView: View {
                     if let n = neighbour(dir) {
                         SleeveCutout(coverName: n.coverName, artwork: n.artwork, official: n.official)
                             .equatable()
+                            // t363u: the neighbour page's own buttons (cover side, play unless it is the playing album)
+                            .overlay(alignment: .topLeading) { peekButtons(n) }
                             .offset(x: CGFloat(dir) * w)
                     }
                 }
@@ -658,6 +664,22 @@ struct AlbumDetailView: View {
         guard !swipeBusy, swipeX != 0, abs(swipeX) <= (pageWidth > 0 ? pageWidth : 402) * SwipeHint.swing + 1 else { return }
         hintLog("recentre from swipeX \(swipeX) (\(why))")
         withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.9)) { swipeX = 0 }
+    }
+
+    /// t363u: static copy of the cover button row for a hint-peek neighbour (its sleeve is shown merged, pull 0)
+    private func peekButtons(_ n: PagerPeek) -> some View {
+        let r = SleeveArtwork.sleeveRect(pageWidth: pageWidth > 0 ? pageWidth : 402, pull: 0, hold: false)
+        return HStack(spacing: CoverButtons.spacing) {
+            GlassCircleButton(systemImage: "quote.bubble", accessibilityText: "歌词", ink: theme.ink) {}
+            if n.hasCollection {
+                GlassCircleButton(systemImage: "play.fill", accessibilityText: "播放这张专辑", ink: theme.ink) {}
+                    .opacity(n.isPlaying ? 0 : 1)
+            }
+        }
+        .opacity(chromeIn)
+        .padding(CoverButtons.inset)
+        .frame(width: r.width, height: r.height, alignment: .bottomLeading)
+        .offset(x: r.minX, y: r.minY)
     }
 
     private func hintLog(_ s: @autoclosure () -> String) { if SwipeHint.log { print("[t354u] hints: \(s())") } }
@@ -2446,6 +2468,8 @@ struct PagerPeek {
     let coverName: String
     let artwork: Artwork?
     let official: OfficialCoverQuery?
+    var hasCollection = false   // t363u: has a play button slot
+    var isPlaying = false       // t363u: the album currently playing → its play button is hidden
 }
 enum SwipeHint {
     /// t354u: v2 keys — values written while testing 196 are ignored

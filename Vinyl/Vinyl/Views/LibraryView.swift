@@ -804,7 +804,8 @@ struct LibraryView: View {
                 guard let key = pageNeighbor(dir) else { return nil }
                 if key >= 1000 {
                     let c = music.collections[key - 1000]
-                    return PagerPeek(coverName: DS.coverName(selectedIndex), artwork: c.artwork, official: c.officialQuery)
+                    return PagerPeek(coverName: DS.coverName(selectedIndex), artwork: c.artwork, official: c.officialQuery,
+                                     hasCollection: true, isPlaying: c.id == nowPlayingCollection?.id)
                 }
                 return PagerPeek(coverName: DS.coverName(key), artwork: nil, official: nil)
             },
