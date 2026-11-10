@@ -538,14 +538,10 @@ struct MiniDiscRotation: ViewModifier {
     @ObservedObject var phase: MiniDiscPhase
     let playing: Bool
 
+    // t266u: the mini-player disc stays static (angle 0) whether playing or paused;
+    // no TimelineView / per-frame work here. phase is never started, so hold() hands off 0 to the flight.
     func body(content: Content) -> some View {
-        TimelineView(.animation(paused: phase.start == nil)) { context in
-            let angle = phase.angle(at: context.date)
-            content.rotationEffect(.degrees(angle))
-                .onChange(of: angle, initial: true) { _, value in phase.presentedAngle = value }
-        }
-        .onAppear { phase.setPlaying(playing) }
-        .onChange(of: playing) { _, value in phase.setPlaying(value) }
+        content
     }
 }
 
