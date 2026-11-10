@@ -453,6 +453,9 @@ struct LibraryView: View {
                 }
             }
             .padding(.horizontal, DS.contentInset)
+            // t316u: single-layer variant of the push blur (A/B with --push-blur-layer)
+            .blur(radius: TilePushAway.layerBlur && zm.pushAway && zm.pushAnchor != nil ? TilePushAway.blurRadius : 0)
+            .background { if PushFPS.on { PushFPSProbe(active: zm.pushAway) } }
             .padding(.top, 12)
             .padding(.bottom, 8)
             // t158u：真实封面 0.25s 淡入替换占位
@@ -1537,6 +1540,19 @@ struct TilePushAway: ViewModifier {
     static let close = Animation.spring(response: 0.38, dampingFraction: 0.9)
     static let fade = Animation.easeOut(duration: 0.38)
 
+    /// t316u: softer push — pushed tiles also blur 0 → 20pt and scale 1 → 0.92, driven by the same `pushAway`
+    /// value, so they ride the push springs (open 0.36/0.88, close 0.38/0.9). The tapped tile is untouched.
+    /// Per tile by default; `--push-blur-layer` blurs the whole grid layer once instead (cheaper, for A/B on device).
+    static let blurRadius: CGFloat = 20
+    static let scale: CGFloat = 0.92
+    static let layerBlur = ProcessInfo.processInfo.arguments.contains("--push-blur-layer")
+
+    private var isAnchor: Bool {
+        guard let anchor = zm.pushAnchor, let me = zm.pushFrames[key] else { return false }
+        return abs(me.midX - anchor.midX) < 0.5 && abs(me.midY - anchor.midY) < 0.5
+    }
+    private var pushed: Bool { zm.pushAway && zm.pushAnchor != nil && zm.pushFrames[key] != nil && !isAnchor }
+
     private var offset: CGSize {
         // frames snapshotted at open: the live preference frames include this offset (would feed back)
         guard zm.pushAway, let anchor = zm.pushAnchor, let me = zm.pushFrames[key] else { return .zero }
@@ -1549,8 +1565,46 @@ struct TilePushAway: ViewModifier {
     }
     func body(content: Content) -> some View {
         content
+            .scaleEffect(pushed ? Self.scale : 1)
+            .blur(radius: pushed && !Self.layerBlur ? Self.blurRadius : 0)
             .offset(offset)
-            .opacity(zm.pushAnchor == nil ? 1 : zm.pushOpacity)
+            .opacity(zm.pushAnchor == nil || isAnchor ? 1 : zm.pushOpacity)
+    }
+}
+
+/// t316u: `--log-push-fps` — counts frames during the 0.6s after a push starts / ends (CADisplayLink at 120Hz)
+enum PushFPS { static let on = ProcessInfo.processInfo.arguments.contains("--log-push-fps") }
+struct PushFPSProbe: View {
+    let active: Bool
+    var body: some View {
+        Color.clear.onChange(of: active) { _, on in PushFPSCounter.shared.start(label: on ? "push open" : "push close") }
+    }
+}
+final class PushFPSCounter: NSObject {
+    static let shared = PushFPSCounter()
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0, started: CFTimeInterval = 0, frames = 0, long = 0, worst: CFTimeInterval = 0
+    private var label = ""
+    func start(label: String) {
+        link?.invalidate()
+        self.label = label; frames = 0; long = 0; worst = 0; last = 0; started = CACurrentMediaTime()
+        let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        l.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+    @objc private func tick(_ l: CADisplayLink) {
+        if last > 0 {
+            let dt = l.timestamp - last
+            frames += 1; worst = max(worst, dt)
+            if dt > 1.5 / 120 { long += 1 }
+        }
+        last = l.timestamp
+        if l.timestamp - started >= 0.6 {
+            l.invalidate(); link = nil
+            let fps = Double(frames) / max(0.001, l.timestamp - started)
+            print("[t316u] \(label)\(TilePushAway.layerBlur ? " (layer blur)" : " (per-tile blur)"): \(frames) frames, \(String(format: "%.0f", fps)) fps, \(long) long frames, worst \(String(format: "%.1f", worst * 1000))ms")
+        }
     }
 }
 

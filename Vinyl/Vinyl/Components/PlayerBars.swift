@@ -250,12 +250,10 @@ struct WaveformBar: View {
     /// 歌曲总时长（秒），用于时间气泡
     var duration: Double = 0
     /// t306u: browsing an album other than the playing one → "<title> · <artist>" in the time-bubble style,
-    /// shown when `labelPulse` changes (cover landed) and on a tap of the bar, auto-hidden after `labelHold`
+    /// shown when `labelPulse` changes (cover landed) and on a tap of the bar; stays (t317u)
     var nowPlayingLabel: String? = nil
     var labelPulse: Int = 0
-    static let labelHold: Double = 3
     @State private var labelVisible = false
-    @State private var labelToken = 0
     private let count = Waveform.barCount
 
     /// 线宽 1.6pt → 3x 屏 4.8px，按整像素取整为 5px（所有竖线同一像素宽）；间距固定 2pt = 6px。
@@ -345,6 +343,7 @@ struct WaveformBar: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: labelVisible)
+        .animation(.easeOut(duration: 0.2), value: scrub == nil)   // t317u: same 0.2s fade out / back around a scrub
         .simultaneousGesture(TapGesture().onEnded { pulseLabel() })
         .onChange(of: labelPulse) { _, v in if v > 0 { pulseLabel() } }
         .onChange(of: nowPlayingLabel == nil) { _, none in if none { labelVisible = false } }
@@ -361,15 +360,11 @@ struct WaveformBar: View {
 
     private var shown: Double { min(1, max(0, scrub ?? progress)) }
 
+    /// t317u: once shown (cover landed / tap) the bubble stays while browsing a non-playing album — no auto-hide;
+    /// it still yields to the scrub time bubble (scrub != nil) and returns on release
     private func pulseLabel() {
         guard nowPlayingLabel != nil else { return }
         labelVisible = true
-        labelToken &+= 1
-        let token = labelToken
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(Self.labelHold))
-            if token == labelToken { labelVisible = false }
-        }
     }
 
     // 所有几何都在像素网格上算：x、宽、间距都是整数像素，再除以 scale 回到 pt。
