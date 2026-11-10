@@ -122,6 +122,11 @@ struct AlbumDetailView: View {
     @State private var hintStage = false
     /// t354u: neighbour covers render only while the nudge runs
     @State private var hintPeek = false
+    /// t368u: neighbour pages rendered at ±page width while a drag / its settle runs (paging: the next cover tracks the finger)
+    @State private var dragPeek = false
+    /// t369u / t371u: simulated presses in the first-open hint (lyrics button; cover — visual only, never plays)
+    @State private var lyricsPress = false
+    @State private var coverPress = false
     /// t354u: live mirror of the `lyricsMode` parameter for the same reason
     @State private var lyricsSideUp = false
     /// t355u: play button visibility for the settled album (not updated mid-swipe)
@@ -196,7 +201,8 @@ struct AlbumDetailView: View {
                                   holdPulledScale: holdSleeveScale)
                         .frame(width: DS.sleeve, height: DS.sleeve)
                         .contentShape(Rectangle())
-                        .onTapGesture { coverTapped(user: true) }
+                        .scaleEffect(coverPress ? SwipeHint.coverPressScale : 1)   // t371u: hint-only press
+                        .onTapGesture { coverPlayTapped() }   // t370u: play / pause, no longer flips
                         .onChange(of: spin.degrees, initial: true) { _, angle in onSpinAngle(angle) }
                 }
                 .frame(width: DS.sleeve, height: DS.sleeve)
@@ -225,20 +231,12 @@ struct AlbumDetailView: View {
                             coverTapped(user: true)
                         }
                         .accessibilityAddTraits(lyricsMode ? .isSelected : [])
+                        // t369u: hint press — native-like shrink + slight glass brightening
+                        .scaleEffect(lyricsPress ? SwipeHint.pressScale : 1)
+                        .brightness(lyricsPress ? SwipeHint.pressBrighten : 0)
                         .opacity(!closing && !playHiddenForFlip ? chromeIn : 0)
                         .allowsHitTesting(!closing && !swipeBusy && !playHiddenForFlip && chromeIn > 0.5)
-                        if collection != nil {
-                            GlassCircleButton(systemImage: "play.fill", accessibilityText: "播放这张专辑", ink: theme.ink) {
-                                guard let songs, let first = songs.first(where: { $0.playParameters != nil }) else { return }
-                                userInteracted()
-                                if let collection { onPlayedAlbum(collection) }
-                                Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
-                            }
-                            .opacity(playShown && !playHiddenForFlip ? chromeIn : 0)
-                            .animation(.easeOut(duration: 0.2), value: playShown)
-                            .allowsHitTesting(playShown && coverPlayVisible && !swipeBusy && !playHiddenForFlip && chromeIn > 0.5)
-                            .accessibilityHidden(!playShown)
-                        }
+                        // t371u: play button removed (cover tap plays / pauses)
                     }
                     .animation(.easeOut(duration: playHiddenForFlip ? 0.1 : 0.2), value: playHiddenForFlip)   // t347u
                     .padding(CoverButtons.inset)
@@ -250,12 +248,6 @@ struct AlbumDetailView: View {
                 // t131u：只在封面区横滑翻专辑（位移在 SleeveFrameKey 测量之后，不影响转场终点）
                 .offset(x: swipeX)
                 .opacity(jumpFade)
-                // t363u: per page — the new album decides at once (it is off-screen while the page changes → no fade then)
-                .onChange(of: coverPlayVisible, initial: true) { _, v in
-                    if swipeBusy { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { playShown = v } }
-                    else { playShown = v }
-                }
-                .onChange(of: swipeSettle) { _, _ in playShown = coverPlayVisible }
                 .simultaneousGesture(albumSwipe, including: landed && !closing ? .all : .subviews)
                 .sensoryFeedback(.impact(weight: .light), trigger: swipeSettle)
                 .sensoryFeedback(.impact(weight: .light), trigger: returnTick)   // t341u
@@ -561,7 +553,7 @@ struct AlbumDetailView: View {
                 if swipeAxisH == nil {
                     swipeAxisH = abs(dx) > abs(dy) * 1.4
                     // t185u：以识别那一刻的位移为零点，封套 + 唱片从 0 开始跟手，不会跳 10pt
-                    if swipeAxisH == true { swipeBase = dx; onSwipeBegan(); userInteracted(dragging: true) }   // t343u / t350u
+                    if swipeAxisH == true { swipeBase = dx; onSwipeBegan(); userInteracted(dragging: true); dragPeek = true }   // t343u / t350u / t368u
                 }
                 guard swipeAxisH == true else { return }
                 let x = dx - swipeBase
@@ -579,7 +571,7 @@ struct AlbumDetailView: View {
                 } else {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.82), completionCriteria: .logicallyComplete) {
                         swipeX = 0
-                    } completion: { onSwipeSettled() }
+                    } completion: { dragPeek = false; onSwipeSettled() }   // t368u: neighbour slid back out
                 }
             }
     }
@@ -592,14 +584,41 @@ struct AlbumDetailView: View {
     /// 旧封套顺手势方向滑出 → 换专辑 → 新封套从另一侧滑入落定 → 轻触觉 → 0.15s 后唱片抽出
     private func commitSwipe(dir: Int) {
         swipeBusy = true
+        guard neighbour(dir) != nil else { legacyCommitSwipe(dir: dir); return }
+        // t368u: paging — the pager (current + neighbour at ±w) springs on until the neighbour sits exactly at centre,
+        // then the page swaps with swipeX = 0 in one no-animation transaction (the neighbour already rendered the reset
+        // state the new page starts in → no pop, never two covers on one spot). Spring = the old in-slide's 0.38 / 0.86.
+        dragPeek = true
+        let w = pageWidth > 0 ? pageWidth : UIScreen.main.bounds.width
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.86), completionCriteria: .logicallyComplete) {
+            swipeX = -CGFloat(dir) * w
+        } completion: {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) {
+                rowsHold = true; rowsSlide = true; rowsLive = false   // t328u
+                onPage(dir)
+                swipeX = 0
+                dragPeek = false
+            }
+            startReveal(delay: 0.08)   // t154u
+            // let the held rows render once before releasing them, so the row slide still plays (t328u / t337u)
+            DispatchQueue.main.async {
+                swipeBusy = false
+                swipeSettle += 1
+                rowsHold = false; goLiveIfReady()
+                onSwipeSettled()
+            }
+        }
+    }
+
+    /// pre-t368u commit (out → swap → in); used only when no neighbour is rendered
+    private func legacyCommitSwipe(dir: Int) {
         let out = -CGFloat(dir) * (pageWidth + 40)
         withAnimation(.easeIn(duration: 0.16), completionCriteria: .logicallyComplete) {
             swipeX = out
         } completion: {
-            // t328u: new album's rows start hidden; they rise once the swipe settles
             do { var h = Transaction(); h.disablesAnimations = true; withTransaction(h) { rowsHold = true; rowsSlide = true; rowsLive = false } }
             onPage(dir)
-            // t154u：新专辑的曲目表同样逐行出现（随新封套滑入开始）
             startReveal(delay: 0.08)
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { swipeX = -out }
@@ -608,9 +627,22 @@ struct AlbumDetailView: View {
             } completion: {
                 swipeBusy = false
                 swipeSettle += 1
-                rowsHold = false; goLiveIfReady()   // t328u: replay TrackRowRise on the settled album
+                rowsHold = false; goLiveIfReady()
                 onSwipeSettled()
             }
+        }
+    }
+
+    /// t370u: cover tap — the playing album → pause / resume; any other album → play it from its first playable
+    /// track (what the removed play button did). Never flips (the lyrics button does that).
+    private func coverPlayTapped() {
+        userInteracted()
+        guard landed, !closing, !swipeBusy, collection != nil, let songs else { return }
+        if albumIsPlaying {
+            Task { await music.togglePlayback() }
+        } else if let first = songs.first(where: { $0.playParameters != nil }) {
+            if let collection { onPlayedAlbum(collection) }
+            Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
         }
     }
 
@@ -635,20 +667,33 @@ struct AlbumDetailView: View {
         // t358u: a tap (lyrics / play / cover) during the swing → glide back to centre; a drag owns swipeX itself
         if !dragging { recentreAfterHint("user interaction") }
         if hintPeek { hintPeek = false }
+        if lyricsPress || coverPress {   // t369u: a real touch undoes a simulated press
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { lyricsPress = false; coverPress = false }
+        }
         if !hintLearned { hintLearned = true }   // a user swipe / flip / button = learned → no more hints
     }
 
     @ViewBuilder private var hintPeeks: some View {
         let w = pageWidth > 0 ? pageWidth : UIScreen.main.bounds.width
-        if hintPeek {
+        if hintPeek || dragPeek {
             ZStack {
                 ForEach([-1, 1], id: \.self) { dir in
                     if let n = neighbour(dir) {
-                        SleeveCutout(coverName: n.coverName, artwork: n.artwork, official: n.official)
-                            .equatable()
-                            // t363u: the neighbour page's own buttons (cover side, play unless it is the playing album)
-                            .overlay(alignment: .topLeading) { peekButtons(n) }
-                            .offset(x: CGFloat(dir) * w)
+                        Group {
+                            if dragPeek {
+                                // t368u: exactly what that page shows the instant it becomes current (pageAlbum resets
+                                // pull / flip to 0): merged full-size sleeve with its disc behind the hole
+                                SleeveArtwork(coverName: n.coverName, artwork: n.artwork, official: n.official,
+                                              pull: 0, flip: 0, spin: .degrees(spinAngle(at: Date())), pageWidth: pageWidth)
+                                    .frame(width: DS.sleeve, height: DS.sleeve)
+                            } else {
+                                SleeveCutout(coverName: n.coverName, artwork: n.artwork, official: n.official)
+                                    .equatable()
+                            }
+                        }
+                        // t363u: the neighbour page's own button (cover side)
+                        .overlay(alignment: .topLeading) { peekButtons(n) }
+                        .offset(x: CGFloat(dir) * w)
                     }
                 }
             }
@@ -670,16 +715,23 @@ struct AlbumDetailView: View {
     private func peekButtons(_ n: PagerPeek) -> some View {
         let r = SleeveArtwork.sleeveRect(pageWidth: pageWidth > 0 ? pageWidth : 402, pull: 0, hold: false)
         return HStack(spacing: CoverButtons.spacing) {
-            GlassCircleButton(systemImage: "quote.bubble", accessibilityText: "歌词", ink: theme.ink) {}
-            if n.hasCollection {
-                GlassCircleButton(systemImage: "play.fill", accessibilityText: "播放这张专辑", ink: theme.ink) {}
-                    .opacity(n.isPlaying ? 0 : 1)
-            }
+            GlassCircleButton(systemImage: "quote.bubble", accessibilityText: "歌词", ink: theme.ink) {}   // t371u: lyrics only
         }
         .opacity(chromeIn)
         .padding(CoverButtons.inset)
         .frame(width: r.width, height: r.height, alignment: .bottomLeading)
         .offset(x: r.minX, y: r.minY)
+    }
+
+    /// t369u: native-like press: spring 0.3 / 0.6 down, held `down` s, same spring back, then `gap` s.
+    /// false = interrupted (the press is undone; the caller stops as before).
+    private func simulatedPress(_ set: (Bool) -> Void, down: Double, gap: Double, live: () -> Bool) async -> Bool {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { set(true) }
+        try? await Task.sleep(for: .seconds(down))
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { set(false) }
+        guard live() else { return false }
+        try? await Task.sleep(for: .seconds(gap))
+        return live()
     }
 
     private func hintLog(_ s: @autoclosure () -> String) { if SwipeHint.log { print("[t354u] hints: \(s())") } }
@@ -724,10 +776,18 @@ struct AlbumDetailView: View {
                 try? await Task.sleep(for: .seconds(SwipeHint.gap))
             }
             guard live("flip"), !lyricsSideUp else { return }
+            // t371u: a light cover press first (visual only — no playback during the hint)
+            guard await simulatedPress({ coverPress = $0 }, down: SwipeHint.coverPressDown, gap: SwipeHint.coverPressGap,
+                                       live: { live("flip (cover press)") }) else { return }
+            // t369u: then the lyrics button is "pressed" and the existing flip starts 0.1s after it releases
+            guard await simulatedPress({ lyricsPress = $0 }, down: SwipeHint.pressDown, gap: SwipeHint.pressGap,
+                                       live: { live("flip (press)") }) else { return }
             hintLog("demo flip")
             coverTapped(user: false)
             try? await Task.sleep(for: .seconds(Lyrics.merge + Lyrics.flip + SwipeHint.lyricsHold))
             guard live("flip back"), lyricsSideUp else { return }
+            guard await simulatedPress({ lyricsPress = $0 }, down: SwipeHint.pressDown, gap: SwipeHint.pressGap,
+                                       live: { live("flip back (press)") }) else { return }   // t369u
             coverTapped(user: false)
             hintLog("done")
         }
@@ -2488,6 +2548,13 @@ enum SwipeHint {
     static let delay: Double = 0.6     // s after the cover lands
     static let gap: Double = 0.5       // s between the nudge settling and the demo flip
     static let lyricsHold: Double = 1  // s the demo stays on the lyrics side
+    static let pressScale: CGFloat = 0.85   // t369u: simulated lyrics-button press
+    static let pressBrighten: Double = 0.08
+    static let pressDown: Double = 0.15     // s held down
+    static let pressGap: Double = 0.1       // s after release before the flip
+    static let coverPressScale: CGFloat = 0.97   // t371u: simulated cover press (visual only)
+    static let coverPressDown: Double = 0.12
+    static let coverPressGap: Double = 0.25
     @MainActor static var resetRequested = ProcessInfo.processInfo.arguments.contains("--reset-swipe-hint")
 }
 
