@@ -899,7 +899,7 @@ struct LibraryView: View {
             }
         }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomBackdrop.delay(GridMotion.blurDelay)) {
-            blurRadius = 8   // t324u: 18 → 8pt (stacks on the per-tile push blur); dim unchanged
+            blurRadius = 4   // t326u: 8 → 4pt; t324u: 18 → 8pt (stacks on the per-tile push blur); dim unchanged
             gridDim = 1
         }
         // Detail copy fades in after the cover has started moving (reference frames 9–16).
@@ -1559,7 +1559,7 @@ struct TilePushAway: ViewModifier {
         return (CGSize(width: dx / d, height: dy / d), d)
     }
     /// t324u: peak blur (near tile … far tile, ≥ one screen-length away), lowered from 12…24pt; the single tuning point
-    static let peakBlur: ClosedRange<CGFloat> = 6...14
+    static let peakBlur: ClosedRange<CGFloat> = 3...8   // t326u: 6…14 → 3…8
     func body(content: Content) -> some View {
         let longer = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
         let g = geometry
