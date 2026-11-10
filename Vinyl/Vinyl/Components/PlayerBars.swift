@@ -243,6 +243,11 @@ struct WaveformBar: View {
     /// t167u：按下播放头 / 擦洗中 → 播放头变粗（0 = 常态，1 = 选中）
     @State private var headDown = false
     @State private var headGrow: CGFloat = 0
+    /// t385u: the bar heights morph between two level sets (A ⇄ B) instead of swapping: phase 0 = A, 1 = B
+    @State private var waveA: [Double]? = nil
+    @State private var waveB: [Double]? = nil
+    @State private var wavePhase: CGFloat = 0
+    static let morphSpring = Animation.spring(response: 0.45, dampingFraction: 0.85)
     private var headActive: Bool { headDown || scrubBar != nil }
     @State private var width: CGFloat = 1
     /// 竖条区域在整条胶囊坐标系（"wave"）里的 frame：手指 x → 进度
@@ -387,13 +392,26 @@ struct WaveformBar: View {
     }
 
     private var bars: some View {
-        HeadGrowLayer(grow: headGrow) { g in barsCanvas(g) }
+        WaveMorphLayer(grow: headGrow, phase: wavePhase) { g, m in barsCanvas(g, morph: m) }
             // 只有进度变化时去掉隐式动画（逐帧跟手）；播放头变粗的动画照常插值
             .transaction(value: shown) { $0.animation = nil }
+            // t385u: new track → the same bars spring from their current height to the new one
+            .onChange(of: levels) { old, new in
+                if waveA == nil && waveB == nil { waveA = old }
+                if wavePhase >= 0.5 {
+                    waveA = new
+                    withAnimation(Self.morphSpring) { wavePhase = 0 }
+                } else {
+                    waveB = new
+                    withAnimation(Self.morphSpring) { wavePhase = 1 }
+                }
+            }
     }
 
-    private func barsCanvas(_ g: CGFloat) -> some View {
-        Canvas { context, size in
+    private func barsCanvas(_ g: CGFloat, morph: CGFloat) -> some View {
+        let a = waveA ?? levels
+        let b = waveB ?? levels
+        return Canvas { context, size in
             let scale = max(1, displayScale)
             let (barPx, gapPx) = Self.pixelMetrics(scale: scale)
             let widthPx = Int((size.width * scale).rounded(.down))
@@ -409,13 +427,16 @@ struct WaveformBar: View {
                 let head = i == headIndex
                 // t167u：播放头宽 / 高按 g 插值，以竖条中心为轴向两侧变粗（不位移、不影响其它竖条）
                 let headH = Head.restHeight + (Head.activeHeight - Head.restHeight) * g
-                let h = head ? headH : ((barHeight(i, of: n)) * scale).rounded() / scale
+                // t385u: same bar, height interpolated between the old and new level set (spring-driven phase)
+                let hA = barHeight(i, of: n, levels: a), hB = barHeight(i, of: n, levels: b)
+                let h = head ? headH : ((hA + (hB - hA) * morph) * scale).rounded() / scale
                 let x = CGFloat(x0Px + i * (barPx + gapPx)) / scale
                 let w = head ? bar + (Head.activeWidth - bar) * g : bar
                 let y = head ? (size.height - h) / 2 : (((size.height - h) / 2) * scale).rounded() / scale
                 let rect = CGRect(x: x + (bar - w) / 2, y: y, width: w, height: h)
                 // t183u：两端始终是正圆（圆形 Capsule；默认 continuous 圆角在 r = w/2 时两端会发平）
-                let path = Capsule(style: .circular).path(in: rect)
+                // t384u: every bar incl. the thickened head = capsule, corner radius exactly w / 2 (circular ends)
+                let path = Path(roundedRect: rect, cornerRadius: min(rect.width, rect.height) / 2, style: .circular)
                 let color = i < playedBars ? theme.ink : theme.track
                 // t267u: playhead = round-capped Capsule, no shadow (same size / colour / position)
                 context.fill(path, with: .color(color))
@@ -510,7 +531,7 @@ struct WaveformBar: View {
     }
 
     /// 第 i 根（共 n 根）的高度：振幅数组按比例取样到 n 根。
-    private func barHeight(_ i: Int, of n: Int) -> CGFloat {
+    private func barHeight(_ i: Int, of n: Int, levels: [Double]?) -> CGFloat {
         if let levels, !levels.isEmpty {
             let k = min(levels.count - 1, i * levels.count / max(1, n))
             return 4 + CGFloat(levels[k]) * 18
@@ -797,6 +818,18 @@ struct BubbleGlass: ViewModifier {
 }
 
 /// t167u：让 Canvas 里的播放头粗细可以被 withAnimation 逐帧插值
+/// t385u: head-grow + waveform morph phase, both interpolated by SwiftUI and handed to the Canvas
+struct WaveMorphLayer<Content: View>: View, Animatable {
+    var grow: CGFloat
+    var phase: CGFloat
+    let content: (CGFloat, CGFloat) -> Content
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(grow, phase) }
+        set { grow = newValue.first; phase = newValue.second }
+    }
+    var body: some View { content(grow, phase) }
+}
+
 struct HeadGrowLayer<Content: View>: View, Animatable {
     var grow: CGFloat
     let content: (CGFloat) -> Content

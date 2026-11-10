@@ -668,6 +668,11 @@ struct AlbumDetailView: View {
     /// track (what the removed play button did). Never flips (the lyrics button does that).
     private func coverPlayTapped() {
         userInteracted()
+        // t380u: native-like press feedback on the cover (same spring / scale as the hint press)
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { coverPress = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + SwipeHint.coverPressDown) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { coverPress = false }
+        }
         guard landed, !closing, !swipeBusy, collection != nil, let songs else { return }
         if albumIsPlaying {
             Task { await music.togglePlayback() }
@@ -1561,35 +1566,34 @@ private struct DetailWaveform: View {
         // t304u: browsing another album while something plays → the bar keeps showing the playing track
         // (progress, play/pause, waveform). Pause pauses it; play resumes it only if it is from this album,
         // otherwise play starts this album. With nothing loaded at all, the idle bar starts this album.
-        if collection != nil, !albumIsPlaying, music.hasCurrentTrack, let id = music.currentSongID {
+        // t385u: one WaveformBar for all album states (stable view identity) so a track change morphs the bars
+        // instead of replacing the view; the per-state behaviour below is unchanged
+        if collection != nil {
             let first = songs?.first { $0.playParameters != nil }
-            WaveformBar(progress: music.duration > 0 ? timeline.position / music.duration : 0,
-                        levels: Waveform.seeded(id.rawValue), isPlaying: music.isPlaying,
+            let loaded = music.hasCurrentTrack ? music.currentSongID : nil
+            let browsing = !albumIsPlaying && loaded != nil       // another album is loaded in the player
+            let idle = !albumIsPlaying && loaded == nil           // nothing loaded → the bar starts this album
+            WaveformBar(progress: idle ? 0 : (music.duration > 0 ? timeline.position / music.duration : 0),
+                        levels: idle ? Waveform.seeded(first?.id.rawValue ?? collection?.id ?? "idle")
+                                     : Waveform.seeded(loaded?.rawValue ?? collection?.id ?? "idle"),
+                        isPlaying: idle ? false : music.isPlaying,
                         toggle: {
-                            if music.isPlaying { Task { await music.togglePlayback() }; return }
-                            guard let first, let songs else { Task { await music.togglePlayback() }; return }
-                            Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
+                            if idle {
+                                guard let first, let songs else { return }
+                                Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
+                            } else {
+                                // t383u: the bar shows the player's own track → play / pause always acts on the
+                                // player's queue (resume the original song); starting this album needs its play
+                                // button / cover tap
+                                Task { await music.togglePlayback() }
+                            }
                         },
-                        seek: { music.seek(to: $0 * music.duration) }, duration: music.duration,
-                        nowPlayingLabel: music.currentArtistDisplay.isEmpty ? music.currentTitle
-                            : "\(music.currentTitle) · \(music.currentArtistDisplay)",
-                        labelPulse: landed ? 1 : 0,
-                        onLabelTap: onReturnToPlaying)
-        } else if collection != nil, !albumIsPlaying {
-            let first = songs?.first { $0.playParameters != nil }
-            WaveformBar(progress: 0,
-                        levels: Waveform.seeded(first?.id.rawValue ?? collection?.id ?? "idle"),
-                        isPlaying: false,
-                        toggle: {
-                            guard let first, let songs else { return }
-                            Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
-                        },
-                        seek: { _ in }, duration: first?.duration ?? 0)
-        } else if collection != nil, music.hasCurrentTrack, let id = music.currentSongID {
-            WaveformBar(progress: music.duration > 0 ? timeline.position / music.duration : 0,
-                        levels: Waveform.seeded(id.rawValue), isPlaying: music.isPlaying,
-                        toggle: { Task { await music.togglePlayback() } },
-                        seek: { music.seek(to: $0 * music.duration) }, duration: music.duration)
+                        seek: { f in if !idle { music.seek(to: f * music.duration) } },
+                        duration: idle ? (first?.duration ?? 0) : music.duration,
+                        nowPlayingLabel: browsing ? (music.currentArtistDisplay.isEmpty ? music.currentTitle
+                            : "\(music.currentTitle) · \(music.currentArtistDisplay)") : nil,
+                        labelPulse: browsing && landed ? 1 : 0,
+                        onLabelTap: browsing ? onReturnToPlaying : nil)
         } else {
             WaveformBar(progress: timeline.demoElapsed / AppleMusicStore.demoDuration,
                         levels: demoLevels, isPlaying: music.demoPlaying,

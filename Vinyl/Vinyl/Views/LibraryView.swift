@@ -1036,7 +1036,7 @@ struct LibraryView: View {
                         upgradeToCatalogTracks(c, shown: songs)
                     }
                     // t185u：换到新专辑后自动从第一首开始播放；t223u：仅当当前没有在播放时（否则只展示，不打断）
-                    if shouldAutoplay(c), let first = songs.first(where: { $0.playParameters != nil }) {
+                    if shouldAutoplay(c, browsing: true), let first = songs.first(where: { $0.playParameters != nil }) {
                         nowPlayingCollection = c
                         await music.play(first, in: songs, fromCatalog: c.isCatalog)
                     }
@@ -1101,7 +1101,7 @@ struct LibraryView: View {
             if let cached { songs = cached } else { songs = await TrackPrefetch.shared.quick(c) }
             guard selectedCollection?.id == c.id else { return }
             if cached == nil { collectionSongs = songs; TrackPrefetch.shared.tracksShown(); upgradeToCatalogTracks(c, shown: songs) }
-            if shouldAutoplay(c), let first = songs.first(where: { $0.playParameters != nil }) {   // t223u
+            if shouldAutoplay(c, browsing: true), let first = songs.first(where: { $0.playParameters != nil }) {   // t223u / t383u
                 nowPlayingCollection = c
                 await music.play(first, in: songs, fromCatalog: c.isCatalog)
             }
@@ -1109,8 +1109,11 @@ struct LibraryView: View {
     }
     /// t223u：打开 / 横滑 / 相似专辑时是否自动播第一首：
     /// 没有在播放（从没播过 / 停止 / 暂停）且打开的不是当前这张 → 播；正在播放 → 只展示不打断；就是当前这张 → 什么都不重来
-    private func shouldAutoplay(_ c: MusicCollection) -> Bool {
+    /// t383u: `browsing` = swipe / jump / return-to-playing inside the detail. Then a loaded queue (playing OR paused)
+    /// is never replaced — only an explicit action on the shown album (its play button / cover tap / a row) starts it.
+    private func shouldAutoplay(_ c: MusicCollection, browsing: Bool = false) -> Bool {
         if music.isPlaying { return false }
+        if browsing && music.hasCurrentTrack { return false }
         if music.hasCurrentTrack, nowPlayingCollection?.id == c.id { return false }
         return true
     }
