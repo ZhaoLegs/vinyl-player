@@ -355,6 +355,8 @@ struct GlassCircleButton: View {
     var accessibilityText: String = ""
     /// t320u: glyph colour (detail page passes its theme ink; home keeps DS.ink)
     var ink: Color = DS.ink
+    /// t388u: native symbol replace transition when systemImage changes (play ⇄ pause)
+    var replaceSymbol = false
     let action: () -> Void
 
     @ViewBuilder
@@ -368,9 +370,16 @@ struct GlassCircleButton: View {
                     .scaledToFit()
                     .frame(width: iconSize, height: iconSize)
             } else if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.system(size: DS.barButtonGlyph, weight: .medium))
-                    .imageScale(.large)
+                if replaceSymbol {
+                    Image(systemName: systemImage)
+                        .font(.system(size: DS.barButtonGlyph, weight: .medium))
+                        .imageScale(.large)
+                        .contentTransition(.symbolEffect(.replace))
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.system(size: DS.barButtonGlyph, weight: .medium))
+                        .imageScale(.large)
+                }
             }
         }
         .frame(width: DS.barButtonLabel, height: DS.barButtonLabel)

@@ -203,8 +203,7 @@ struct AlbumDetailView: View {
                                   holdPulledScale: holdSleeveScale)
                         .frame(width: DS.sleeve, height: DS.sleeve)
                         .contentShape(Rectangle())
-                        .scaleEffect(coverPress ? SwipeHint.coverPressScale : 1)   // t371u: hint-only press
-                        .onTapGesture { coverPlayTapped() }   // t370u: play / pause, no longer flips
+                        .onTapGesture { coverTapped(user: true) }   // t388u: cover tap flips to lyrics again (t370u reverted)
                         .onChange(of: spin.degrees, initial: true) { _, angle in onSpinAngle(angle) }
                 }
                 .frame(width: DS.sleeve, height: DS.sleeve)
@@ -238,19 +237,22 @@ struct AlbumDetailView: View {
                         .brightness(lyricsPress ? SwipeHint.pressBrighten : 0)
                         .opacity(!closing && !playHiddenForFlip ? chromeIn : 0)
                         .allowsHitTesting(!closing && !swipeBusy && !playHiddenForFlip && chromeIn > 0.5)
-                        // t381u: play button restored exactly as in 203 / 204 (right of lyrics, 8pt; hidden on the playing
-                        // album but keeps its slot). Cover tap still plays / pauses (t370u).
+                        // t381u / t388u: play button right of lyrics (8pt), always shown. Playing album: pause.fill while
+                        // playing / play.fill while paused, toggles the player's current queue. Other albums: play.fill
+                        // starts that album. Native symbol replace transition between play and pause.
                         if collection != nil {
-                            GlassCircleButton(systemImage: "play.fill", accessibilityText: "播放这张专辑", ink: theme.ink) {
-                                guard let songs, let first = songs.first(where: { $0.playParameters != nil }) else { return }
+                            let pauses = albumIsPlaying && music.isPlaying
+                            GlassCircleButton(systemImage: pauses ? "pause.fill" : "play.fill",
+                                              accessibilityText: albumIsPlaying ? (pauses ? "暂停" : "继续播放") : "播放这张专辑",
+                                              ink: theme.ink, replaceSymbol: true) {
                                 userInteracted()
+                                if albumIsPlaying { Task { await music.togglePlayback() }; return }
+                                guard let songs, let first = songs.first(where: { $0.playParameters != nil }) else { return }
                                 if let collection { onPlayedAlbum(collection) }
                                 Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
                             }
-                            .opacity(playShown && !playHiddenForFlip ? chromeIn : 0)
-                            .animation(.easeOut(duration: 0.2), value: playShown)
-                            .allowsHitTesting(playShown && coverPlayVisible && !swipeBusy && !playHiddenForFlip && chromeIn > 0.5)
-                            .accessibilityHidden(!playShown)
+                            .opacity(!closing && !playHiddenForFlip ? chromeIn : 0)
+                            .allowsHitTesting(!closing && !swipeBusy && !playHiddenForFlip && chromeIn > 0.5)
                         }
                     }
                     .animation(.easeOut(duration: playHiddenForFlip ? 0.1 : 0.2), value: playHiddenForFlip)   // t347u
@@ -265,12 +267,6 @@ struct AlbumDetailView: View {
                 // t131u：只在封面区横滑翻专辑（位移在 SleeveFrameKey 测量之后，不影响转场终点）
                 .offset(x: swipeX)
                 .opacity(jumpFade)
-                // t363u / t381u: per page — the new album decides at once (it is off-screen / just swapped → no fade then)
-                .onChange(of: coverPlayVisible, initial: true) { _, v in
-                    if swipeBusy { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { playShown = v } }
-                    else { playShown = v }
-                }
-                .onChange(of: swipeSettle) { _, _ in playShown = coverPlayVisible }
                 .simultaneousGesture(albumSwipe, including: landed && !closing ? .all : .subviews)
                 .sensoryFeedback(.impact(weight: .light), trigger: swipeSettle)
                 .sensoryFeedback(.impact(weight: .light), trigger: returnTick)   // t341u
@@ -664,24 +660,6 @@ struct AlbumDetailView: View {
         }
     }
 
-    /// t370u: cover tap — the playing album → pause / resume; any other album → play it from its first playable
-    /// track (what the removed play button did). Never flips (the lyrics button does that).
-    private func coverPlayTapped() {
-        userInteracted()
-        // t380u: native-like press feedback on the cover (same spring / scale as the hint press)
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { coverPress = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + SwipeHint.coverPressDown) {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { coverPress = false }
-        }
-        guard landed, !closing, !swipeBusy, collection != nil, let songs else { return }
-        if albumIsPlaying {
-            Task { await music.togglePlayback() }
-        } else if let first = songs.first(where: { $0.playParameters != nil }) {
-            if let collection { onPlayedAlbum(collection) }
-            Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
-        }
-    }
-
     /// t347u: cover tap → hide the play button at once, run the existing toggle, bring it back after merge + flip
     private func coverTapped(user: Bool) {
         if user { userInteracted() }
@@ -752,9 +730,9 @@ struct AlbumDetailView: View {
         let r = SleeveArtwork.sleeveRect(pageWidth: pageWidth > 0 ? pageWidth : 402, pull: 0, hold: false)
         return HStack(spacing: CoverButtons.spacing) {
             GlassCircleButton(systemImage: "quote.bubble", accessibilityText: "歌词", ink: theme.ink) {}
-            if n.hasCollection {   // t381u: neighbour's own play button (hidden, slot kept, if it is the playing album)
-                GlassCircleButton(systemImage: "play.fill", accessibilityText: "播放这张专辑", ink: theme.ink) {}
-                    .opacity(n.isPlaying ? 0 : 1)
+            if n.hasCollection {   // t388u: neighbour's own play button, same always-shown rule
+                GlassCircleButton(systemImage: n.isPlaying && music.isPlaying ? "pause.fill" : "play.fill",
+                                  accessibilityText: "播放这张专辑", ink: theme.ink, replaceSymbol: true) {}
             }
         }
         .opacity(chromeIn)
