@@ -2130,12 +2130,18 @@ struct SettingsSheet: View {
             .onChange(of: showOffer) { _, open in if !open { Task { await music.refreshAccess() } } }
             .task { cacheBytes = await LyricsRepository.shared.cacheBytes() }
         }
+        // t394u: the root TabView sets .tint(DS.ink) (fixed #1A1A1C, not adaptive) and the sheet inherits it,
+        // so tinted text (sleep rows, checkmarks, Picker value, buttons, 完成) went near-black on the dark sheet.
+        // Use the system's adaptive blue here, like a native Settings form.
+        .tint(.blue)
     }
 
     private func sleepRow(_ title: String, _ mode: SleepTimer.Mode?) -> some View {
         Button { if let mode { sleep.set(mode) } else { sleep.cancel() } } label: {
             HStack {
-                Text(title).foregroundStyle(.primary)
+                // t394u: Color.primary = system label colour (adaptive); the hierarchical `.primary`
+                // inside a Button resolved to the button's tint instead
+                Text(title).foregroundStyle(Color.primary)
                 Spacer()
                 if sleep.mode == mode { Image(systemName: "checkmark").foregroundStyle(.tint) }
             }
