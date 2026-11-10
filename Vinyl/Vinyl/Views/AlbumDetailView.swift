@@ -67,6 +67,10 @@ struct AlbumDetailView: View {
     /// t251u：封面放大真正落定（landed，来自打开弹簧的 completion）后才淡入：标题 → 曲目表（整块）
     @State private var titleIn: Double = 0
     @State private var listIn: Double = 0
+    /// t286u: rows rise + fade in one by one after the zoom lands (flipped once per open, no animation on reset)
+    @State private var rowsShown = false
+    /// rows actually flip visible only once they exist (songs may arrive after the zoom lands), one runloop later
+    @State private var rowsLive = false
     /// t247u：封套（封面）下缘 / 歌词区顶 —— 歌词滚动区与顶部渐变模糊向上延伸到封面下缘，不再在半路硬切
     @State private var sleeveBottomY: CGFloat = 0
     @State private var lyricsTopY: CGFloat = 0
@@ -213,8 +217,8 @@ struct AlbumDetailView: View {
                     .padding(.top, 40)
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TrackInset.space)).maxY } action: { listBottomY = $0 }
                     // t251u：整个曲目表 / 歌词容器一次性淡入（不逐行），落定后比标题晚 0.06s
-                    .opacity(listIn)
-                    .visualEffect { [listIn, closing] c, _ in c.offset(y: closing ? 0 : DetailReveal.rise * (1 - listIn)) }
+                    // t286u: on open the rows stagger in themselves; the container only does the 0.15s close fade
+                    .opacity(closing ? listIn : 1)
                 } else {
                     trackTable
                         .padding(.horizontal, DS.contentInset)
@@ -285,6 +289,9 @@ struct AlbumDetailView: View {
         }
         // t251u：关闭 → 标题 / 曲目表 0.15s 快速淡出，封面飞回期间不可见
         .onChange(of: closing) { _, now in if now { setCopy(0, animated: true) } }
+        // t286u: start the row stagger once the reveal is due AND the rows are in the hierarchy
+        .onChange(of: rowsShown) { _, _ in goLiveIfReady() }
+        .onChange(of: songs == nil) { _, _ in goLiveIfReady() }
         .onAppear {
             // 横滑换专辑 / 视图重建时封面早已落定：直接显示
             if landed && !closing { setCopy(1, animated: false) }
@@ -303,7 +310,7 @@ struct AlbumDetailView: View {
             // t156u：关闭完成后把逐行时间轴归零，下次打开从头错峰
             guard !shown else { return }
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { reveal = 0; barIn = 0; titleIn = 0; listIn = 0 }
+            withTransaction(t) { reveal = 0; barIn = 0; titleIn = 0; listIn = 0; rowsShown = false; rowsLive = false }
         }
         .task {
             guard demoLevels == nil,
@@ -370,12 +377,18 @@ struct AlbumDetailView: View {
 
     /// t251u：标题 / 曲目表的显隐。淡入：标题 0.28s easeOut，曲目表晚 0.06s；淡出：两者 0.15s。
     /// 每次都以目标值收尾（不依赖上一次动画是否跑完），快速开关也不会停在半透明。
+    private func goLiveIfReady() {
+        guard rowsShown, !rowsLive, songs != nil else { return }
+        DispatchQueue.main.async { if rowsShown { rowsLive = true } }
+    }
+
     private func setCopy(_ v: Double, animated: Bool) {
         if DetailReveal.log { print("[t251u] setCopy \(v) animated=\(animated) t=\(Date().timeIntervalSince1970)") }
         if !animated {
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { titleIn = v; listIn = v }
+            withTransaction(t) { titleIn = v; listIn = v; if v > 0 { rowsShown = true; if songs != nil { rowsLive = true } } }
         } else if v > 0 {
+            rowsShown = true   // each row animates itself (TrackRowRise)
             withAnimation(.easeOut(duration: DetailReveal.fadeIn)) { titleIn = v }
             withAnimation(.easeOut(duration: DetailReveal.fadeIn).delay(DetailReveal.listDelay)) { listIn = v }
         } else {
@@ -536,8 +549,8 @@ struct AlbumDetailView: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 10)
             // t251u：标题 / 艺人在放大落定后淡入 + 上浮 8 → 0（只做视觉位移，不影响布局测量）
-            .opacity(titleIn)
-            .visualEffect { [titleIn, closing] c, _ in c.offset(y: closing ? 0 : DetailReveal.rise * (1 - titleIn)) }
+            // t286u: title is static on open (no fade / rise); only the 0.15s close fade-out remains
+            .opacity(closing ? titleIn : 1)
 
             // t238u：右上角只留「更多」——与左侧关闭钮同规格的系统玻璃圆钮（同 label / 同 glass 样式 → 同直径、同图标、同中线），
             // 点击弹原生 Menu；「喜欢」已并入菜单顶栏（MenuTopBar）
@@ -655,7 +668,7 @@ struct AlbumDetailView: View {
                             // 行身份 = 歌曲 ID（稳定），切歌时只有两行的颜色 / 图标变化，列表本身不重建
                             ForEach(trackRows.rows, id: \.id) { row in
                                 realRow(row, in: songs)
-                                    .modifier(rowReveal(row.index + 1))
+                                    .modifier(TrackRowRise(index: row.index + 1, shown: rowsLive))
                             }
                         }
                         .padding(.horizontal, DS.contentInset)
@@ -707,7 +720,7 @@ struct AlbumDetailView: View {
         }
         .padding(.horizontal, DS.contentInset)
         .padding(.bottom, TL.headerGap)
-        .modifier(rowReveal(0))
+        .modifier(TrackRowRise(index: 0, shown: rowsLive))
     }
 
     /// 歌曲菜单：喜欢 / 共享 → 前往专辑 / 艺人。
@@ -1001,6 +1014,29 @@ enum Reveal {
     static let barDuration: CGFloat = 0.25
     static let barRise: CGFloat = 6
     static let total: CGFloat = maxStagger + rowDuration
+}
+
+/// t286u: one tracklist row (0 = column header, which starts with the first row): rise 12pt + fade in,
+/// easeOut 0.3s, delay = min(i, 8) × 0.035s (last on-screen row starts at ≤ 0.28s). Rows past the first
+/// screen (i > 12) appear without animation. Rows created after the reveal (catalog swap) are already shown.
+struct TrackRowRise: ViewModifier {
+    let index: Int
+    let shown: Bool
+    static let rise: CGFloat = 12
+    static let duration: Double = 0.3
+    static let stagger: Double = 0.035
+    static let maxSteps = 8
+    static let visibleRows = 12
+
+    func body(content: Content) -> some View {
+        let animates = index <= Self.visibleRows
+        let step = max(0, index - 1)   // header (0) and first row (1) start together
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown ? 0 : Self.rise)
+            .animation(animates ? .easeOut(duration: Self.duration).delay(Double(min(step, Self.maxSteps)) * Self.stagger) : nil,
+                       value: shown)
+    }
 }
 
 struct StaggerReveal: AnimatableModifier {
