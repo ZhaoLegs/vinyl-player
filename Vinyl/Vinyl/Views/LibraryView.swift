@@ -453,7 +453,7 @@ struct LibraryView: View {
                 }
             }
             .padding(.horizontal, DS.contentInset)
-            // t316u: single-layer variant of the push blur (A/B with --push-blur-layer)
+            // t322u: the push blur, one layer for the whole grid (driven by pushAway on the push springs)
             .blur(radius: TilePushAway.layerBlur && zm.pushAway && zm.pushAnchor != nil ? TilePushAway.blurRadius : 0)
             .background { if PushFPS.on { PushFPSProbe(active: zm.pushAway) } }
             .padding(.top, 12)
@@ -881,8 +881,8 @@ struct LibraryView: View {
         if !zm.openFromMini && !reduceMotion {
             zm.pushAnchor = origin
             zm.pushFrames = cellFrames
+            // t322u: no fade-out any more — the pushed tiles stay visible, covered by the blur
             withAnimation(TilePushAway.open) { zm.pushAway = true }
-            withAnimation(TilePushAway.fade) { zm.pushOpacity = 0 }
         } else { zm.pushAnchor = nil }
         if DetailReveal.log { print("[t251u] zoom start t=\(Date().timeIntervalSince1970) fluidOpen=\(Motion.fluidOpen)") }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open),
@@ -1081,7 +1081,6 @@ struct LibraryView: View {
         if zm.pushAnchor != nil {
             cellFrames = cellFrames.merging(zm.pushFrames) { _, unpushed in unpushed }
             withAnimation(TilePushAway.close) { zm.pushAway = false }
-            withAnimation(TilePushAway.fade) { zm.pushOpacity = 1 }
         }
         // t131u：飞回「当前显示的那张专辑」的格子（实时 frame）
         // t222u：从 mini player 打开 → 飞回 mini 唱片；从格子打开 → 当前专辑格子在屏幕上可见就飞回它，否则飞回 mini 唱片
@@ -1535,7 +1534,8 @@ struct ArtworkHandoff: AnimatableModifier {
 struct TilePushAway: ViewModifier {
     @ObservedObject var zm: LibraryZoomModel
     let key: Int
-    static let factor: CGFloat = 0.8
+    /// t322u: short push (0.8 → 0.18 × longer screen side) so the tiles stay partly visible under the blur
+    static let factor: CGFloat = 0.18
     static let open = Animation.spring(response: 0.36, dampingFraction: 0.88)
     static let close = Animation.spring(response: 0.38, dampingFraction: 0.9)
     static let fade = Animation.easeOut(duration: 0.38)
@@ -1545,30 +1545,50 @@ struct TilePushAway: ViewModifier {
     /// Per tile by default; `--push-blur-layer` blurs the whole grid layer once instead (cheaper, for A/B on device).
     static let blurRadius: CGFloat = 20
     static let scale: CGFloat = 0.92
-    static let layerBlur = ProcessInfo.processInfo.arguments.contains("--push-blur-layer")
+    /// t323u: blur is per tile again (it must follow each tile's own displacement); no grid-layer push blur
+    static let layerBlur = false
 
-    private var isAnchor: Bool {
-        guard let anchor = zm.pushAnchor, let me = zm.pushFrames[key] else { return false }
-        return abs(me.midX - anchor.midX) < 0.5 && abs(me.midY - anchor.midY) < 0.5
-    }
-    private var pushed: Bool { zm.pushAway && zm.pushAnchor != nil && zm.pushFrames[key] != nil && !isAnchor }
 
-    private var offset: CGSize {
+    /// Unit direction (tapped tile → this tile) and distance; nil for the tapped tile / untracked tiles.
+    private var geometry: (dir: CGSize, dist: CGFloat)? {
         // frames snapshotted at open: the live preference frames include this offset (would feed back)
-        guard zm.pushAway, let anchor = zm.pushAnchor, let me = zm.pushFrames[key] else { return .zero }
+        guard let anchor = zm.pushAnchor, let me = zm.pushFrames[key] else { return nil }
         let dx = me.midX - anchor.midX, dy = me.midY - anchor.midY
-        if abs(dx) < 0.5 && abs(dy) < 0.5 { return .zero }          // the tapped tile itself
+        if abs(dx) < 0.5 && abs(dy) < 0.5 { return nil }          // the tapped tile itself
         let d = max(sqrt(dx * dx + dy * dy), 1)
-        let screen = UIScreen.main.bounds.size
-        let push = max(screen.width, screen.height) * Self.factor
-        return CGSize(width: dx / d * push, height: dy / d * push)
+        return (CGSize(width: dx / d, height: dy / d), d)
     }
+    /// t323u: peak blur grows with distance from the tapped tile: 12pt (adjacent) → 24pt (≥ one screen-height away)
+    static let nearBlur: CGFloat = 12
+    static let farBlur: CGFloat = 24
     func body(content: Content) -> some View {
+        let longer = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
+        let g = geometry
+        let t = g.map { min($0.dist / longer, 1) } ?? 0
         content
-            .scaleEffect(pushed ? Self.scale : 1)
-            .blur(radius: pushed && !Self.layerBlur ? Self.blurRadius : 0)
-            .offset(offset)
-            .opacity(zm.pushAnchor == nil || isAnchor ? 1 : zm.pushOpacity)
+            .modifier(PushDisplacement(progress: zm.pushAway && g != nil ? 1 : 0,
+                                       vector: g.map { CGSize(width: $0.dir.width * longer * Self.factor,
+                                                              height: $0.dir.height * longer * Self.factor) } ?? .zero,
+                                       maxBlur: Self.nearBlur + (Self.farBlur - Self.nearBlur) * t,
+                                       minScale: Self.scale))
+    }
+}
+
+/// t323u: one animated progress p drives offset, blur and scale together, so blur = maxBlur × |offset| / |maxOffset|
+/// at every frame of the push springs (out and back); p = 0 ⇒ resting position, blur exactly 0.
+struct PushDisplacement: ViewModifier, Animatable {
+    var progress: Double
+    let vector: CGSize
+    let maxBlur: CGFloat
+    let minScale: CGFloat
+    var animatableData: Double { get { progress } set { progress = newValue } }
+    func body(content: Content) -> some View {
+        let p = CGFloat(progress)
+        let k = min(max(p, 0), 1)
+        content
+            .scaleEffect(1 - (1 - minScale) * k)
+            .blur(radius: maxBlur * k)
+            .offset(x: vector.width * p, y: vector.height * p)
     }
 }
 
