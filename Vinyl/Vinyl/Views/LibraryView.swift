@@ -170,6 +170,47 @@ struct LibraryView: View {
                     OfficialCoverStore.shared.prefetch(Array(qs))
                 }
                 // t169u：开始播放一首歌 → 预取它 + 队列里接下来 2 首的歌词
+                // t295u: --debug-lyrics-hitrate — cold lookups (temp cache dir) for ~20 songs across home albums / playlists,
+                // one line per song with the outcome; miss reasons come from the [t295] lines in the repository
+                .task(id: music.homePageRevision) {
+                    guard ProcessInfo.processInfo.arguments.contains("--debug-lyrics-hitrate"),
+                          !music.collections.isEmpty, !DebugOnce.hitrate else { return }
+                    DebugOnce.hitrate = true
+                    // unstructured: a homePageRevision bump must not cancel the run halfway
+                    Task { @MainActor in
+                    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lyrics-hitrate-\(UUID())")
+                    var picked: [(Song, MusicCollection)] = []
+                    // one track (the middle one) from each of the first 20 home collections: playlists + library albums
+                    for c in music.collections.prefix(30) where picked.count < 20 {
+                        guard let songs = try? await c.songs(), !songs.isEmpty else { continue }
+                        picked.append((songs[songs.count / 2], c))
+                    }
+                    for legacy in [true, false] {
+                    LyricsTrace.legacy = legacy
+                    let mode = legacy ? "BEFORE(b180 matching)" : "AFTER"
+                    let repo = LyricsRepository(directory: dir.appendingPathComponent(mode))
+                    var hits = 0, synced = 0
+                    let t0 = CFAbsoluteTimeGetCurrent()
+                    for (n, pair) in picked.enumerated() {
+                        let (s, c) = pair
+                        let q = LyricsQuery(title: s.title, artist: s.artistName, album: s.albumTitle, duration: s.duration)
+                        let t = CFAbsoluteTimeGetCurrent()
+                        do {
+                            let f = try await repo.load(q)
+                            let kind = LyricsTrace.kind(f.result)
+                            if f.isFound { hits += 1 }
+                            if case .synced = f.result { synced += 1 }
+                            print("[t295] \(legacy ? "B" : "A")#\(n + 1) \(f.isFound ? "HIT " : "MISS") \(s.title) — \(s.artistName) [\(Int(s.duration ?? 0))s, \(c.isCatalog ? "catalog" : "library") \(c.title)] → \(kind) via \(f.source) in \(LyricsTrace.ms(since: t))ms")
+                        } catch {
+                            print("[t295] \(legacy ? "B" : "A")#\(n + 1) FAIL \(s.title) — \(s.artistName) [\(Int(s.duration ?? 0))s, \(c.title)] → error \(error.localizedDescription) in \(LyricsTrace.ms(since: t))ms")
+                        }
+                    }
+                    print("[t295] RESULT \(mode) \(hits)/\(picked.count) found (\(synced) synced) in \(LyricsTrace.ms(since: t0))ms")
+                    }
+                    LyricsTrace.legacy = false
+                    try? FileManager.default.removeItem(at: dir)
+                    }
+                }
                 // 调试参数 --log-themes：打印前 8 个首页专辑的主题色选取 + 预取第一张专辑歌词（不改界面）
                 .task(id: music.homePageRevision) {
                     guard ProcessInfo.processInfo.arguments.contains("--log-themes"), !music.collections.isEmpty else { return }
@@ -1711,4 +1752,4 @@ struct LibrarySearchSheet: View {
     }
 }
 
-@MainActor enum DebugOnce { static var opened = false }
+@MainActor enum DebugOnce { static var opened = false; static var hitrate = false }

@@ -67,6 +67,8 @@ final class AppleMusicStore: ObservableObject {
     /// from the library song that is playing, so without this the lyrics panel never saw its song as current:
     /// no active line, no wipe, no follow.
     @Published private(set) var currentSongCatalogID: MusicItemID?
+    /// t304u: the playing Song itself (lyrics for a track from another album than the one being browsed)
+    @Published private(set) var currentSong: Song?
     let timeline = PlaybackTimeline()
     let sleep = SleepTimer()
     private(set) var position: TimeInterval {
@@ -561,6 +563,9 @@ final class AppleMusicStore: ObservableObject {
         } catch { report(error, action: "切换歌曲失败") }
     }
 
+    /// t297u: the player clock read right now (diagnostics only; the UI uses the 4 Hz sample + extrapolation)
+    var livePlaybackTime: Double { player.playbackTime }
+
     func seek(to value: Double) {
         guard hasCurrentTrack, duration > 0, value.isFinite else { return }
         player.playbackTime = min(duration, max(0, value))
@@ -589,6 +594,7 @@ final class AppleMusicStore: ObservableObject {
             if currentSongID != nil { currentSongID = nil }
             if currentCatalogID != nil { currentCatalogID = nil }
             if currentSongCatalogID != nil { currentSongCatalogID = nil }
+            if currentSong != nil { currentSong = nil }
             position = 0
             if duration != 0 { duration = 0 }
             if isPlaying { isPlaying = false }
@@ -614,6 +620,7 @@ final class AppleMusicStore: ObservableObject {
         }
         if currentSongID != songID {
             currentSongID = songID
+            if case .song(let song) = entry?.item { currentSong = song } else { currentSong = nil }
             var cid: MusicItemID?
             if case .song(let song) = entry?.item, let pp = song.playParameters,
                let data = try? JSONEncoder().encode(pp),

@@ -9,6 +9,14 @@ enum LyricsTrace {
         guard on else { return }
         t0 = CFAbsoluteTimeGetCurrent(); print("[t287] T+    0ms MARK " + s())
     }
+    /// hit-rate harness only: true = Build 180 matching (no script alias, ±3s everywhere, NetEase for CJK titles only)
+    nonisolated(unsafe) static var legacy = false
+    static let hitrate = ProcessInfo.processInfo.arguments.contains("--debug-lyrics-hitrate")
+    /// miss-reason lines, printed for the hit-rate harness (or with --log-lyrics)
+    static func why(_ s: @autoclosure () -> String) {
+        guard on || hitrate else { return }
+        print("[t295]   " + s())
+    }
     static func log(_ s: @autoclosure () -> String) {
         guard on else { return }
         print(String(format: "[t287] T+%5.0fms ", (CFAbsoluteTimeGetCurrent() - t0) * 1000) + s())
@@ -90,6 +98,19 @@ public struct LyricsQuery: Sendable {
 
     /// Normalized edit similarity, with a conservative threshold at the selection boundary.
     static func artistSimilarity(_ a: String, _ b: String) -> Double {
+        // t295u: word order ("Yanzi Sun" / "Sun Yanzi" / "Sun, Stefanie") — compare sorted words too
+        if LyricsTrace.legacy { return editSimilarity(a, b) }
+        func words(_ s: String) -> String {
+            simplified(s).lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { !$0.isEmpty }.sorted().joined()
+        }
+        let ws = { (x: String, y: String) -> Double in
+            let l = words(x), r = words(y)
+            return !l.isEmpty && l == r ? 1 : 0
+        }
+        return max(editSimilarity(a, b), ws(a, b), ws(a.components(separatedBy: ",").reversed().joined(separator: " "), b))
+    }
+    static func editSimilarity(_ a: String, _ b: String) -> Double {
         let lhs = Array(canonical(primaryArtist(a))), rhs = Array(canonical(primaryArtist(b)))
         guard !lhs.isEmpty, !rhs.isEmpty else { return 0 }
         if lhs == rhs { return 1 }
@@ -135,6 +156,12 @@ enum LyricsParser {
         let stamp = try! NSRegularExpression(pattern: #"\[(\d{1,3}):(\d{1,2}(?:[\.:]\d{1,3})?)\]"#)
         let word = try! NSRegularExpression(pattern: #"<(\d{1,3}):(\d{1,2}(?:[\.:]\d{1,3})?)>"#)
         var out: [(Double, String, [LyricLine.Mark]?)] = []
+        // t297u: honour [offset:±ms] (LRC spec: positive = lyrics appear sooner)
+        var shift = 0.0
+        if let r = text.range(of: #"\[offset:\s*([+-]?\d+)\s*\]"#, options: [.regularExpression, .caseInsensitive]) {
+            let digits = text[r].filter { $0.isNumber || $0 == "-" }
+            shift = -(Double(digits) ?? 0) / 1000
+        }
         for raw in text.components(separatedBy: .newlines) {
             let ns = raw as NSString
             let matches = stamp.matches(in: raw, range: NSRange(location: 0, length: ns.length))
@@ -161,6 +188,9 @@ enum LyricsParser {
                 out.append((mm * 60 + ss, body, marks.isEmpty ? nil : marks))
             }
         }
+        if shift != 0 {
+            out = out.map { (max(0, $0.0 + shift), $0.1, $0.2?.map { .init(char: $0.char, time: max(0, $0.time + shift)) }) }
+        }
         return out.sorted { $0.0 < $1.0 }.enumerated().map {
             LyricLine(id: $0.offset, time: $0.element.0, text: $0.element.1, marks: $0.element.2)
         }
@@ -177,15 +207,47 @@ struct LyricsRecord: Decodable, Sendable {
     let plainLyrics: String?
     let syncedLyrics: String?
 
-    func matches(_ query: LyricsQuery) -> Bool {
-        guard let trackName, let artistName,
-              !LyricsQuery.canonical(query.title).isEmpty,
-              LyricsQuery.canonical(trackName) == LyricsQuery.canonical(query.title),
-              LyricsQuery.artistSimilarity(artistName, query.artist) >= 0.85 else { return false }
-        if let expected = query.duration {
-            guard let duration, duration.isFinite, duration > 0, abs(duration - expected) <= 3 else { return false }
+    /// t295u: the catalog often names Chinese artists in English (Khalil Fong / 方大同, Jay Chou / 周杰伦) while
+    /// NetEase / LRCLIB use the Chinese name, so the edit-distance check is 0. When the two names are in different
+    /// scripts, an exact title plus a duration within `aliasTolerance` stands in for the artist check.
+    static var aliasTolerance: Double { LyricsTrace.legacy ? 2 : 3 }
+    static func hasCJK(_ s: String) -> Bool { s.unicodeScalars.contains { (0x3400...0x9FFF).contains($0.value) } }
+    static func hasLatin(_ s: String) -> Bool { s.unicodeScalars.contains { ("a"..."z").contains($0) || ("A"..."Z").contains($0) } }
+    static func differentScripts(_ a: String, _ b: String) -> Bool {
+        (hasCJK(a) && !hasCJK(b) && hasLatin(b)) || (hasCJK(b) && !hasCJK(a) && hasLatin(a))
+    }
+
+    func matches(_ query: LyricsQuery, tolerance: Double = 3) -> Bool {
+        guard let trackName, let artistName, !LyricsQuery.canonical(query.title).isEmpty else { return false }
+        let qt = LyricsQuery.canonical(query.title), rt = LyricsQuery.canonical(trackName)
+        // t295u: bilingual titles ("美好的舊時光 In My Heart" for "In My Heart"): containment is accepted only with a
+        // matching artist and a duration within 3s
+        let contained = !LyricsTrace.legacy && qt != rt && min(qt.count, rt.count) >= 4 && (rt.contains(qt) || qt.contains(rt))
+        guard qt == rt || contained else { return false }
+        func within(_ limit: Double) -> Bool {
+            guard let expected = query.duration else { return true }
+            guard let duration, duration.isFinite, duration > 0 else { return false }
+            return abs(duration - expected) <= limit
         }
-        return true
+        if LyricsQuery.artistSimilarity(artistName, query.artist) >= 0.85 { return within(contained ? min(3, tolerance) : tolerance) }
+        // alias path needs a real duration on both sides
+        guard !contained, !LyricsTrace.legacy, query.duration != nil, Self.differentScripts(artistName, query.artist) else { return false }
+        return within(Self.aliasTolerance)
+    }
+
+    /// t295u diagnostic: why `matches` said no
+    func rejection(_ query: LyricsQuery) -> String {
+        guard let trackName, let artistName else { return "no name" }
+        if LyricsQuery.canonical(trackName) != LyricsQuery.canonical(query.title) { return "title '\(trackName)'" }
+        let sim = LyricsQuery.artistSimilarity(artistName, query.artist)
+        let alias = sim < 0.85 && Self.differentScripts(artistName, query.artist)
+        if sim < 0.85 && !alias { return "artist '\(artistName)' sim \(String(format: "%.2f", sim))" }
+        if let expected = query.duration {
+            guard let duration else { return "no duration" }
+            let limit = alias ? Self.aliasTolerance : 5
+            if abs(duration - expected) > limit { return "duration \(Int(duration))s vs \(Int(expected))s\(alias ? " (alias)" : "")" }
+        }
+        return "ok"
     }
 
     var result: LyricsResult? {
@@ -216,7 +278,12 @@ public actor LyricsHTTPClient {
     typealias Transport = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
     typealias Sleeper = @Sendable (Double) async throws -> Void
     static let shared = LyricsHTTPClient()
-    enum Failure: Error { case invalidResponse, status(Int) }
+    enum Failure: Error, LocalizedError {
+        case invalidResponse, status(Int)
+        var errorDescription: String? {
+            switch self { case .invalidResponse: return "invalid response"; case .status(let s): return "HTTP \(s)" }
+        }
+    }
     static let backgroundSlots = 2
     static let foregroundTimeout: Double = 3
     static let longTimeout: Double = 8
@@ -363,7 +430,8 @@ struct LyricsCacheEntry: Codable, Sendable {
 
 public actor LyricsRepository {
     public static let shared = LyricsRepository()
-    static let notFoundTTL: TimeInterval = 3 * 24 * 3600
+    /// t295u: 3 days → 6 hours; a miss is often a transient mismatch / outage, and matching keeps improving
+    static let notFoundTTL: TimeInterval = 6 * 3600
     private let directory: URL
     private let client: LyricsHTTPClient
     private let now: @Sendable () -> Date
@@ -452,7 +520,7 @@ public actor LyricsRepository {
         return status == 404 ? nil : data
     }
 
-    static func selected(_ records: [LyricsRecord], _ query: LyricsQuery) -> LyricsRecord? {
+    static func selected(_ records: [LyricsRecord], _ query: LyricsQuery, tolerance: Double = 3) -> LyricsRecord? {
         func score(_ record: LyricsRecord) -> Double {
             var score = LyricsQuery.artistSimilarity(record.artistName ?? "", query.artist) * 1000
             if case .synced = record.result { score += 20 }
@@ -463,7 +531,7 @@ public actor LyricsRepository {
             if let expected = query.duration, let actual = record.duration { score -= abs(actual - expected) }
             return score
         }
-        return records.filter { $0.matches(query) && $0.result != nil }.sorted { score($0) > score($1) }.first
+        return records.filter { $0.matches(query, tolerance: tolerance) && $0.result != nil }.sorted { score($0) > score($1) }.first
     }
 
     private static func hit(_ record: LyricsRecord, source: String) -> LyricsFetch? {
@@ -476,6 +544,11 @@ public actor LyricsRepository {
         error is CancellationError || (error as? URLError)?.code == .cancelled
     }
     private static func isSynced(_ f: LyricsFetch) -> Bool { if case .synced = f.result { return true }; return false }
+    /// t295u: a synced answer with only a few lines (seen: NetEase 4 lines vs LRCLIB 38) is a fragment, not lyrics
+    static let minSyncedLines = 8
+    private static func isFullSynced(_ f: LyricsFetch) -> Bool {
+        if case .synced(let l) = f.result { return l.count >= minSyncedLines }; return false
+    }
 
     typealias Job = @Sendable () async throws -> LyricsFetch?
     /// Runs jobs concurrently; the earliest job (in list order) with a hit wins as soon as everything before it
@@ -505,6 +578,8 @@ public actor LyricsRepository {
         }
     }
 
+    /// t295u: /get keeps ±3s (it is an exact lookup); fuzzy search and NetEase accept ±5s for the same artist
+    static var searchTolerance: Double { LyricsTrace.legacy ? 3 : 5 }
     /// LRCLIB: all script variants' /get in parallel (earlier variant preferred), then all searches in parallel.
     static func fetchLRCLIB(_ query: LyricsQuery, client: LyricsHTTPClient, foreground: Bool) async throws -> LyricsFetch? {
         let gets: [Job] = query.variants.map { variant in
@@ -518,6 +593,8 @@ public actor LyricsRepository {
             return {
                 guard let data = try await lrclib("get", q, client: client, foreground: foreground) else { return nil }
                 let record = try JSONDecoder().decode(LyricsRecord.self, from: data)
+                if !record.matches(query) { LyricsTrace.why("\(query.title): LRCLIB/get rejected — \(record.rejection(query))") }
+                else if record.result == nil { LyricsTrace.why("\(query.title): LRCLIB/get record has no lyrics") }
                 return record.matches(query) ? hit(record, source: "LRCLIB/get") : nil
             }
         }
@@ -534,7 +611,12 @@ public actor LyricsRepository {
         let jobs: [Job] = searches.map { items in {
             guard let data = try await lrclib("search", items, client: client, foreground: foreground) else { return nil }
             let records = try JSONDecoder().decode([LyricsRecord].self, from: data)
-            return selected(records, query).flatMap { hit($0, source: "LRCLIB/search") }
+            let pick = selected(records, query, tolerance: searchTolerance).flatMap { hit($0, source: "LRCLIB/search") }
+            if pick == nil {
+                let reasons = records.prefix(3).map { "\($0.trackName ?? "?")/\($0.artistName ?? "?"): \($0.rejection(query))" }
+                LyricsTrace.why("\(query.title): LRCLIB/search \(items.map { $0.value ?? "" }) → \(records.count) records, none usable \(reasons)")
+            }
+            return pick
         } }
         let (found, searchFailure) = try await firstHit(jobs)
         if let found { return found }
@@ -553,7 +635,9 @@ public actor LyricsRepository {
                 catch { return (.lrclib, .failure(error)) }
             }
             var pending = 1
-            if query.isChinese {
+            // t295u: NetEase for every query, not only CJK titles — English-titled Mandopop
+            // ("I Do" / Jay Chou) only had LRCLIB's plain text before
+            if !LyricsTrace.legacy || query.isChinese {
                 pending += 1
                 group.addTask {
                     do { return (.netease, .success(try await fetchChineseBackup(query, client: client, foreground: foreground))) }
@@ -563,7 +647,7 @@ public actor LyricsRepository {
             var best: [Leg: LyricsFetch] = [:], failure: Error?, graceArmed = false
             while let item = try await group.next() {
                 guard let answer = item else {          // grace window over
-                    if let n = best[.netease], isSynced(n) { group.cancelAll(); LyricsTrace.log("race: NetEase (LRCLIB >300ms late)"); return n }
+                    if let n = best[.netease], isFullSynced(n) { group.cancelAll(); LyricsTrace.log("race: NetEase (LRCLIB >300ms late)"); return n }
                     continue
                 }
                 let (leg, result) = answer
@@ -578,12 +662,12 @@ public actor LyricsRepository {
                 }
                 if let l = best[.lrclib], isSynced(l) { group.cancelAll(); return l }
                 if pending == 0 { group.cancelAll(); break }
-                if let n = best[.netease], isSynced(n), !graceArmed {
+                if let n = best[.netease], isFullSynced(n), !graceArmed {
                     graceArmed = true
                     group.addTask { try? await Task.sleep(for: .seconds(preferenceGrace)); return nil }
                 }
             }
-            if let n = best[.netease], isSynced(n) { return n }
+            if let n = best[.netease], isFullSynced(n) { return n }
             if let l = best[.lrclib] { return l }
             if let n = best[.netease] { return n }
             // Only all-successful empty lookups can become a three-day negative cache.
@@ -634,15 +718,27 @@ public actor LyricsRepository {
                  .init(name: "limit", value: "30"), .init(name: "offset", value: "0")], client: client, foreground: foreground)
             guard status == 200 else { throw LyricsHTTPClient.Failure.status(status) }
             let search = try JSONDecoder().decode(NetEaseSearch.self, from: data)
-            guard search.code == 200 else { throw LyricsHTTPClient.Failure.invalidResponse }
-            let songs = (search.result?.songs ?? []).filter { $0.record.matches(query) }.sorted {
+            guard search.code == 200 else {
+                LyricsTrace.why("\(query.title): NetEase search code \(search.code)")
+                throw LyricsHTTPClient.Failure.invalidResponse
+            }
+            let all = search.result?.songs ?? []
+            if !all.contains(where: { $0.record.matches(query, tolerance: searchTolerance) }) {
+                LyricsTrace.why("\(query.title): NetEase '\(variant.title) \(variant.artist)' → \(all.count) songs, none match \(all.prefix(3).map { "\($0.name)/\($0.record.artistName ?? ""): \($0.record.rejection(query))" })")
+            }
+            let album = query.album.map(LyricsQuery.canonical) ?? ""
+            let songs = all.filter { $0.record.matches(query, tolerance: searchTolerance) }.sorted {
                 let a = LyricsQuery.artistSimilarity($0.record.artistName ?? "", query.artist)
                 let b = LyricsQuery.artistSimilarity($1.record.artistName ?? "", query.artist)
                 if a != b { return a > b }
+                // t295u: same album breaks ties (studio vs live / compilation copies)
+                let aa = !album.isEmpty && LyricsQuery.canonical($0.album?.name ?? "") == album
+                let ba = !album.isEmpty && LyricsQuery.canonical($1.album?.name ?? "") == album
+                if aa != ba { return aa }
                 return abs($0.duration / 1000 - (query.duration ?? $0.duration / 1000)) <
                        abs($1.duration / 1000 - (query.duration ?? $1.duration / 1000))
             }
-            for song in songs.prefix(3) where checked.insert(song.id).inserted {
+            for song in songs.prefix(4) where checked.insert(song.id).inserted {
                 do {
                     let (data, status) = try await request(host, "/api/song/lyric",
                         [.init(name: "id", value: String(song.id)), .init(name: "lv", value: "-1"),
@@ -650,7 +746,7 @@ public actor LyricsRepository {
                     guard status == 200 else { throw LyricsHTTPClient.Failure.status(status) }
                     let response = try JSONDecoder().decode(NetEaseLyrics.self, from: data)
                     guard response.code == 200 else { throw LyricsHTTPClient.Failure.invalidResponse }
-                    if response.nolyric == true || response.uncollected == true { continue }
+                    if response.nolyric == true || response.uncollected == true { LyricsTrace.why("\(query.title): NetEase \(song.id) nolyric/uncollected"); continue }
                     let enhanced = response.klyric?.lyric.flatMap { $0.contains("<") ? $0 : nil }
                     let text = enhanced ?? response.lrc?.lyric
                     let plain = text.flatMap { raw -> String? in

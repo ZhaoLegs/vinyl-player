@@ -249,6 +249,13 @@ struct WaveformBar: View {
     @State private var barsFrame: CGRect = CGRect(x: 0, y: 0, width: 1, height: 26)
     /// 歌曲总时长（秒），用于时间气泡
     var duration: Double = 0
+    /// t306u: browsing an album other than the playing one → "<title> · <artist>" in the time-bubble style,
+    /// shown when `labelPulse` changes (cover landed) and on a tap of the bar, auto-hidden after `labelHold`
+    var nowPlayingLabel: String? = nil
+    var labelPulse: Int = 0
+    static let labelHold: Double = 3
+    @State private var labelVisible = false
+    @State private var labelToken = 0
     private let count = Waveform.barCount
 
     /// 线宽 1.6pt → 3x 屏 4.8px，按整像素取整为 5px（所有竖线同一像素宽）；间距固定 2pt = 6px。
@@ -259,10 +266,12 @@ struct WaveformBar: View {
     var body: some View {
         HStack(spacing: 10) {
             if let toggle {
-                SystemPlaybackButton(isPlaying: isPlaying, size: 11, action: toggle)
-                    .frame(width: 20)
+                // t300u/t301u: same symbol, 14.5pt semibold and 32×40 target as the mini player; colour stays the album theme ink.
+                // -6pt side padding keeps the bar's 20pt layout slot, so the waveform doesn't move.
+                SystemPlaybackButton(isPlaying: isPlaying, size: MiniGlyph.playPause, action: toggle)
+                    .padding(.horizontal, -6)
             } else {
-                SystemPauseButton(size: 11)
+                SystemPauseButton(size: MiniGlyph.playPause)
             }
 
             bars
@@ -315,8 +324,32 @@ struct WaveformBar: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: scrub == nil)
+        // t306u: same bubble (font / padding / 24pt / BubbleGlass / position above the bar / 0.2s fade), centred
+        .overlay(alignment: .topLeading) {
+            if labelVisible, scrub == nil, let label = nowPlayingLabel {
+                Text(label)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(theme.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 9)
+                    .frame(height: 24)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: max(80, barsFrame.width))
+                    .modifier(BubbleGlass())
+                    .position(x: barsFrame.midX, y: -(42 * 0.035 / 2 + 12 + 12))
+                    .transaction { $0.animation = nil }
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: labelVisible)
+        .simultaneousGesture(TapGesture().onEnded { pulseLabel() })
+        .onChange(of: labelPulse) { _, v in if v > 0 { pulseLabel() } }
+        .onChange(of: nowPlayingLabel == nil) { _, none in if none { labelVisible = false } }
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("--demo-scrub") { scrub = 0.42 }
+            if labelPulse > 0 { pulseLabel() }
         }
         .onChange(of: headActive) { _, on in
             // t167u：选中 = 弹性 0.25s（轻微回弹）；松手 = 平滑 0.3s 回到常态
@@ -326,6 +359,17 @@ struct WaveformBar: View {
     }
 
     private var shown: Double { min(1, max(0, scrub ?? progress)) }
+
+    private func pulseLabel() {
+        guard nowPlayingLabel != nil else { return }
+        labelVisible = true
+        labelToken &+= 1
+        let token = labelToken
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Self.labelHold))
+            if token == labelToken { labelVisible = false }
+        }
+    }
 
     // 所有几何都在像素网格上算：x、宽、间距都是整数像素，再除以 scale 回到 pt。
     /// t167u：播放头选中态参数

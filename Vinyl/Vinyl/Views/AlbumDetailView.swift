@@ -105,9 +105,12 @@ struct AlbumDetailView: View {
         return ("demo:\(coverName):\(music.demoTrack)", nil)
     }
     /// t160u：歌词对象 = 本专辑里正在播放的那首，否则本专辑第一首
+    /// t304u：本专辑没在播、但别处有歌在播 → 跟随正在播放的那首
     private var lyricsSong: Song? {
         guard let songs, !songs.isEmpty else { return nil }
-        return songs.first(where: { music.isCurrent($0) }) ?? songs[0]
+        if let s = songs.first(where: { music.isCurrent($0) }) { return s }
+        if music.hasCurrentTrack, let playing = music.currentSong { return playing }
+        return songs[0]
     }
     private var favoriteOn: Bool { music.isFavorite(favoriteTarget.key) }
 
@@ -639,7 +642,7 @@ struct AlbumDetailView: View {
     private var waveform: some View {
         let _ = TracklistProfile.count("DetailWaveform.builder")
         return DetailWaveform(collection: collection, songs: songs,
-                              albumIsPlaying: albumIsPlaying, demoLevels: demoLevels)
+                              albumIsPlaying: albumIsPlaying, demoLevels: demoLevels, landed: landed)
     }
 
     /// 内置演示没有音频文件；若包内放入 demo-audio.m4a/.wav，则用 AVAssetReader 实测 RMS。
@@ -1161,9 +1164,28 @@ private struct DetailWaveform: View {
     let songs: [Song]?
     let albumIsPlaying: Bool
     let demoLevels: [Double]?
-    var body: some View {
+    /// t306u: shown (in the scrub-bubble style) when the cover has landed and on a tap of the bar
+    let landed: Bool
+    var body: some View { bar }
+    @ViewBuilder private var bar: some View {
         let _ = TracklistProfile.count("DetailWaveform.body")
-        if collection != nil, !albumIsPlaying {
+        // t304u: browsing another album while something plays → the bar keeps showing the playing track
+        // (progress, play/pause, waveform). Pause pauses it; play resumes it only if it is from this album,
+        // otherwise play starts this album. With nothing loaded at all, the idle bar starts this album.
+        if collection != nil, !albumIsPlaying, music.hasCurrentTrack, let id = music.currentSongID {
+            let first = songs?.first { $0.playParameters != nil }
+            WaveformBar(progress: music.duration > 0 ? timeline.position / music.duration : 0,
+                        levels: Waveform.seeded(id.rawValue), isPlaying: music.isPlaying,
+                        toggle: {
+                            if music.isPlaying { Task { await music.togglePlayback() }; return }
+                            guard let first, let songs else { Task { await music.togglePlayback() }; return }
+                            Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
+                        },
+                        seek: { music.seek(to: $0 * music.duration) }, duration: music.duration,
+                        nowPlayingLabel: music.currentArtist.isEmpty ? music.currentTitle
+                            : "\(music.currentTitle) · \(music.currentArtist)",
+                        labelPulse: landed ? 1 : 0)
+        } else if collection != nil, !albumIsPlaying {
             let first = songs?.first { $0.playParameters != nil }
             WaveformBar(progress: 0,
                         levels: Waveform.seeded(first?.id.rawValue ?? collection?.id ?? "idle"),
@@ -1445,6 +1467,7 @@ enum Lyrics {
     static let fling: Double = 0.6            // finger-up deceleration spring
     static let barDirThreshold: CGFloat = 8   // t280u: finger travel before the bar hides / shows
     static let manualOpacity: Double = 0.75   // non-current lines while scrolling by hand
+    static let idleReturn: Double = 5         // t302u/t303u: the one knob — no touch for this long after the finger lifts → auto-follow resumes
     /// t252u：换行上滚时，离当前行越远的行越晚起步（每步 28ms，最多 100ms）——瀑布式延迟，不是整块硬滚
     static let staggerStep: Double = 0.028
     static let staggerMax: Double = 0.100
@@ -1473,7 +1496,6 @@ enum Lyrics {
     static var font: Font { .system(size: fontSize, weight: .bold) }
     static let topInset: CGFloat = LyricsTopFade.height * 0.55   // t231u：首行落在顶部模糊带之下，可读；上方溶开
     static let bottomGap: CGFloat = 24     // t175u：最后一行底 → 时间条顶 = 24pt
-    static let lookahead: Double = 0.15    // 播放时钟 0.25s 一跳，提前一点点亮下一行
 }
 
 /// 同步提供首帧缓存；后台数据仓库负责合并请求、磁盘缓存与失败重试。
@@ -1577,6 +1599,11 @@ struct LyricsPanel: View {
     /// 播放时钟 0.25s 一跳：记下最近一次的位置与时刻，帧间按真实时间外推
     @State private var anchorPos: Double = 0
     @State private var anchorDate = Date()
+    /// t297u: bumped by a timer at the next line boundary (between the 4 Hz clock samples)
+    @State private var boundaryTick = 0
+    @State private var lineHold = LineHold()
+    /// t302u: bumped by every touch-down / lift; an idle return only fires if it is unchanged Lyrics.idleReturn after the lift
+    @State private var idleToken = 0
     /// t252u：自绘跟随偏移（替代 ScrollViewReader.scrollTo 的整块硬滚）；各行用不同 delay 追同一目标 → 瀑布延迟
     @State private var followY: CGFloat = 0
     @State private var lineHeights: [Int: CGFloat] = [:]
@@ -1666,13 +1693,18 @@ struct LyricsPanel: View {
         }
     }
 
+    /// t297u: the line switch uses the extrapolated clock (not the raw 4 Hz sample) + `switchLead`;
+    /// `boundaryTick` re-renders exactly at the next line's boundary between samples.
     private func currentIndex(_ lines: [LyricLine]) -> Int {
         guard music.isCurrent(song) else { return -1 }
-        let t = timeline.position + Lyrics.lookahead
+        _ = boundaryTick
+        let base = LyricsTiming.legacy ? timeline.position
+            : LyricsTiming.playbackTime(anchorPos: anchorPos, anchorDate: anchorDate, at: Date(), playing: music.isPlaying)
+        let t = base + LyricsTiming.switchLead
         guard let first = lines.first, t >= first.time else { return -1 }
         var lo = 0, hi = lines.count - 1
         while lo < hi { let mid = (lo + hi + 1) / 2; if lines[mid].time <= t { lo = mid } else { hi = mid - 1 } }
-        return lo
+        return lineHold.monotonic(lo, time: t, song: song.id.rawValue)
     }
 
     private func synced(_ lines: [LyricLine]) -> some View {
@@ -1730,6 +1762,24 @@ struct LyricsPanel: View {
             .modifier(TopProgressiveBlurMask(height: topExtend + LyricsTopFade.height))
             .onDisappear { if barHidden { barHidden = false; onManual(false) } }
             .onAppear { LyricsTrace.log("synced view on screen (\(lines.count) lines)") }
+            .task(id: "\(anchorDate.timeIntervalSince1970)-\(current)") {
+                // t297u: wake exactly when the extrapolated clock crosses the next line's start
+                guard !LyricsTiming.legacy, music.isPlaying, music.isCurrent(song), current + 1 < lines.count else { return }
+                let now = LyricsTiming.playbackTime(anchorPos: anchorPos, anchorDate: anchorDate, at: Date(), playing: true)
+                let wait = lines[current + 1].time - (now + LyricsTiming.switchLead)
+                guard wait > 0, wait < LyricsTiming.maxExtrapolate else { return }
+                try? await Task.sleep(for: .seconds(wait))
+                guard !Task.isCancelled else { return }
+                boundaryTick &+= 1
+            }
+            .onChange(of: current) { _, i in
+                // t297u measurement (--log-lyrics): when the switch fires vs the line's timestamp, on the live player clock
+                guard LyricsTrace.on, i >= 0, i < lines.count, music.isCurrent(song) else { return }
+                let live = music.livePlaybackTime
+                LyricsTrace.log(String(format: "switch line %d at live %.3f, line time %.3f → fired %+.0fms vs timestamp (switch lead %.2fs%@)",
+                                       i, live, lines[i].time, (live - lines[i].time) * 1000, LyricsTiming.switchLead,
+                                       LyricsTiming.legacy ? ", LEGACY" : ""))
+            }
             .task(id: song.id) {
                 // t289u diagnostic (--log-lyrics): is the panel song recognised as the playing one, and what drives the wipe
                 guard LyricsTrace.on else { return }
@@ -1772,7 +1822,7 @@ struct LyricsPanel: View {
         }
     }
 
-    /// t269u/t280u: finger drag scrolls lyrics freely and stays where the user leaves it (no idle return).
+    /// t269u/t280u/t302u: finger drag scrolls lyrics freely; Lyrics.idleReturn (5s) after the last lift with no new touch, auto-follow resumes.
     /// Bar: finger moving up (content forward) slides it out, finger moving down brings it back (8pt hysteresis).
     /// Auto-follow resumes only on: tapping a line (seek), a track change, or reopening the lyrics.
     private func manualDrag(_ lines: [LyricLine]) -> some Gesture {
@@ -1781,6 +1831,7 @@ struct LyricsPanel: View {
                 let ty = v.translation.height
                 if !dragging {
                     dragging = true
+                    idleToken &+= 1          // t302u: a new touch restarts the idle timer
                     dragBase = manualY
                     dirRef = ty
                     if !manual { withAnimation(.easeOut(duration: 0.25)) { manual = true } }
@@ -1800,6 +1851,15 @@ struct LyricsPanel: View {
                 let target = clampManual(dragBase + v.predictedEndTranslation.height, lines: lines)
                 withAnimation(.spring(duration: Lyrics.fling, bounce: 0)) { manualY = target }
                 dragBase = target
+                // t302u/t303u: Lyrics.idleReturn (5s) without a touch after the lift (the 0.6s fling has long settled) → scroll back to the
+                // current line (Lyrics.scroll 0.45s) and bring the time bar back (parent's 0.35s spring) together
+                idleToken &+= 1
+                let token = idleToken
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(max(Lyrics.idleReturn, Lyrics.fling)))
+                    guard token == idleToken, !dragging else { return }
+                    resumeFollow()
+                }
             }
     }
 
@@ -1866,7 +1926,32 @@ private struct LyricHeightKey: PreferenceKey {
 
 enum Karaoke {
     static let maxLine: Double = 8          // 没有下一行 / 间隔过长时，一行最多填 8s
-    static let maxExtrapolate: Double = 0.5 // 播放时钟外推上限
+}
+
+/// t297u: every lyric-timing knob and the time source in one place.
+/// Time source: the 4 Hz `PlaybackTimeline.position` sample (ApplicationMusicPlayer.playbackTime) extrapolated with
+/// wall-clock time since the sample (rate 1, capped at `maxExtrapolate`, 0 while paused). Callers add `lead`
+/// (wipe) or `lead + lineLead` (line switch: highlight / scale / follow scroll).
+enum LyricsTiming {
+    /// global lead: lyrics run this far ahead of the reported playback time
+    static var lead: Double = {
+        if let a = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--lyrics-lead=") }),
+           let v = Double(a.dropFirst("--lyrics-lead=".count)) { return v }
+        return 0.20
+    }()
+    /// extra lead for the line switch so the scale spring (0.55s) / follow scroll (0.45s) *land* on the timestamp
+    /// instead of starting at it (both reach ~90% after ≈ 0.6 × duration)
+    static var lineLead: Double = 0.15
+    static let maxExtrapolate: Double = 0.5
+    /// `--lyrics-timing-legacy`: Build 180 behaviour (line switch on the raw 4 Hz sample + 0.15s, wipe with no lead)
+    static let legacy = ProcessInfo.processInfo.arguments.contains("--lyrics-timing-legacy")
+
+    static func playbackTime(anchorPos: Double, anchorDate: Date, at date: Date, playing: Bool) -> Double {
+        guard playing else { return anchorPos }
+        return anchorPos + min(maxExtrapolate, max(0, date.timeIntervalSince(anchorDate)))
+    }
+    static var wipeLead: Double { legacy ? 0 : lead }
+    static var switchLead: Double { legacy ? 0.15 : lead + lineLead }
 }
 
 /// 当前行：灰字底 + 逐字黑色。用同一段 Text 拼接（同字重 600），换行 / 居中与普通行完全一致，
@@ -1921,8 +2006,8 @@ struct KaraokeLine: View {
 
     var body: some View {
         TimelineView(.animation(paused: !playing)) { tl in
-            let dt = playing ? min(Karaoke.maxExtrapolate, max(0, tl.date.timeIntervalSince(anchorDate))) : 0
-            let n = clock.monotonic(filled(at: anchorPos + dt), line: line.id)
+            let t = LyricsTiming.playbackTime(anchorPos: anchorPos, anchorDate: anchorDate, at: tl.date, playing: playing)
+            let n = clock.monotonic(filled(at: t + LyricsTiming.wipeLead), line: line.id)
             if #available(iOS 18.0, *) {
                 // t244u：TextRenderer 逐字绘制 —— 擦亮 0.5 → 1.0、已唱字上浮 2pt、正在唱的字柔光（只这一行逐帧）
                 Text(verbatim: line.text)
@@ -1955,6 +2040,18 @@ struct KaraokeLine: View {
             }
             return text.font(Lyrics.font)
         }
+    }
+}
+
+/// t297u: a fresh 4 Hz sample can land slightly behind the extrapolated clock; don't step back a line for that
+/// (< 0.3s back). Real seeks (further back) and track changes still apply.
+final class LineHold {
+    private var last = -1, lastTime = 0.0, song = ""
+    func monotonic(_ i: Int, time t: Double, song id: String) -> Int {
+        if id != song { song = id; last = i; lastTime = t; return i }
+        if i < last && lastTime - t < 0.3 { return last }
+        last = i; lastTime = t
+        return i
     }
 }
 

@@ -43,7 +43,10 @@ final class LyricsCoreTests: XCTestCase {
     }
     private static let hit = #"{"id":7,"trackName":"Attention","artistName":"Charlie Puth","duration":209,"syncedLyrics":"[00:01]hello\n[00:05]next"}"#
     private func missing() -> HTTPStub {
-        HTTPStub { $0.url!.path == "/api/get" ? (404, "{}") : (200, "[]") }
+        HTTPStub {
+            if $0.url!.host == "music.163.com" { return (200, #"{"code":200,"result":{"songs":[]}}"#) }
+            return $0.url!.path == "/api/get" ? (404, "{}") : (200, "[]")
+        }
     }
 
     // Regression: -1005 must throw, retry (t287u: foreground = once, after 0.3s), and never enter either cache.
@@ -53,15 +56,16 @@ final class LyricsCoreTests: XCTestCase {
         let repository = LyricsRepository(directory: directory, client: await stub.client())
         do { _ = try await repository.load(query); XCTFail("network failure became a result") }
         catch { XCTAssertTrue(error is URLError) }
-        let requests = await stub.requests
+        // t295u: LRCLIB and NetEase legs both run (for every query); each tries once + one foreground retry
+        let requests = await stub.requests.filter { $0.url!.host == "lrclib.net" }
         let waits = await stub.waits
         XCTAssertEqual(requests.count, 2)
-        XCTAssertEqual(waits, [0.3])
+        XCTAssertEqual(waits, [0.3, 0.3])
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
         await stub.fail(false)
         let recovered = try await repository.load(query)
         XCTAssertTrue(recovered.isFound)
-        let count = await stub.requests.count
+        let count = await stub.requests.filter { $0.url!.host == "lrclib.net" }.count
         XCTAssertEqual(count, 3)
     }
 
@@ -73,7 +77,7 @@ final class LyricsCoreTests: XCTestCase {
             do { _ = try await repository.load(query); XCTFail("503 became .none") }
             catch LyricsHTTPClient.Failure.status(503) {}
         }
-        let count = await stub.requests.count
+        let count = await stub.requests.filter { $0.url!.host == "lrclib.net" }.count
         XCTAssertEqual(count, 4)   // t287u: 2 loads × (1 try + 1 foreground retry)
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
     }
@@ -128,7 +132,7 @@ final class LyricsCoreTests: XCTestCase {
         let value = try await repository.load(query)
         XCTAssertEqual(value.source, "LRCLIB/search")
         XCTAssertEqual(value.result, .plain("static text\nsecond line"))
-        let count = await stub.requests.count
+        let count = await stub.requests.filter { $0.url!.host == "lrclib.net" }.count
         XCTAssertEqual(count, 3)   // t287u: 1 get, then both searches in parallel
     }
 
@@ -218,7 +222,7 @@ final class LyricsCoreTests: XCTestCase {
         let disk = try await LyricsRepository(directory: directory, client: client, now: { clock.now() }).load(query)
         XCTAssertEqual(memory, first)
         XCTAssertEqual(disk, first)
-        let count = await stub.requests.count
+        let count = await stub.requests.filter { $0.url!.host == "lrclib.net" }.count
         XCTAssertEqual(count, 1)
     }
 
@@ -243,5 +247,24 @@ final class LyricsCoreTests: XCTestCase {
         XCTAssertEqual(lines[0].marks, [.init(char: 0, time: 10), .init(char: 1, time: 12)])
         XCTAssertEqual(lines[1].marks, lines[0].marks)
         XCTAssertTrue(LyricsParser.parseLRC("static text\n[ar:artist]\n[00:01]").isEmpty)
+    }
+
+    // t295u: catalog English artist vs Chinese source artist → exact title + duration within 3s
+    func testScriptAliasWordOrderAndBilingualTitle() throws {
+        let q = LyricsQuery(title: "比較幸福", artist: "Yanzi Sun", album: nil, duration: 276)
+        let rec = { (t: String, a: String, d: Double) in
+            LyricsRecord(id: 1, trackName: t, artistName: a, albumName: nil, duration: d,
+                         instrumental: nil, plainLyrics: "x", syncedLyrics: nil) }
+        XCTAssertTrue(rec("比较幸福", "孙燕姿", 278).matches(q))
+        XCTAssertFalse(rec("比较幸福", "孙燕姿", 280).matches(q))
+        XCTAssertTrue(rec("比较幸福", "Sun Yanzi", 276).matches(q))
+        let gem = LyricsQuery(title: "In My Heart", artist: "G.E.M.", album: nil, duration: 296)
+        XCTAssertTrue(rec("美好的舊時光 In My Heart", "G.E.M.", 297).matches(gem))
+        XCTAssertFalse(rec("美好的舊時光 In My Heart", "Someone Else", 297).matches(gem))
+    }
+
+    func testOffsetTagShiftsTimes() {
+        let lines = LyricsParser.parseLRC("[offset:500]\n[00:10.00]a\n[00:20.00]b")
+        XCTAssertEqual(lines.map(\.time), [9.5, 19.5])
     }
 }
