@@ -1,0 +1,12 @@
+Starting recording with the Time Profiler template and SwiftUI, Points of Interest Instruments. Attaching to: Vinyl (71814). Time limit: 18.0 s
+Ctrl-C to stop the recording
+Reached specified time limit, ending recording...
+Run issues were detected (trace is still ready to be viewed):
+* [Warning] This configuration of instruments creates 1 table without a known input source.
+
+	* [Warning] Recovery Suggestion: This could be due to a missing package, or an error in a package under development.
+
+* [Warning] Trace file had no SwiftUI data
+
+Recording completed. Saving output file...
+Output file saved as: scroll.trace

@@ -1,0 +1,68 @@
+diff --git a/Vinyl/Vinyl.xcodeproj/project.pbxproj b/Vinyl/Vinyl.xcodeproj/project.pbxproj
+index 47aac3f..2feb358 100644
+--- a/Vinyl/Vinyl.xcodeproj/project.pbxproj
++++ b/Vinyl/Vinyl.xcodeproj/project.pbxproj
+@@ -9,0 +10 @@
++		BA2600000000000000000001 /* TracklistScrollProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA2600000000000000000002 /* TracklistScrollProbe.swift */; };
+@@ -60,0 +62 @@
++		BA2600000000000000000002 /* TracklistScrollProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TracklistScrollProbe.swift; sourceTree = "<group>"; };
+@@ -183,0 +186 @@
++				BA2600000000000000000002 /* TracklistScrollProbe.swift */,
+@@ -316,0 +320 @@
++				BA2600000000000000000001 /* TracklistScrollProbe.swift in Sources */,
+diff --git a/Vinyl/Vinyl/AppleMusicStore.swift b/Vinyl/Vinyl/AppleMusicStore.swift
+index 9bc8ac6..c4b64ec 100644
+--- a/Vinyl/Vinyl/AppleMusicStore.swift
++++ b/Vinyl/Vinyl/AppleMusicStore.swift
+@@ -549,0 +550,13 @@
++    /// The profiling timer supplies a fixed queue snapshot at the real player's 4 Hz cadence.
++    func profilePlayback(time: TimeInterval) {
++        guard TracklistProfile.enabled, let song = TracklistProfile.songs.first else { return }
++        currentTitle = song.title
++        currentArtist = song.artistName
++        currentArtwork = nil
++        currentSongID = song.id
++        currentCatalogID = song.id
++        duration = song.duration ?? 0
++        position = time
++        isPlaying = true
++    }
++
+diff --git a/Vinyl/Vinyl/RelatedAlbums.swift b/Vinyl/Vinyl/RelatedAlbums.swift
+index 2d1bce9..837e23f 100644
+--- a/Vinyl/Vinyl/RelatedAlbums.swift
++++ b/Vinyl/Vinyl/RelatedAlbums.swift
+@@ -60,0 +61 @@
++        if TracklistProfile.enabled { return [] }
+@@ -212,0 +214 @@
++        let _ = TracklistProfile.count("RelatedAlbumsSection.body")
+diff --git a/Vinyl/Vinyl/Views/AlbumDetailView.swift b/Vinyl/Vinyl/Views/AlbumDetailView.swift
+index 9228532..feec017 100644
+--- a/Vinyl/Vinyl/Views/AlbumDetailView.swift
++++ b/Vinyl/Vinyl/Views/AlbumDetailView.swift
+@@ -110,0 +111 @@
++        let _ = TracklistProfile.count("AlbumDetailView.body")
+@@ -572,0 +574 @@
++        let _ = TracklistProfile.count("DetailWaveform.builder")
+@@ -607,0 +610,2 @@
++        let _ = TracklistProfile.count("TrackTable.builder")
++        return
+@@ -748,0 +753 @@
++        TracklistProfile.count("SideIndex.rebuild")
+@@ -754,0 +760 @@
++        TracklistProfile.count("TrackRow.builder")
+@@ -1030,0 +1037 @@
++        let _ = TracklistProfile.count("EqualizerGlyph.body")
+diff --git a/Vinyl/Vinyl/VinylApp.swift b/Vinyl/Vinyl/VinylApp.swift
+index 8f7af77..2b36e7e 100644
+--- a/Vinyl/Vinyl/VinylApp.swift
++++ b/Vinyl/Vinyl/VinylApp.swift
+@@ -19 +19,4 @@
+-            ContentView()
++            Group {
++                if TracklistProfile.enabled { TracklistProfileView() }
++                else { ContentView() }
++            }
+@@ -21 +24 @@
+-                    guard scenePhase == .active, !recordingDemo else { return }
++                    guard scenePhase == .active, !recordingDemo, !TracklistProfile.enabled else { return }

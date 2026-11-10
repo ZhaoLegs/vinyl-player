@@ -1,0 +1,7 @@
+Starting recording with the SwiftUI template and Points of Interest Instrument. Attaching to: Vinyl (72996). Time limit: 18.0 s
+Ctrl-C to stop the recording
+Run issues were detected (trace is still ready to be viewed):
+* [Error] Hitches is not supported on this platform.
+
+Recording failed with errors. Saving output file...
+Output file saved as: scroll.trace

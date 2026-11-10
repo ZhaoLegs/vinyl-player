@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "checks": {
+    "trackColumnTokens": true,
+    "songContextMenu": true,
+    "equalizerCurveAndPause": true,
+    "rowPlayActions": true,
+    "revealCurve": true,
+    "playerBarsUnchanged": true
+  }
+}
