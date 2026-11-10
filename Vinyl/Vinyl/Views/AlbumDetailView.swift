@@ -195,17 +195,9 @@ struct AlbumDetailView: View {
                 // 唱片角速度：0 → smoothstep 缓入 → 45°/s 匀速 → smoothstep 缓出 → 0。
                 // 累计角度由角速度解析积分得到，C¹ 连续，不再「突然开始 / 突然停住」。
                 // t230u：只在真实播放器正在播放「这张专辑」时转（打开但没播 / 暂停 = 停在当前角度），恢复播放时从当前角度缓入继续
-                TimelineView(.animation(paused: !isPresented || reduceMotion || spinFrom == nil)) { timeline in
-                    let spin = Angle.degrees(reduceMotion ? 0 : spinAngle(at: timeline.date))
-                    SleeveArtwork(coverName: coverName, artwork: collection?.artwork, official: collection?.officialQuery,
-                                  snapshot: miniArtwork,
-                                  pull: pull, flip: flip, spin: spin, pageWidth: pageWidth,
-                                  holdPulledScale: holdSleeveScale)
-                        .frame(width: DS.sleeve, height: DS.sleeve)
-                        .contentShape(Rectangle())
-                        .onTapGesture { coverTapped(user: true) }   // t388u: cover tap flips to lyrics again (t370u reverted)
-                        .onChange(of: spin.degrees, initial: true) { _, angle in onSpinAngle(angle) }
-                }
+                // t397u: same clock / pause rule / angle hand-off as before, but the TimelineView now lives inside the disc
+                // (around its rotating face only) instead of around the whole SleeveArtwork → per-frame work = one rotation
+                sleeveView
                 .frame(width: DS.sleeve, height: DS.sleeve)
                 .modifier(ArtworkHandoff(progress: reduceMotion ? 1 : zoom, closing: closing,
                                          landed: landed || reduceMotion, miniOwner: miniOwner))
@@ -965,6 +957,24 @@ struct AlbumDetailView: View {
         return music.demoPlaying
     }
     /// 缓入 0.3s（smoothstep 角速度积分，C¹ 连续）后匀速 Motion.spinPeak °/s
+    /// t397u: split out of body (type-checker budget); identical modifiers to the former TimelineView content
+    private var sleeveView: some View {
+        SleeveArtwork(coverName: coverName, artwork: collection?.artwork, official: collection?.officialQuery,
+                      snapshot: miniArtwork,
+                      pull: pull, flip: flip, spin: .zero, spinClock: discClock, pageWidth: pageWidth,
+                      holdPulledScale: holdSleeveScale)
+            .frame(width: DS.sleeve, height: DS.sleeve)
+            .contentShape(Rectangle())
+            .onTapGesture { coverTapped(user: true) }   // t388u: cover tap flips to lyrics again (t370u reverted)
+    }
+
+    /// t397u: the disc's own spin clock (same pause rule and angle as the former page-level TimelineView)
+    private var discClock: DiscSpinClock {
+        let reduce = reduceMotion
+        let clock: (Date) -> Double = { date in reduce ? 0 : spinAngle(at: date) }
+        return DiscSpinClock(paused: !isPresented || reduce || spinFrom == nil, angle: clock, onAngle: onSpinAngle)
+    }
+
     private func spinAngle(at date: Date) -> Double {
         guard let from = spinFrom else { return spinBase }
         let x = max(0, date.timeIntervalSince(from)), r = 0.3, peak = Motion.spinPeak

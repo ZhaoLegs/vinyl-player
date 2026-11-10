@@ -1,0 +1,16 @@
+{
+  "bodyCounts" : {
+    "SleeveArtwork.body" : 1260,
+    "VinylDiscView.body" : 1260
+  },
+  "displayLinkCallbacks" : 1259,
+  "footprintMB" : 44.330368041992188,
+  "intervalMaxMs" : 16.666667070239782,
+  "intervalP95ms" : 16.666667070239782,
+  "lateCallbacks" : 0,
+  "lateExcessMs" : 0,
+  "mainThreadCPUms" : 1206.874,
+  "mainThreadCPUPercent" : 5.7470055466568049,
+  "processCPUms" : 1233.2109999999998,
+  "windowS" : 21.000049333553761
+}

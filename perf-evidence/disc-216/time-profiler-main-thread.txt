@@ -1,0 +1,122 @@
+== /tmp/tp_before.xml main ms 689
+  incl   689 -[UIApplication _run]
+  incl   689 runApp<A>(_:)
+  incl   689 closure #1 in KitRendererCommon(_:)
+  incl   689 _CFRunLoopRunSpecificWithOptions
+  incl   689 GSEventRunModal
+  incl   689 start_sim
+  incl   689 static VinylApp.$main()
+  incl   689 static App.main()
+  incl   689 main
+  incl   689 UIApplicationMain
+  incl   689 __CFRunLoopRun
+  incl   689 start
+  incl   666 UC::DriverCore::continueProcessing()
+  incl   658 schedulerStepScheduledMainSectionContinue
+  incl   655 _UIUpdateSequenceRunNext
+  incl   601 CA::Display::DisplayLink::dispatch_deferred_display_links(unsigned int)
+  incl   601 CA::Display::DisplayLink::dispatch_items(unsigned long long, unsigned long long, unsigned long long)
+  incl   598 CA::Display::DisplayLinkItem::dispatch_(CA::SignPost::Interval<(CA::SignPost::CAEventCode)835322056>&)
+  incl   593 @objc ViewGraphDisplayLink.displayLinkTimer(_:)
+  incl   592 ViewGraphDisplayLink.displayLinkTimer(_:)
+  incl   591 ViewGraphHost.displayLinkTimer(timestamp:targetTimestamp:isAsyncThread:)
+  incl   589 ViewGraphRootValueUpdater.render(interval:updateDisplayList:targetTimestamp:)
+  incl   589 closure #1 in ViewGraphRootValueUpdater.render(interval:updateDisplayList:targetTimestamp:)
+  incl   583 __CFRunLoopDoSources0
+  incl   582 __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__
+  incl   582 __CFRunLoopDoSource0
+  incl   398 ViewGraph.updateOutputs(at:)
+  incl   215 specialized GraphHost.runTransaction(_:do:id:)
+  incl   214 AG::Subgraph::update(unsigned int)
+  incl   198 AG::Graph::UpdateStack::update()
+  incl   173 AG::Graph::value_set(AG::data::ptr<AG::Node>, AGSwiftMetadata const*, void const*)
+  incl   173 ViewGraph.beginNextUpdate(at:)
+  incl   169 AG::Graph::propagate_dirty(AG::AttributeID)
+  incl   141 protocol witness for ViewGraphRenderHost.renderDisplayList(_:asynchronously:time:nextTime:targetTimestamp:vers
+  incl   141 ViewGraph.renderDisplayList(_:asynchronously:time:nextTime:targetTimestamp:version:maxVersion:)
+  incl   136 0x1853db288
+  incl   129 0x1853db4b0
+  incl   129 +[UIView(Animation) performWithoutAnimation:]
+  incl   129 closure #1 in renderOnMainThread #1 () in ViewGraph.renderDisplayList(_:asynchronously:time:nextTime:targetTim
+  incl   129 0x185335250
+  incl   129 0x185335270
+  incl   128 DisplayList.ViewUpdater.render(rootView:from:time:version:maxVersion:environment:)
+  incl   109 DisplayList.ViewUpdater.updateInheritedView(container:from:parentState:)
+  incl   109 DisplayList.ViewUpdater.update(container:from:parentState:)
+  incl    87 __CFRunLoopDoSource1
+  incl    87 __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE1_PERFORM_FUNCTION__
+  incl    87 __CFMachPortPerform
+  incl    79 partial apply for implicit closure #1 in closure #1 in closure #1 in Attribute.init<A>(_:)
+  incl    69 <deduplicated_symbol>
+  incl    68 DisplayList.ViewUpdater.ViewCache.update(item:platform:state:tag:in:)
+  incl    52 DisplayList.ViewUpdater.updateItemView(container:from:localState:)
+  incl    50 __setupUpdateSequence_block_invoke_2
+  incl    49 _UIApplicationFlushCATransaction
+  incl    49 CA::Transaction::flush_as_runloop_observer(bool)
+  incl    49 CA::Transaction::commit()
+  incl    48 DisplayList.ViewUpdater.Platform.updateState(_:item:size:state:)
+  incl    44 AGGraphGetWeakValue
+  incl    44 AG::Graph::value_ref(AG::AttributeID, unsigned int, AGSwiftMetadata const*, unsigned char&)
+  incl    42 CA::Context::commit_transaction(CA::Transaction*, double, double*)
+  incl    42 AG::Graph::update_attribute(AG::data::ptr<AG::Node>, unsigned int)
+== /tmp/tp_after.xml main ms 554
+  incl   553 -[UIApplication _run]
+  incl   553 runApp<A>(_:)
+  incl   553 closure #1 in KitRendererCommon(_:)
+  incl   553 _CFRunLoopRunSpecificWithOptions
+  incl   553 start_sim
+  incl   553 static App.main()
+  incl   553 static VinylApp.$main()
+  incl   553 main
+  incl   553 UIApplicationMain
+  incl   553 __CFRunLoopRun
+  incl   553 start
+  incl   553 GSEventRunModal
+  incl   539 UC::DriverCore::continueProcessing()
+  incl   538 __CFRunLoopDoSource1
+  incl   537 __CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE1_PERFORM_FUNCTION__
+  incl   537 __CFMachPortPerform
+  incl   533 schedulerStepScheduledMainSectionContinue
+  incl   531 _UIUpdateSequenceRunNext
+  incl   467 CA::Display::DisplayLink::dispatch_deferred_display_links(unsigned int)
+  incl   467 CA::Display::DisplayLink::dispatch_items(unsigned long long, unsigned long long, unsigned long long)
+  incl   466 CA::Display::DisplayLinkItem::dispatch_(CA::SignPost::Interval<(CA::SignPost::CAEventCode)835322056>&)
+  incl   465 ViewGraphHost.displayLinkTimer(timestamp:targetTimestamp:isAsyncThread:)
+  incl   465 ViewGraphRootValueUpdater.render(interval:updateDisplayList:targetTimestamp:)
+  incl   465 @objc ViewGraphDisplayLink.displayLinkTimer(_:)
+  incl   465 closure #1 in ViewGraphRootValueUpdater.render(interval:updateDisplayList:targetTimestamp:)
+  incl   465 ViewGraphDisplayLink.displayLinkTimer(_:)
+  incl   294 ViewGraph.updateOutputs(at:)
+  incl   209 specialized GraphHost.runTransaction(_:do:id:)
+  incl   207 AG::Subgraph::update(unsigned int)
+  incl   194 AG::Graph::UpdateStack::update()
+  incl    84 AG::Graph::update_attribute(AG::data::ptr<AG::Node>, unsigned int)
+  incl    84 AGGraphGetWeakValue
+  incl    84 AG::Graph::value_ref(AG::AttributeID, unsigned int, AGSwiftMetadata const*, unsigned char&)
+  incl    82 protocol witness for ViewGraphRenderHost.renderDisplayList(_:asynchronously:time:nextTime:targetTimestamp:vers
+  incl    82 ViewGraph.renderDisplayList(_:asynchronously:time:nextTime:targetTimestamp:version:maxVersion:)
+  incl    78 0x1853db288
+  incl    73 AG::Graph::value_set(AG::data::ptr<AG::Node>, AGSwiftMetadata const*, void const*)
+  incl    73 ViewGraph.beginNextUpdate(at:)
+  incl    68 0x1853db4b0
+  incl    68 +[UIView(Animation) performWithoutAnimation:]
+  incl    68 closure #1 in renderOnMainThread #1 () in ViewGraph.renderDisplayList(_:asynchronously:time:nextTime:targetTim
+  incl    68 0x185335250
+  incl    68 DisplayList.ViewUpdater.render(rootView:from:time:version:maxVersion:environment:)
+  incl    68 0x185335270
+  incl    64 _UIApplicationFlushCATransaction
+  incl    64 CA::Transaction::flush_as_runloop_observer(bool)
+  incl    64 __setupUpdateSequence_block_invoke_2
+  incl    64 CA::Transaction::commit()
+  incl    64 AG::Graph::propagate_dirty(AG::AttributeID)
+  incl    55 implicit closure #1 in closure #1 in closure #1 in Attribute.init<A>(_:)
+  incl    51 CA::Context::commit_transaction(CA::Transaction*, double, double*)
+  incl    50 DisplayList.ViewUpdater.updateInheritedView(container:from:parentState:)
+  incl    48 DisplayList.ViewUpdater.update(container:from:parentState:)
+  incl    34 <deduplicated_symbol>
+  incl    31 partial apply for implicit closure #1 in closure #1 in closure #1 in Attribute.init<A>(_:)
+  incl    30 DisplayList.ViewUpdater.ViewCache.update(item:platform:state:tag:in:)
+  incl    29 specialized implicit closure #1 in closure #1 in closure #1 in Attribute.init<A>(_:)
+  incl    25 CA::Layer::commit_if_needed(CA::Transaction*, void (CA::Layer*, unsigned int, unsigned int) block_pointer)
+  incl    21 DisplayList.ViewUpdater.updateItemView(container:from:localState:)
+  incl    19 invocation function for block in CA::Context::commit_transaction(CA::Transaction*, double, double*)

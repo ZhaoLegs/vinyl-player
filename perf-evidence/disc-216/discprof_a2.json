@@ -1,0 +1,15 @@
+{
+  "bodyCounts" : {
+
+  },
+  "displayLinkCallbacks" : 1215,
+  "footprintMB" : 44.095970153808594,
+  "intervalMaxMs" : 16.666667070239782,
+  "intervalP95ms" : 16.666667070239782,
+  "lateCallbacks" : 0,
+  "lateExcessMs" : 0,
+  "mainThreadCPUms" : 1445.865,
+  "mainThreadCPUPercent" : 7.1380847809093488,
+  "processCPUms" : 1466.9590000000001,
+  "windowS" : 20.255643416661769
+}

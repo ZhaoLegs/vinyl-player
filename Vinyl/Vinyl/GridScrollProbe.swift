@@ -217,3 +217,97 @@ struct GridScrollProbe: UIViewRepresentable {
         }
     }
 }
+
+// MARK: - t397u `--profile-disc` (simulator only)
+
+/// Opens the featured demo album (demo mode → disc spinning), waits 10s for the open / pull-out to settle, then
+/// measures a fixed 20s window: SwiftUI body counts of the disc views, process + main-thread CPU, and CADisplayLink
+/// callback lateness (a scheduling proxy, not an official render hitch). Writes Documents/disc-profile.json.
+enum DiscProfile {
+    static let enabled: Bool = {
+        #if targetEnvironment(simulator)
+        return ProcessInfo.processInfo.arguments.contains("--profile-disc")
+        #else
+        return false
+        #endif
+    }()
+    @MainActor static var measuring = false
+    @MainActor static var counts: [String: Int] = [:]
+    @MainActor static func count(_ name: String) {
+        guard enabled, measuring else { return }
+        counts[name, default: 0] += 1
+    }
+
+    static func processCPU() -> Double {
+        var u = rusage(); getrusage(RUSAGE_SELF, &u)
+        return Double(u.ru_utime.tv_sec + u.ru_stime.tv_sec) + Double(u.ru_utime.tv_usec + u.ru_stime.tv_usec) / 1e6
+    }
+    /// call on the main thread
+    static func threadCPU() -> Double {
+        var info = thread_basic_info()
+        var n = mach_msg_type_number_t(MemoryLayout<thread_basic_info>.size / MemoryLayout<integer_t>.size)
+        let port = mach_thread_self()
+        defer { mach_port_deallocate(mach_task_self_, port) }
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(n)) { thread_info(port, thread_flavor_t(THREAD_BASIC_INFO), $0, &n) }
+        }
+        guard kr == KERN_SUCCESS else { return 0 }
+        return Double(info.user_time.seconds + info.system_time.seconds)
+            + Double(info.user_time.microseconds + info.system_time.microseconds) / 1e6
+    }
+    static func residentMB() -> Double {
+        var info = task_vm_info_data_t()
+        var n = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(n)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &n) }
+        }
+        return kr == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : 0
+    }
+
+    @MainActor private final class Link: NSObject {
+        var last: CFTimeInterval = 0
+        var intervals: [Double] = []
+        var link: CADisplayLink?
+        func start() {
+            let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+            l.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
+            l.add(to: .main, forMode: .common); link = l
+        }
+        @objc func tick(_ l: CADisplayLink) {
+            if last > 0 { intervals.append(l.timestamp - last) }
+            last = l.timestamp
+        }
+    }
+
+    @MainActor static func run() async {
+        try? await Task.sleep(nanoseconds: 10_000_000_000)
+        counts = [:]
+        let link = Link(); link.start()
+        let p0 = processCPU(), m0 = threadCPU(), t0 = CACurrentMediaTime()
+        measuring = true
+        try? await Task.sleep(nanoseconds: 20_000_000_000)
+        measuring = false
+        let wall = CACurrentMediaTime() - t0, p1 = processCPU(), m1 = threadCPU()
+        link.link?.invalidate()
+        let iv = link.intervals.sorted()
+        let budget = 1.0 / 60
+        let late = link.intervals.filter { $0 > budget * 1.5 }
+        let json: [String: Any] = [
+            "windowS": wall,
+            "processCPUms": (p1 - p0) * 1000,
+            "mainThreadCPUms": (m1 - m0) * 1000,
+            "mainThreadCPUPercent": (m1 - m0) / wall * 100,
+            "footprintMB": residentMB(),
+            "displayLinkCallbacks": link.intervals.count,
+            "lateCallbacks": late.count,
+            "lateExcessMs": late.reduce(0) { $0 + ($1 - budget) } * 1000,
+            "intervalP95ms": iv.isEmpty ? 0 : iv[Int(Double(iv.count - 1) * 0.95)] * 1000,
+            "intervalMaxMs": (iv.last ?? 0) * 1000,
+            "bodyCounts": counts,
+        ]
+        if let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+           let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: folder.appendingPathComponent("disc-profile.json"))
+        }
+    }
+}

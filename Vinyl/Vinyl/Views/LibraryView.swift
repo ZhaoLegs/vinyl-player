@@ -281,7 +281,7 @@ struct LibraryView: View {
                 await runDemo()
             }
             .task {
-                guard recordingRequested && !recordingStarted else { return }
+                guard (recordingRequested || DiscProfile.enabled) && !recordingStarted else { return }   // t397u
                 recordingStarted = true
                 let requiredImages = (1...AlbumData.coverCount).map(DS.coverName)
                     + ["planet", "planet_back", "small_art", "sleeve_cutout"]
@@ -302,6 +302,7 @@ struct LibraryView: View {
                 selectedIndex = AlbumData.featuredIndex; targetKey = AlbumData.featuredIndex
                 recordingMarker("started")
                 open()
+                if DiscProfile.enabled { Task { await DiscProfile.run() } }   // t397u
             }
         }
     }
@@ -1889,6 +1890,7 @@ enum DemoMode {
     static let enabled: Bool = {
         let a = ProcessInfo.processInfo.arguments
         return a.contains("--record-demo") || a.contains("--open-featured") || a.contains("--debug-mini-cycle")
+            || DiscProfile.enabled   // t397u: simulator disc profiling
     }()
 }
 

@@ -14,22 +14,33 @@ struct VinylDiscView: View {
     /// t204u：与首页格子 / 飞行封面同一张（官方封面优先）
     var official: OfficialCoverQuery? = nil
     var snapshot: MiniArtworkSnapshot? = nil
+    /// t397u: when set, the disc drives its own rotation (TimelineView scoped to the rotating face only), so the
+    /// per-frame work is one rotationEffect instead of re-evaluating the whole detail sleeve every frame. `angle` is ignored.
+    var spinClock: DiscSpinClock? = nil
 
     /// Podium AppTheme.background — 主轴孔颜色
     static let holeColor = Color(red: 0.025, green: 0.03, blue: 0.04)
 
     var body: some View {
+        let _ = DiscProfile.count("VinylDiscView.body")
         ZStack {
-            // ① 随盘旋转：盘面 + 沟槽（静态 Canvas，Equatable → 旋转不重绘）+ 标签 + 主轴孔
-            ZStack {
-                VinylGrooves().equatable()
-                DiscLabel(coverName: coverName, artwork: artwork, official: official, size: DS.discLabel, snapshot: snapshot)
-                Circle()
-                    .fill(Self.holeColor)
-                    .frame(width: DS.disc * 0.022, height: DS.disc * 0.022)
+            // t397u: the shadow is cast by a static disc-sized circle under the face (same silhouette: the face is an
+            // opaque circle of the same size) — the rotating layer no longer feeds the shadow pass
+            Circle()
+                .fill(Color(white: 0.05))
+                .shadow(color: .black.opacity(Double(0.35 + 0.20 * pull)),
+                        radius: 18 + 8 * pull, y: 8 + 6 * pull)
+
+            // ① 随盘旋转：盘面 + 沟槽（静态 Canvas）+ 标签 + 主轴孔 —— t397u: Equatable face, skipped while only the angle changes
+            if let spinClock {
+                TimelineView(.animation(paused: spinClock.paused)) { tl in
+                    let a = spinClock.angle(tl.date)
+                    face.rotationEffect(.degrees(a))
+                        .onChange(of: a, initial: true) { _, v in spinClock.onAngle(v) }
+                }
+            } else {
+                face.rotationEffect(angle)
             }
-            .clipShape(Circle())
-            .rotationEffect(angle)
 
             // ② Podium：反光固定不动，唱片在其下转动
             Circle()
@@ -38,9 +49,41 @@ struct VinylDiscView: View {
                 .allowsHitTesting(false)
         }
         .frame(width: DS.disc, height: DS.disc)
-        // Podium 投影 black 0.55 / r26 / y14；这里在抽出（pull = 1）时达到 Podium 值，收在封套里时更轻
-        .shadow(color: .black.opacity(Double(0.35 + 0.20 * pull)),
-                radius: 18 + 8 * pull, y: 8 + 6 * pull)
+        // Podium 投影 black 0.55 / r26 / y14；这里在抽出（pull = 1）时达到 Podium 值，收在封套里时更轻（见上方静态圆）
+    }
+
+    private var face: some View {
+        DiscFace(coverName: coverName, artwork: artwork, official: official, snapshot: snapshot).equatable()
+    }
+}
+
+/// t397u: time source for a self-spinning disc (detail page). `angle(date)` is evaluated only inside the disc's TimelineView.
+struct DiscSpinClock {
+    var paused: Bool
+    var angle: (Date) -> Double
+    var onAngle: (Double) -> Void = { _ in }
+}
+
+/// t397u: the rotating part of the disc (grooves + label + spindle hole), Equatable so a new angle never re-evaluates it.
+struct DiscFace: View, Equatable {
+    var coverName: String
+    var artwork: Artwork?
+    var official: OfficialCoverQuery?
+    var snapshot: MiniArtworkSnapshot?
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.coverName == rhs.coverName && lhs.artwork == rhs.artwork && lhs.official == rhs.official
+            && lhs.snapshot?.cacheKey == rhs.snapshot?.cacheKey && lhs.snapshot?.image === rhs.snapshot?.image
+    }
+    var body: some View {
+        let _ = DiscProfile.count("DiscFace.body")
+        ZStack {
+            VinylGrooves().equatable()
+            DiscLabel(coverName: coverName, artwork: artwork, official: official, size: DS.discLabel, snapshot: snapshot)
+            Circle()
+                .fill(VinylDiscView.holeColor)
+                .frame(width: DS.disc * 0.022, height: DS.disc * 0.022)
+        }
+        .clipShape(Circle())
     }
 }
 
@@ -75,6 +118,7 @@ struct DiscLabel: View {
     var snapshot: MiniArtworkSnapshot? = nil
 
     var body: some View {
+        let _ = DiscProfile.count("DiscLabel.body")
         Group {
             if let snapshot {
                 snapshot.content
@@ -127,6 +171,8 @@ struct SleeveArtwork: View, Animatable {
     var pull: CGFloat
     var flip: Double
     let spin: Angle
+    /// t397u: detail page passes its spin clock here; the disc rotates itself (see VinylDiscView.spinClock)
+    var spinClock: DiscSpinClock? = nil
     /// 页面宽度：用来让「抽出状态的封套 + 露出的唱片」整体落在左右 DS.contentInset 之内
     var pageWidth: CGFloat = 402
     /// t356u: lyrics merge / flip keeps the sleeve at its pulled-out size (0.85) instead of growing back to 1.0
@@ -166,9 +212,11 @@ struct SleeveArtwork: View, Animatable {
     private var discPullX: CGFloat { (pageWidth - DS.contentInset) - (sleeveRestLeft + discInset + DS.disc) }
 
     var body: some View {
+        let _ = DiscProfile.count("SleeveArtwork.body")
         ZStack(alignment: .topLeading) {
             // 唱片在封套之后，抽出时向右位移并旋转
-            VinylDiscView(angle: spin, pull: pull, coverName: coverName, artwork: artwork, official: official, snapshot: snapshot)
+            VinylDiscView(angle: spin, pull: pull, coverName: coverName, artwork: artwork, official: official, snapshot: snapshot,
+                          spinClock: spinClock)
                 .offset(x: discInset + discPullX * pull, y: discInset)
                 // t176u：翻到背面（过 90° 侧立的那一帧）唱片不再渲染 → 背面的孔是干净的透明挖孔，只透出页面背景；
                 // 翻回正面时（同样在 90° 处）唱片重新出现在正面孔后
