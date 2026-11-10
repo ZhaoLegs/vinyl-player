@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import CoreImage
 import MusicKit
+import StoreKit
 
 /// 上报被点击封面在 "library" 坐标空间中的 frame，作为 zoom 转场起点。
 struct CoverFrameKey: PreferenceKey {
@@ -57,9 +58,13 @@ struct LibraryView: View {
         && ProcessInfo.processInfo.arguments.contains("--debug-mini-official")
     private var recordingRequested: Bool { Self.recordingRequestedArg }
 
-    // 网格几何按原片实测：4 列、列宽 72pt、间距 17pt、左右 27pt
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 18), count: 4)
+    // 网格几何：4 列、列间距 / 行间距 16pt、左右 DS.contentInset（21pt）
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 16), count: 4)
     @State private var artworkPrefetcher = GridArtworkPrefetcher()
+    /// 首页长按「播放」：先让该格封面消失，完成后再把封面换回去并开始播放
+    @State private var menuCoverSwapID: String? = nil
+    @State private var menuCoverHidden = false
+    @State private var menuCoverSwapToken = 0
 
     var body: some View {
         let _ = GridScrollProfile.recordUpdate(overlayMode ? "LibraryView.overlay" : "LibraryView.home")
@@ -434,7 +439,7 @@ struct LibraryView: View {
         ScrollViewReader { proxy in
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: 0) {
-            LazyVGrid(columns: columns, spacing: 18) {
+            LazyVGrid(columns: columns, spacing: 16) {
                 let real = music.collections
                 if real.isEmpty && DemoMode.enabled {
                     // t158u：内置演示封面只在 --record-demo（模拟器录屏）里出现
@@ -571,8 +576,9 @@ struct LibraryView: View {
             openCollection(collection)
         } label: {
             ArtworkFill(artwork: collection.artwork, official: collection.officialQuery, useDisplaySize: true)
-                .clipShape(RoundedRectangle(cornerRadius: DS.corner))
+                .clipShape(RoundedRectangle(cornerRadius: DS.gridCoverCorner(scale: displayScale)))
                 .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
+                .opacity(menuCoverSwapID == collection.id && menuCoverHidden ? 0 : 1)
                 .background {
                     GeometryReader { geo in
                         Color.clear.preference(key: CoverFrameKey.self,
@@ -587,7 +593,7 @@ struct LibraryView: View {
         .modifier(TilePushAway(zm: zm, key: key))
         .accessibilityLabel("\(collection.title)，\(collection.artist)")
         .onAppear {
-            let side = max(1, (gridFrame.width - 2 * DS.contentInset - 3 * 18) / 4)
+            let side = max(1, (gridFrame.width - 2 * DS.contentInset - 3 * 16) / 4)
             artworkPrefetcher.update(music.collections, around: index, side: side, scale: displayScale)
         }
         // t192u：长按 = 系统原生上下文菜单（抬起预览 + 玻璃材质由系统渲染）；点按仍是 Button 打开详情，滚动不受影响
@@ -596,17 +602,18 @@ struct LibraryView: View {
         } preview: {
             ArtworkFill(artwork: collection.artwork, official: collection.officialQuery)
                 .frame(width: 280, height: 280)
-                .clipShape(RoundedRectangle(cornerRadius: DS.corner * 280 / 76.5))
+                .clipShape(RoundedRectangle(cornerRadius: DS.gridCoverCorner(scale: displayScale) * 280 / 76.5))
         }
     }
 
-    // 长按菜单：喜欢 / 共享 → 随机播放 → 前往艺人 → 从首页隐藏。
+    // 长按菜单：喜欢 / 共享 → 播放 / 随机播放 → 前往艺人 → 从首页隐藏。
     @ViewBuilder
     private func collectionMenu(_ c: MusicCollection) -> some View {
         MenuTopBar(liked: music.isLoved(c),
                    shareURL: c.shareURL,
                    like: { Task { await music.toggleLove(c) } })
         Section {
+            Button("播放", systemImage: "play.fill") { playFromHomeMenu(c) }
             Button("随机播放", systemImage: "shuffle") { Task { await music.playCollection(c, shuffle: true) } }
         }
         if let url = c.artistURL {
@@ -620,6 +627,28 @@ struct LibraryView: View {
         Section {
             Button("从首页隐藏", systemImage: "eye.slash", role: .destructive) {
                 withAnimation(.spring(duration: 0.4, bounce: 0)) { music.hideFromHome(c) }
+            }
+        }
+    }
+
+
+    /// 首页长按「播放」：该格封面先消失，消失完成后再把封面换上，并从头播放这张专辑。
+    private func playFromHomeMenu(_ c: MusicCollection) {
+        menuCoverSwapToken += 1
+        let token = menuCoverSwapToken
+        menuCoverSwapID = c.id
+        let fadeOut: Double = reduceMotion ? 0 : 0.22
+        let fadeIn: Double = reduceMotion ? 0 : 0.25
+        withAnimation(.easeOut(duration: fadeOut)) { menuCoverHidden = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + fadeOut) {
+            guard token == menuCoverSwapToken else { return }
+            nowPlayingCollection = c
+            withAnimation(.easeIn(duration: fadeIn)) { menuCoverHidden = false }
+            Task { await music.playCollection(c, shuffle: false) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + fadeIn) {
+                guard token == menuCoverSwapToken else { return }
+                menuCoverSwapID = nil
+                menuCoverHidden = false
             }
         }
     }
@@ -764,7 +793,7 @@ struct LibraryView: View {
             Image(DS.coverName(index))
                 .resizable()
                 .aspectRatio(1, contentMode: .fill)
-                .clipShape(RoundedRectangle(cornerRadius: DS.corner))
+                .clipShape(RoundedRectangle(cornerRadius: DS.gridCoverCorner(scale: displayScale)))
                 // 原片首页封面带一层柔和投影（网格左右留有 21pt 边距，不会被裁切）
                 .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
                 .background {
@@ -827,7 +856,7 @@ struct LibraryView: View {
             onSwipeSettled: { swipeSettled() },
             onJump: { c in jumpToAlbum(c) },
             playingPage: { playingPage() },
-            onPlayedAlbum: { c in nowPlayingCollection = c }
+            onPlayedAlbum: { c in nowPlayingCollection = c; expandDiscIfCurrent(c) }
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // t203u：详情层（含顶部专辑名 / 艺人）只在打开 / 关闭转场期间渲染，关闭后绝不残留在首页顶部
@@ -886,7 +915,7 @@ struct LibraryView: View {
                                  perAxis: Motion.zoomPerAxis && !reduceMotion,
                                  fluid: Motion.zoomFluid && !reduceMotion,
                                  shrink: 0,   // t210u：网格不缩放 → 起落点 = 格子原位
-                                 startCorner: zm.flyToTile ? DS.corner : start.width / 2))   // t222u：mini 端 = 圆形唱片
+                                 startCorner: zm.flyToTile ? DS.gridCoverCorner(scale: displayScale) : start.width / 2))   // t222u：mini 端 = 圆形唱片；格子圆角 = 6px
             .opacity(presented && !reduceMotion ? 1 : 0)
         }
     }
@@ -1154,6 +1183,20 @@ struct LibraryView: View {
         }
         TrackPrefetch.shared.prefetch(window)
     }
+    /// t424u: pull the disc out only when the album on screen is the one already started (nowPlaying + a loaded queue).
+    private var shouldExpandDiscAfterSwipe: Bool {
+        if let c = selectedCollection {
+            return nowPlayingCollection?.id == c.id && music.hasCurrentTrack
+        }
+        return music.hasCurrentTrack || music.demoPlaying
+    }
+
+    /// t424u: explicit play on the album currently shown → expand the disc (same pull spring as swipeSettled).
+    private func expandDiscIfCurrent(_ c: MusicCollection) {
+        guard presented, !closing, selectedCollection?.id == c.id, flip < 90, pull < 1 else { return }
+        withAnimation(Motion.animation(Motion.pull)) { pull = 1 }
+    }
+
     private func swipeSettled() {
         keepCurrentTileOnScreen()   // t366u
         TrackPrefetch.shared.settled(hasTracks: collectionSongs != nil)
@@ -1163,6 +1206,9 @@ struct LibraryView: View {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(0.15))
             guard token == demoToken, presented, !closing, flip < 90 else { return }
+            // t424u: after a swipe / jump, only expand if this album has already been started.
+            // An unplayed album stays in the sleeve until an explicit play (cover play button / 播放 menu / a row / idle bar).
+            guard shouldExpandDiscAfterSwipe else { return }
             withAnimation(Motion.animation(Motion.pull)) { pull = 1 }
         }
     }
@@ -1896,15 +1942,16 @@ enum DemoMode {
 
 /// t158u：加载中的封面占位：与封面同尺寸、同圆角的浅色方块，无文字
 struct HomePlaceholder: View {
+    @Environment(\.displayScale) private var displayScale
     /// t178u：铺满整屏（含 mini player / 底部区域）：行数 = ⌈屏高 / 行距⌉ + 1，× 4 列
     static var count: Int {
         let b = UIScreen.main.bounds.size
-        let cell = (b.width - 2 * DS.contentInset - 3 * 18) / 4
-        let pitch = max(1, cell + 18)
+        let cell = (b.width - 2 * DS.contentInset - 3 * 16) / 4
+        let pitch = max(1, cell + 16)
         return (Int((b.height / pitch).rounded(.up)) + 1) * 4
     }
     var body: some View {
-        RoundedRectangle(cornerRadius: DS.corner)
+        RoundedRectangle(cornerRadius: DS.gridCoverCorner(scale: displayScale))
             .fill(Color.primary.opacity(0.05))
             .aspectRatio(1, contentMode: .fit)
             .accessibilityHidden(true)
@@ -2012,6 +2059,8 @@ struct LibrarySearchSheet: View {
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "专辑、歌单、歌曲")
             .task(id: query) { await runSearch() }
         }
+        // Isolate from root .tint(DS.ink), same as SettingsSheet (t394u).
+        .tint(.blue)
     }
 
     private func remember(_ term: String) {
@@ -2066,56 +2115,49 @@ struct LibrarySearchSheet: View {
 // MARK: - t292u 设置
 
 /// 首页右上角齿轮打开的原生设置表单（NavigationStack + Form）。
+/// 保留：音乐授权、音频（空间音频 / 音频质量 / 交叉淡入淡出）、打赏、版本号。
 struct SettingsSheet: View {
     @EnvironmentObject private var music: AppleMusicStore
-    @EnvironmentObject private var sleep: SleepTimer
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
-    @AppStorage(LyricsFontSize.key) private var fontSize = LyricsFontSize.standard.rawValue
-    @AppStorage(LyricsTiming.offsetKey) private var offset = 0
-    @State private var cacheBytes: Int?
-    @State private var confirmClear = false
-    @State private var showOffer = false
+    @State private var tipError: String?
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("睡眠定时") {
-                    sleepRow("关闭", nil)
-                    sleepRow("播完这张专辑", .album)
-                    ForEach([15, 30, 45, 60], id: \.self) { n in sleepRow("\(n) 分钟", .minutes(n)) }
-                }
-                Section("歌词") {
-                    Picker("歌词字号", selection: $fontSize) {
-                        ForEach(LyricsFontSize.allCases) { Text($0.title).tag($0.rawValue) }
-                    }
-                    Stepper(value: Binding(get: { offset }, set: { offset = LyricsTiming.clampOffset($0) }),
-                            in: LyricsTiming.offsetRange, step: LyricsTiming.offsetStep) {
-                        LabeledContent("歌词偏移", value: LyricsTiming.offsetLabel(offset))
-                    }
-                    Button("清除歌词缓存", role: .destructive) { confirmClear = true }
-                        .badge(cacheBytes.map { Text(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)) })
-                        .confirmationDialog("清除歌词缓存？", isPresented: $confirmClear, titleVisibility: .visible) {
-                            Button("清除", role: .destructive) {
-                                Task {
-                                    await LyricsRepository.shared.clearCache()
-                                    LyricsStore.shared.clearMemory()
-                                    cacheBytes = await LyricsRepository.shared.cacheBytes()
-                                }
-                            }
-                        } message: { Text("已下载的歌词会在下次打开时重新获取。") }
-                }
-                Section("Apple Music") {
+                Section("音乐授权") {
                     LabeledContent("授权", value: authText)
-                    LabeledContent("订阅", value: subscriptionText)
                     switch music.authorization {
                     case .denied, .restricted:
                         Button("打开设置") { if let u = URL(string: UIApplication.openSettingsURLString) { openURL(u) } }
                     case .notDetermined:
                         Button("授权 Apple Music") { Task { await music.connect() } }
                     default:
-                        if music.subscriptionKnown && !music.canPlayCatalog {
-                            Button("订阅 Apple Music") { showOffer = true }
+                        EmptyView()
+                    }
+                }
+                Section("音频") {
+                    Toggle("空间音频", isOn: Binding(
+                        get: { music.spatialAudioEnabled },
+                        set: { music.setSpatialAudioEnabled($0) }
+                    ))
+                    Picker("音频质量", selection: Binding(
+                        get: { music.preferredAudioQuality },
+                        set: { music.selectAudioQuality($0) }
+                    )) {
+                        ForEach(music.settingsAudioQualities) { quality in
+                            Text(quality.title).tag(quality)
+                        }
+                    }
+                    Toggle("交叉淡入淡出", isOn: Binding(
+                        get: { music.crossfadeEnabled },
+                        set: { music.setCrossfadeEnabled($0) }
+                    ))
+                }
+                Section("打赏") {
+                    ForEach(TipOption.allCases) { option in
+                        Button("\(option.yuan) 元") {
+                            Task { tipError = await option.purchase() }
                         }
                     }
                 }
@@ -2128,26 +2170,18 @@ struct SettingsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
             }
-            .musicSubscriptionOffer(isPresented: $showOffer, options: .init(messageIdentifier: .playMusic))
-            .onChange(of: showOffer) { _, open in if !open { Task { await music.refreshAccess() } } }
-            .task { cacheBytes = await LyricsRepository.shared.cacheBytes() }
-        }
-        // t394u: the root TabView sets .tint(DS.ink) (fixed #1A1A1C, not adaptive) and the sheet inherits it,
-        // so tinted text (sleep rows, checkmarks, Picker value, buttons, 完成) went near-black on the dark sheet.
-        // Use the system's adaptive blue here, like a native Settings form.
-        .tint(.blue)
-    }
-
-    private func sleepRow(_ title: String, _ mode: SleepTimer.Mode?) -> some View {
-        Button { if let mode { sleep.set(mode) } else { sleep.cancel() } } label: {
-            HStack {
-                // t394u: Color.primary = system label colour (adaptive); the hierarchical `.primary`
-                // inside a Button resolved to the button's tint instead
-                Text(title).foregroundStyle(Color.primary)
-                Spacer()
-                if sleep.mode == mode { Image(systemName: "checkmark").foregroundStyle(.tint) }
+            .alert("打赏", isPresented: Binding(
+                get: { tipError != nil },
+                set: { if !$0 { tipError = nil } }
+            )) {
+                Button("好", role: .cancel) { tipError = nil }
+            } message: {
+                Text(tipError ?? "")
             }
         }
+        // t394u: the root TabView sets .tint(DS.ink) (fixed #1A1A1C, not adaptive) and the sheet inherits it,
+        // so tinted text went near-black on the dark sheet. Use the system's adaptive blue, like a native Settings form.
+        .tint(.blue)
     }
 
     private var authText: String {
@@ -2158,15 +2192,42 @@ struct SettingsSheet: View {
         default: return "未授权"
         }
     }
-    private var subscriptionText: String {
-        guard music.authorized else { return "—" }
-        guard music.subscriptionKnown else { return "暂时无法获取" }
-        return music.canPlayCatalog ? "可播放完整曲库" : "未订阅"
-    }
     static var version: String {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         return "\(v) (\(b))"
+    }
+}
+
+/// 设置页打赏档位。商品 ID 需在 App Store Connect 配置后才能真正扣款。
+private enum TipOption: Int, CaseIterable, Identifiable {
+    case rmb6 = 6, rmb18 = 18, rmb88 = 88
+    var id: Int { rawValue }
+    var yuan: Int { rawValue }
+    var productID: String { "com.zhaolegs.Vinyl.tip.\(rawValue)" }
+
+    /// 返回 nil 表示已提交购买或已取消；非 nil 为要展示的说明。
+    func purchase() async -> String? {
+        do {
+            let products = try await Product.products(for: [productID])
+            guard let product = products.first else {
+                return "\(yuan) 元档位尚未在 App Store 开通。"
+            }
+            let result = try await product.purchase()
+            switch result {
+            case .success(let verification):
+                let _ = try verification.payloadValue
+                return "感谢打赏。"
+            case .userCancelled:
+                return nil
+            case .pending:
+                return "购买确认中，请稍后再看。"
+            @unknown default:
+                return "购买未能完成。"
+            }
+        } catch {
+            return "暂时无法完成打赏。"
+        }
     }
 }
 
@@ -2318,12 +2379,12 @@ final class TrackPrefetch {
 
 /// t335u: the detail page's background colour = a static snapshot of the home screen taken at open (before the
 /// tiles are pushed away), captured at 0.2× scale and pre-blurred once with Core Image, so nothing is re-blurred
-/// per frame. Shown under the detail content with a white wash for legibility.
+/// per frame. Shown under the detail content with a paper wash for legibility (white-family in light, dark paper in dark).
 @MainActor
 final class GridBackdrop: ObservableObject {
     static let shared = GridBackdrop()
     static let blur: CGFloat = 40          // pt (8 px at the 0.2× capture scale)
-    static let wash: Double = 0.6          // white over the blurred covers
+    static let wash: Double = 0.6          // paper veil over the blurred covers
     static let scale: CGFloat = 0.2
     @Published private(set) var image: UIImage?
     /// mean relative luminance of the washed backdrop (what the detail text actually sits on)
@@ -2351,8 +2412,13 @@ final class GridBackdrop: ObservableObject {
         context.render(avg, toBitmap: &px, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
                        format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
         let w = CGFloat(Self.wash)
-        func mix(_ v: UInt8) -> CGFloat { w + (1 - w) * CGFloat(v) / 255 }
-        pageLuminance = ThemeColor.RGB(r: mix(px[0]), g: mix(px[1]), b: mix(px[2])).luminance
+        let dark = window.traitCollection.userInterfaceStyle == .dark
+        // Mix toward the same paper veil drawn in DetailBackdrop (not always white).
+        let pr: CGFloat = dark ? 28.0 / 255 : 244.0 / 255
+        let pg: CGFloat = dark ? 27.0 / 255 : 241.0 / 255
+        let pb: CGFloat = dark ? 26.0 / 255 : 238.0 / 255
+        func mix(_ v: UInt8, _ paper: CGFloat) -> CGFloat { w * paper + (1 - w) * CGFloat(v) / 255 }
+        pageLuminance = ThemeColor.RGB(r: mix(px[0], pr), g: mix(px[1], pg), b: mix(px[2], pb)).luminance
         if TrackPrefetch.log { print("[t335u] backdrop mean luminance \(String(format: "%.2f", pageLuminance))") }
         if TrackPrefetch.log { print("[t335u] backdrop captured in \(Int(Date().timeIntervalSince(t0) * 1000))ms") }
     }
@@ -2361,13 +2427,13 @@ final class GridBackdrop: ObservableObject {
 struct DetailBackdrop: View {
     @ObservedObject private var backdrop = GridBackdrop.shared
     var body: some View {
-        Color(hex: 0xF4F0EE)        // neutral fallback (no snapshot yet)
+        DS.paper        // neutral fallback (no snapshot yet); follows system appearance
             .overlay {
                 if let image = backdrop.image {
                     Image(uiImage: image).resizable().interpolation(.medium).scaledToFill()
                 }
             }
-            .overlay { Color.white.opacity(GridBackdrop.wash) }
+            .overlay { DS.paper.opacity(GridBackdrop.wash) }
             .clipped()
             .ignoresSafeArea()
             .allowsHitTesting(false)

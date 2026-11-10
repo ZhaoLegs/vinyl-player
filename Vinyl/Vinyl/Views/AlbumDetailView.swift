@@ -442,10 +442,9 @@ struct AlbumDetailView: View {
         }
         ThemeColor.cache[key] = picked
         print("[t172u] theme \(title): \(picked.1) \(picked.0?.hex ?? "default black")")
-        // t335u: the page is now the washed cover snapshot, so darken the ink further if that backdrop is darker
-        // than the 0.88 the theme was picked against (keeps ≥ 4.5:1 for the title / rows against its mean)
+        // Adjust ink both ways against the actual washed backdrop luminance (not a light-only 0.88 assumption).
         let next = picked.0.map { c -> DetailTheme in
-            let x = ThemeColor.readable(c, page: min(ThemeColor.pageLuminance, GridBackdrop.shared.pageLuminance))
+            let x = ThemeColor.readable(c, page: GridBackdrop.shared.pageLuminance)
             return DetailTheme.tinted(Color(red: x.r, green: x.g, blue: x.b))
         } ?? .standard
         if next != theme { theme = next }
@@ -1000,7 +999,7 @@ struct AlbumDetailView: View {
         let _ = TracklistProfile.count("DetailWaveform.builder")
         return DetailWaveform(collection: collection, songs: songs,
                               albumIsPlaying: albumIsPlaying, demoLevels: demoLevels, landed: landed,
-                              onReturnToPlaying: onReturnToPlaying)
+                              onReturnToPlaying: onReturnToPlaying, onPlayedAlbum: onPlayedAlbum)
     }
 
     /// 内置演示没有音频文件；若包内放入 demo-audio.m4a/.wav，则用 AVAssetReader 实测 RMS。
@@ -1121,6 +1120,10 @@ struct AlbumDetailView: View {
                    shareURL: c.shareURL,
                    like: { Task { await music.toggleLove(c) } })
         Section {
+            Button("播放", systemImage: "play.fill") {
+                onPlayedAlbum(c)
+                Task { await music.playCollection(c, shuffle: false) }
+            }
             Button("随机播放", systemImage: "shuffle") { Task { await music.playCollection(c, shuffle: true) } }
         }
         // t275u: 睡眠定时 submenu (native Menu; checkmark on the active option; 关闭 only while active)
@@ -1133,12 +1136,6 @@ struct AlbumDetailView: View {
                 }
             } label: {
                 Label("睡眠定时", systemImage: "moon.zzz")
-            }
-            // t309u: 更多 › 歌词 › 歌词偏移 (moves to Settings later)
-            Menu {
-                LyricsOffsetMenu()
-            } label: {
-                Label("歌词", systemImage: "quote.bubble")
             }
         }
         if let url = c.artistURL {
@@ -1157,6 +1154,7 @@ struct AlbumDetailView: View {
         }
     }
 
+
     private func realRow(_ row: TrackRowModel, in songs: [Song]) -> some View {
         TracklistProfile.count("TrackRow.builder")
         let song = row.song
@@ -1164,7 +1162,10 @@ struct AlbumDetailView: View {
         return Button {
             Task {
                 if current { await music.togglePlayback() }
-                else { await music.play(song, in: songs, fromCatalog: collection?.isCatalog ?? false) }
+                else {
+                    if let collection { onPlayedAlbum(collection) }
+                    await music.play(song, in: songs, fromCatalog: collection?.isCatalog ?? false)
+                }
             }
         } label: {
             TrackRowLabel(side: row.side, time: row.time, title: row.title,
@@ -1244,8 +1245,8 @@ struct AlbumDetailView: View {
         static let glyph: CGFloat  = 13
         static let pitch: CGFloat  = 36
         static let headerGap: CGFloat = 16.5
-        static let bpmHeader = Color(hex: 0x8F8D8E)
-        static let bpm       = Color(hex: 0x7A787B)
+        static let bpmHeader = Color(light: 0x8F8D8E, dark: 0xA8A49F)
+        static let bpm       = Color(light: 0x7A787B, dark: 0xB0ACA8)
         static let idle      = DS.secondary          // 非当前曲目：灰（0x8B8783），当前曲目：DS.ink 黑
     }
 
@@ -1548,6 +1549,7 @@ private struct DetailWaveform: View {
     let landed: Bool
     /// t341u: now-playing bubble tap → back to the playing album
     var onReturnToPlaying: (() -> Void)? = nil
+    var onPlayedAlbum: (MusicCollection) -> Void = { _ in }
     var body: some View { bar }
     @ViewBuilder private var bar: some View {
         let _ = TracklistProfile.count("DetailWaveform.body")
@@ -1568,6 +1570,7 @@ private struct DetailWaveform: View {
                         toggle: {
                             if idle {
                                 guard let first, let songs else { return }
+                                if let collection { onPlayedAlbum(collection) }
                                 Task { await music.play(first, in: songs, fromCatalog: collection?.isCatalog ?? false) }
                             } else {
                                 // t383u: the bar shows the player's own track → play / pause always acts on the
@@ -1717,7 +1720,7 @@ enum LyricsTopFade {
     /// 页面底色：顶部 ≈0.75 → 底部 0
     static let tintStops: [Gradient.Stop] = (0...10).map { i in
         let x = Double(i) / 10; let u = 1 - x; let y = 0.75 * u * u * (3 - 2 * u)
-        return .init(color: Color.white.opacity(y), location: x)
+        return .init(color: DS.paper.opacity(y), location: x)
     }
 }
 
@@ -1734,7 +1737,7 @@ enum BottomFade {
     /// 页面底色：0 → 0.85（smoothstep，覆盖整段高度）
     static let tintStops: [Gradient.Stop] = (0...10).map { i in
         let x = Double(i) / 10; let y = 0.85 * x * x * (3 - 2 * x)
-        return .init(color: Color.white.opacity(y), location: x)
+        return .init(color: DS.paper.opacity(y), location: x)
     }
 }
 
@@ -1745,8 +1748,9 @@ struct DetailTheme: Equatable {
     var ink: Color, dim: Color, mid: Color, header: Color
     /// t180u：时间条未播放竖条
     var track: Color
-    static let standard = DetailTheme(ink: DS.ink, dim: DS.secondary, mid: Color(hex: 0x7A787B), header: Color(hex: 0x8F8D8E),
-                                      track: Color(hex: 0xB9B5B1))
+    static let standard = DetailTheme(ink: DS.ink, dim: DS.secondary, mid: Color(light: 0x7A787B, dark: 0xB0ACA8),
+                                      header: Color(light: 0x8F8D8E, dark: 0xA8A49F),
+                                      track: Color(light: 0xB9B5B1, dark: 0x5C5854))
     static func tinted(_ c: Color) -> DetailTheme {
         DetailTheme(ink: c, dim: c.opacity(0.45), mid: c.opacity(0.62), header: c.opacity(0.55), track: c.opacity(0.3))
     }
@@ -1765,8 +1769,16 @@ extension EnvironmentValues {
 /// 没有 Artwork 颜色（演示 / 本地封面）时才从位图取色（40×40 降采样，后台线程）。
 enum ThemeColor {
     static let minChroma: CGFloat = 0.18      // max(r,g,b) − min(r,g,b)，低于此视为无彩色
-    static let pageLuminance: CGFloat = 0.88  // 详情页浅色背景（极光 + 白）相对亮度
+    /// Fallback page luminance when no backdrop snapshot exists: current paper token.
+    static var pageLuminance: CGFloat { paperLuminance() }
     static let minContrast: CGFloat = 4.5
+
+    static func paperLuminance(style: UIUserInterfaceStyle = UITraitCollection.current.userInterfaceStyle) -> CGFloat {
+        let paper = style == .dark
+            ? RGB(r: 28.0 / 255, g: 27.0 / 255, b: 26.0 / 255)   // #1C1B1A
+            : RGB(r: 244.0 / 255, g: 241.0 / 255, b: 238.0 / 255) // #F4F1EE
+        return paper.luminance
+    }
 
     struct RGB { var r, g, b: CGFloat
         var chroma: CGFloat { max(r, g, b) - min(r, g, b) }
@@ -1783,11 +1795,22 @@ enum ThemeColor {
         var hex: String { String(format: "#%02X%02X%02X", Int(r * 255), Int(g * 255), Int(b * 255)) }
     }
 
-    /// 压暗（保持色相）直到对比度达标
-    static func readable(_ c: RGB, page: CGFloat = pageLuminance) -> RGB {
+    static func contrast(_ a: CGFloat, _ b: CGFloat) -> CGFloat {
+        let hi = max(a, b), lo = min(a, b)
+        return (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// Darken on light grounds, lighten on dark, until contrast vs the actual page is ≥ 4.5:1.
+    static func readable(_ c: RGB, page: CGFloat? = nil) -> RGB {
+        let page = page ?? pageLuminance
         var x = c
-        for _ in 0..<40 where (page + 0.05) / (x.luminance + 0.05) < minContrast {
-            x = RGB(r: x.r * 0.92, g: x.g * 0.92, b: x.b * 0.92)
+        let lighten = page < 0.5
+        for _ in 0..<40 where contrast(page, x.luminance) < minContrast {
+            if lighten {
+                x = RGB(r: 1 - (1 - x.r) * 0.92, g: 1 - (1 - x.g) * 0.92, b: 1 - (1 - x.b) * 0.92)
+            } else {
+                x = RGB(r: x.r * 0.92, g: x.g * 0.92, b: x.b * 0.92)
+            }
         }
         return x
     }
@@ -2336,16 +2359,10 @@ struct LyricsPanel: View {
         }
     }
 
-    /// 点某一行 → 跳到该行时间；不是正在播放的歌就先播放它再跳
+    /// 点某一行 → 跳到该行时间。未在播放这首歌时不开始播放（只有播放按钮 / 「播放」菜单可以开始）。
     private func seek(to line: LyricLine) {
-        if music.isCurrent(song) { music.seek(to: line.time); return }
-        Task { @MainActor in
-            await music.play(song, in: songs, fromCatalog: fromCatalog)
-            for _ in 0..<40 {
-                if music.isCurrent(song), music.duration > 0 { music.seek(to: line.time); return }
-                try? await Task.sleep(for: .milliseconds(50))
-            }
-        }
+        guard music.isCurrent(song) else { return }
+        music.seek(to: line.time)
     }
 }
 

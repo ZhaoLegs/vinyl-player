@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import MusicKit
 import SwiftUI
 
@@ -30,6 +31,28 @@ final class SleepTimer: ObservableObject {
     static func remainingText(_ s: TimeInterval) -> String {
         let t = max(0, Int(s.rounded(.up)))
         return String(format: "%d:%02d", t / 60, t % 60)
+    }
+}
+
+
+/// 详情页「更多 › 音质」三档。MusicKit 只能读取当前 `audioVariant`，没有公开 API 切换正在播放的音源。
+enum PlaybackAudioQuality: String, CaseIterable, Identifiable {
+    case high, lossless, dolbyAtmos
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .high: return "高品质"
+        case .lossless: return "无损"
+        case .dolbyAtmos: return "杜比 Atmos"
+        }
+    }
+    init?(variant: AudioVariant) {
+        switch variant {
+        case .lossyStereo, .dolbyAudio: self = .high
+        case .lossless, .highResolutionLossless: self = .lossless
+        case .dolbyAtmos, .spatialAudio: self = .dolbyAtmos
+        @unknown default: return nil
+        }
     }
 }
 
@@ -80,6 +103,13 @@ final class AppleMusicStore: ObservableObject {
     }
     @Published private(set) var duration: TimeInterval = 0
     @Published var errorMessage: String?
+    /// 用户在「音质」菜单里选中的偏好；真正在播的音源见 `currentAudioVariant`。
+    @Published private(set) var preferredAudioQuality: PlaybackAudioQuality = {
+        PlaybackAudioQuality(rawValue: UserDefaults.standard.string(forKey: "vinyl.preferredAudioQuality") ?? "") ?? .high
+    }()
+    @Published private(set) var currentAudioVariant: AudioVariant?
+    @Published private(set) var spatialAudioEnabled: Bool = UserDefaults.standard.object(forKey: "vinyl.spatialAudioEnabled") as? Bool ?? true
+    @Published private(set) var crossfadeEnabled: Bool = UserDefaults.standard.bool(forKey: "vinyl.crossfadeEnabled")
 
     // 演示专辑（无音频文件）的播放状态：选中曲目、播放 / 暂停、模拟的播放时钟
     static let demoDuration: Double = 300
@@ -151,6 +181,7 @@ final class AppleMusicStore: ObservableObject {
         if let existingPlayer { return existingPlayer }
         let created = ApplicationMusicPlayer.shared
         existingPlayer = created
+        applyCrossfade()
         return created
     }
     private var libraryLoaded = false
@@ -214,6 +245,83 @@ final class AppleMusicStore: ObservableObject {
         if let id = currentSongCatalogID, id == song.id { return true }
         return song.title == currentTitle && (currentArtist.isEmpty || song.artistName == currentArtist)
     }
+
+    /// 详情页「音质」菜单：按订阅、设备，以及当前专辑 / 曲目已声明的音源显示可用项。
+    func availableAudioQualities(for collection: MusicCollection, song: Song? = nil) -> [PlaybackAudioQuality] {
+        guard authorized else { return [] }
+        var variants: Set<AudioVariant> = []
+        if case .album(let album, _) = collection, let list = album.audioVariants { variants.formUnion(list) }
+        if let list = song?.audioVariants { variants.formUnion(list) }
+        if let list = currentSong?.audioVariants { variants.formUnion(list) }
+        let known = !variants.isEmpty
+        var items: [PlaybackAudioQuality] = [.high]
+        if canPlayCatalog {
+            if !known || variants.contains(.lossless) || variants.contains(.highResolutionLossless) {
+                items.append(.lossless)
+            }
+            let hasAtmos = variants.contains(.dolbyAtmos) || variants.contains(.spatialAudio)
+            if deviceSupportsAtmos, !known || hasAtmos {
+                items.append(.dolbyAtmos)
+            }
+        }
+        return items
+    }
+
+    var effectiveAudioQuality: PlaybackAudioQuality {
+        if let variant = currentAudioVariant, let quality = PlaybackAudioQuality(variant: variant) {
+            return quality
+        }
+        return preferredAudioQuality
+    }
+
+    func isAudioQualitySelected(_ quality: PlaybackAudioQuality) -> Bool {
+        effectiveAudioQuality == quality
+    }
+
+    /// 记下偏好。MusicKit 的 `MusicPlayer.State.audioVariant` 是只读的，无法在 App 内切换正在播放的音源。
+    func selectAudioQuality(_ quality: PlaybackAudioQuality) {
+        preferredAudioQuality = quality
+        UserDefaults.standard.set(quality.rawValue, forKey: "vinyl.preferredAudioQuality")
+    }
+
+    /// 设置页「音频质量」：按订阅和设备显示，不依赖某一张专辑。
+    var settingsAudioQualities: [PlaybackAudioQuality] {
+        var items: [PlaybackAudioQuality] = [.high]
+        if canPlayCatalog {
+            items.append(.lossless)
+            if deviceSupportsAtmos { items.append(.dolbyAtmos) }
+        }
+        if !items.contains(preferredAudioQuality) { items.append(preferredAudioQuality) }
+        return items
+    }
+
+    /// 记下偏好。系统 / MusicKit 没有在第三方 App 里开关空间音频的公开接口。
+    func setSpatialAudioEnabled(_ on: Bool) {
+        spatialAudioEnabled = on
+        UserDefaults.standard.set(on, forKey: "vinyl.spatialAudioEnabled")
+    }
+
+    /// iOS 18+ 可通过 `ApplicationMusicPlayer.transition` 打开或关闭交叉淡入淡出。
+    func setCrossfadeEnabled(_ on: Bool) {
+        crossfadeEnabled = on
+        UserDefaults.standard.set(on, forKey: "vinyl.crossfadeEnabled")
+        applyCrossfade()
+    }
+
+    private func applyCrossfade() {
+        guard existingPlayer != nil else { return }
+        if #available(iOS 18.0, *) {
+            existingPlayer?.transition = crossfadeEnabled ? .crossfade : .none
+        }
+    }
+
+    private var deviceSupportsAtmos: Bool {
+        let ports = AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType)
+        if ports.isEmpty { return true }
+        let blocked: Set<AVAudioSession.Port> = [.builtInReceiver, .bluetoothLE]
+        return ports.contains { !blocked.contains($0) }
+    }
+
 
     func connect() async {
         guard !isConnecting else { return }
@@ -614,6 +722,7 @@ final class AppleMusicStore: ObservableObject {
             position = 0
             if duration != 0 { duration = 0 }
             if isPlaying { isPlaying = false }
+            if currentAudioVariant != nil { currentAudioVariant = nil }
             return
         }
         let entry = player.queue.currentEntry
@@ -651,6 +760,8 @@ final class AppleMusicStore: ObservableObject {
         position = time.isFinite ? max(0, time) : 0
         let playing = player.state.playbackStatus == .playing
         if isPlaying != playing { isPlaying = playing }
+        let variant = player.state.audioVariant
+        if currentAudioVariant != variant { currentAudioVariant = variant }
         checkSleepTimer()
     }
 

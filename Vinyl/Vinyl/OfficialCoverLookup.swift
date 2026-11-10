@@ -96,7 +96,7 @@ actor OfficialCoverHTTPClient {
     typealias Transport = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
     private let transport: Transport
     private let clock = ContinuousClock()
-    private var lastMBStart: ContinuousClock.Instant?
+    private var lastStartByHost: [String: ContinuousClock.Instant] = [:]
     private var tail: Task<Void, Never>?
     private var generation = 0
 
@@ -136,13 +136,16 @@ actor OfficialCoverHTTPClient {
         request.setValue("VinylPlayer/\(version) (https://github.com/ZhaoLegs/vinyl-player)",
                          forHTTPHeaderField: "User-Agent")
         request.setValue(accept, forHTTPHeaderField: "Accept")
+        if url.host == "api.discogs.com", let token = Self.discogsToken {
+            request.setValue("Discogs token=\(token)", forHTTPHeaderField: "Authorization")
+        }
         for attempt in 0...3 {
             try Task.checkCancellation()
-            if url.host == "musicbrainz.org" {
-                if let lastMBStart {
-                    try await clock.sleep(until: lastMBStart.advanced(by: .milliseconds(1100)))
+            if let host = url.host, let interval = Self.throttleInterval(for: host) {
+                if let last = lastStartByHost[host] {
+                    try await clock.sleep(until: last.advanced(by: interval))
                 }
-                lastMBStart = clock.now
+                lastStartByHost[host] = clock.now
             }
             do {
                 let response = try await transport(request)
@@ -162,6 +165,30 @@ actor OfficialCoverHTTPClient {
             }
         }
         throw URLError(.badServerResponse)
+    }
+
+    fileprivate static var discogsToken: String? {
+        if let env = ProcessInfo.processInfo.environment["DISCOGS_TOKEN"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !env.isEmpty {
+            return env
+        }
+        if let raw = Bundle.main.object(forInfoDictionaryKey: "DiscogsToken") as? String {
+            let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !token.isEmpty { return token }
+        }
+        return nil
+    }
+
+    /// Host-specific lanes: MusicBrainz and Discogs never share a start-time clock.
+    private static func throttleInterval(for host: String) -> Duration? {
+        switch host {
+        case "musicbrainz.org":
+            return .milliseconds(1100)
+        case "api.discogs.com":
+            return discogsToken == nil ? .milliseconds(2500) : .milliseconds(1100)
+        default:
+            return nil
+        }
     }
 
     private static func retryDelay(_ value: String?) -> Double {
@@ -311,6 +338,47 @@ actor OfficialCoverLookup {
     }
 
     private func lookup(_ query: OfficialCoverQuery) async throws -> OfficialCoverResult? {
+        var archive: OfficialCoverResult?
+        var archiveError: Error?
+        do {
+            archive = try await lookupCoverArtArchive(query)
+        } catch {
+            archiveError = error
+        }
+        var discogs: OfficialCoverResult?
+        var discogsError: Error?
+        do {
+            discogs = try await lookupDiscogs(query)
+        } catch {
+            discogsError = error
+        }
+        if let chosen = preferredCover(archive, discogs) { return chosen }
+        if let archiveError { throw archiveError }
+        if let discogsError { throw discogsError }
+        return nil
+    }
+
+    /// If both sources hit, keep the larger pixel area; a tie goes to Cover Art Archive so the cache does not churn.
+    private func preferredCover(_ archive: OfficialCoverResult?, _ discogs: OfficialCoverResult?) -> OfficialCoverResult? {
+        switch (archive, discogs) {
+        case (nil, nil): return nil
+        case (let archive?, nil): return archive
+        case (nil, let discogs?): return discogs
+        case (let archive?, let discogs?):
+            return imageArea(discogs.imageData) > imageArea(archive.imageData) ? discogs : archive
+        }
+    }
+
+    private func imageArea(_ data: Data?) -> Int {
+        guard let data,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? NSNumber,
+              let height = props[kCGImagePropertyPixelHeight] as? NSNumber else { return 0 }
+        return width.intValue * height.intValue
+    }
+
+    private func lookupCoverArtArchive(_ query: OfficialCoverQuery) async throws -> OfficialCoverResult? {
         let titles = OfficialCoverText.variants(OfficialCoverText.cleanTitle(query.title))
         let artists = OfficialCoverText.variants(query.artist)
         let titleQuery = OfficialCoverText.field("releasegroup", values: titles)
@@ -472,5 +540,124 @@ actor OfficialCoverLookup {
             }
         }
         return nil
+    }
+
+    private struct DiscogsSearchItem {
+        let id: Int
+        let title: String
+        let coverImage: String?
+    }
+
+    private func lookupDiscogs(_ query: OfficialCoverQuery) async throws -> OfficialCoverResult? {
+        let titles = OfficialCoverText.variants(OfficialCoverText.cleanTitle(query.title))
+        let artists = OfficialCoverText.variants(query.artist)
+        var seen = Set<Int>()
+        for artist in artists {
+            for title in titles {
+                for item in try await discogsSearch(artist: artist, title: title) {
+                    guard seen.insert(item.id).inserted, discogsIdentity(item, matches: query) else { continue }
+                    if let result = try await discogsCover(item, query: query) { return result }
+                }
+            }
+        }
+        return nil
+    }
+
+    private func discogsIdentity(_ item: DiscogsSearchItem, matches query: OfficialCoverQuery) -> Bool {
+        let expectedTitle = OfficialCoverText.canonical(OfficialCoverText.cleanTitle(query.title))
+        let expectedArtist = OfficialCoverText.canonical(query.artist)
+        let parts = item.title.split(separator: " - ", maxSplits: 1, omittingEmptySubsequences: false)
+        let names: [String]
+        let titles: [String]
+        if parts.count == 2 {
+            names = [String(parts[0]), item.title]
+            titles = [String(parts[1]), item.title]
+        } else {
+            names = [item.title]
+            titles = [item.title]
+        }
+        let titleHit = titles.contains { OfficialCoverText.canonical(OfficialCoverText.cleanTitle($0)) == expectedTitle }
+        let artistHit = names.contains { OfficialCoverText.canonical($0) == expectedArtist }
+        return titleHit && artistHit
+    }
+
+    private func discogsSearch(artist: String, title: String) async throws -> [DiscogsSearchItem] {
+        var components = URLComponents(string: "https://api.discogs.com/database/search")!
+        components.queryItems = [
+            .init(name: "type", value: "release"),
+            .init(name: "artist", value: artist),
+            .init(name: "release_title", value: title)
+        ]
+        let url = components.url!
+        let (data, response) = try await client.request(url)
+        if response.statusCode == 404 { return [] }
+        guard response.statusCode == 200 else { throw OfficialCoverError.http(response.statusCode, url) }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = json["results"] as? [[String: Any]] else {
+            throw URLError(.cannotParseResponse)
+        }
+        return results.compactMap { row in
+            guard let id = Self.jsonInt(row["id"]) else { return nil }
+            return DiscogsSearchItem(id: id, title: row["title"] as? String ?? "",
+                                     coverImage: row["cover_image"] as? String)
+        }
+    }
+
+    private static func jsonInt(_ value: Any?) -> Int? {
+        if let number = value as? Int { return number }
+        if let number = value as? NSNumber { return number.intValue }
+        if let string = value as? String { return Int(string) }
+        return nil
+    }
+
+    private func discogsCover(_ item: DiscogsSearchItem, query: OfficialCoverQuery) async throws -> OfficialCoverResult? {
+        var imageURL = discogsImageURL(item.coverImage)
+        do {
+            if let primary = try await discogsPrimaryURL(item.id) {
+                imageURL = primary
+            }
+        } catch {
+            if imageURL == nil { throw error }
+        }
+        guard let imageURL else { return nil }
+        let (bytes, imageResponse) = try await client.request(imageURL, accept: "image/*")
+        if imageResponse.statusCode == 404 { return nil }
+        guard imageResponse.statusCode == 200 else { throw OfficialCoverError.http(imageResponse.statusCode, imageURL) }
+        guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+              CGImageSourceGetCount(source) > 0,
+              CGImageSourceCreateImageAtIndex(source, 0, nil) != nil else {
+            throw OfficialCoverError.invalidImage(imageURL)
+        }
+        return OfficialCoverResult(match: .init(url: imageURL, mbid: String(item.id), title: item.title,
+            artist: query.artist, score: 100, source: "discogs"), imageData: bytes)
+    }
+
+    /// Signed Discogs image URLs must be used as returned; do not rewrite query or scheme.
+    private func discogsImageURL(_ value: String?) -> URL? {
+        guard let value, let url = URL(string: value),
+              ["http", "https"].contains(url.scheme ?? "") else { return nil }
+        let path = url.path.lowercased()
+        if url.lastPathComponent.lowercased() == "spacer.gif" || path.contains("spacer.gif") { return nil }
+        return url
+    }
+
+    private func discogsPrimaryURL(_ release: Int) async throws -> URL? {
+        let url = URL(string: "https://api.discogs.com/releases/\(release)")!
+        let (data, response) = try await client.request(url)
+        if response.statusCode == 404 { return nil }
+        guard response.statusCode == 200 else { throw OfficialCoverError.http(response.statusCode, url) }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let images = json["images"] as? [[String: Any]] else {
+            throw URLError(.cannotParseResponse)
+        }
+        let typed = images.compactMap { row -> (String, Int, URL)? in
+            guard let uri = row["uri"] as? String, let imageURL = discogsImageURL(uri) else { return nil }
+            let type = (row["type"] as? String) ?? ""
+            let area = (Self.jsonInt(row["width"]) ?? 0) * (Self.jsonInt(row["height"]) ?? 0)
+            return (type, area, imageURL)
+        }
+        let primary = typed.filter { $0.0 == "primary" }
+        let pool = primary.isEmpty ? typed : primary
+        return pool.max(by: { $0.1 < $1.1 })?.2
     }
 }

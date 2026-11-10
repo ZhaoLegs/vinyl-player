@@ -8,7 +8,8 @@ private func expect(_ condition: Bool, _ message: String) throws {
 
 /// Offline fixtures exercise transport failures and identity checks; they are not live hit-rate data.
 private actor FixtureServer {
-    enum Mode { case success, releaseFallback, wrongArtist, missing, artistAlias, tokenSearch }
+    enum Mode { case success, releaseFallback, wrongArtist, missing, artistAlias, tokenSearch,
+                discogsOnly, discogsLarger, discogsTie, discogsSpacer }
     var mode: Mode
     var failures: [URLError.Code]
     var httpFailures: [Int]
@@ -50,7 +51,7 @@ private actor FixtureServer {
                 "aliases": [["name": "Stefanie Sun"]]
             ]] : []]
         } else if url.path.hasPrefix("/ws/2/release-group") {
-            let empty = mode == .missing || (mode == .artistAlias && !query.contains("arid:")) ||
+            let empty = mode == .missing || mode == .discogsOnly || (mode == .artistAlias && !query.contains("arid:")) ||
                 (mode == .tokenSearch && query.contains("\""))
             json = ["release-groups": empty ? [] : [candidate()]]
         } else if url.path.hasPrefix("/ws/2/release") {
@@ -59,9 +60,24 @@ private actor FixtureServer {
                 "cover-art-archive": ["front": true],
                 "artist-credit": credits()
             ]]]
+        } else if url.host == "api.discogs.com" {
+            if url.path.hasPrefix("/database/search") {
+                json = ["results": discogsResults()]
+            } else if url.path.hasPrefix("/releases/") {
+                json = discogsRelease()
+            } else {
+                status = 404
+            }
         } else if url.host == "coverartarchive.org", url.path.hasSuffix(".jpg") {
-            let png = Data(base64Encoded:
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7XsAAAAASUVORK5CYII=")!
+            return (Self.png1x1, HTTPURLResponse(url: url, statusCode: 200,
+                httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "image/png"])!)
+        } else if url.host == "i.discogs.com" {
+            if url.path.contains("spacer.gif") {
+                status = 200
+                return (Data(), HTTPURLResponse(url: url, statusCode: 200,
+                    httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "image/gif"])!)
+            }
+            let png = (mode == .discogsLarger && url.path.contains("large")) ? Self.png2x2 : Self.png1x1
             return (png, HTTPURLResponse(url: url, statusCode: 200,
                 httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "image/png"])!)
         } else {
@@ -91,6 +107,43 @@ private actor FixtureServer {
     }
 
     func count() -> Int { requests.count }
+
+    static let png1x1 = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7XsAAAAASUVORK5CYII=")!
+    static let png2x2 = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGP4z8DwH4QZYAwAR8oH+WdZbrcAAAAASUVORK5CYII=")!
+
+    private func discogsResults() -> [[String: Any]] {
+        switch mode {
+        case .discogsOnly, .discogsLarger, .discogsTie, .discogsSpacer:
+            let image: String
+            switch mode {
+            case .discogsSpacer: image = "https://i.discogs.com/images/spacer.gif"
+            case .discogsLarger: image = "https://i.discogs.com/large.png"
+            default: image = "https://i.discogs.com/cover.jpg"
+            }
+            return [["id": 4242, "title": "孙燕姿 - Stefanie", "cover_image": image]]
+        default:
+            return []
+        }
+    }
+
+    private func discogsRelease() -> [String: Any] {
+        switch mode {
+        case .discogsLarger:
+            return ["images": [[
+                "type": "primary", "uri": "https://i.discogs.com/large.png",
+                "width": 2, "height": 2
+            ]]]
+        case .discogsOnly, .discogsTie:
+            return ["images": [[
+                "type": "primary", "uri": "https://i.discogs.com/cover.jpg",
+                "width": 1, "height": 1
+            ]]]
+        default:
+            return ["images": []]
+        }
+    }
 }
 
 @main
@@ -139,7 +192,12 @@ private struct OfficialCoversCheck {
         try expect(results.allSatisfy { $0?.match.score == 100 }, "string score and concurrent dedup")
         try expect(results[0]?.match.url.scheme == "https", "CAA URLs must use HTTPS")
         let count = await server.count()
-        try expect(count == 3, "one search, one CAA manifest, one image for concurrent callers")
+        let hosts = await server.requests.map { $0.url?.host ?? "" }
+        let mbCaa = hosts.filter { $0 == "musicbrainz.org" || $0 == "coverartarchive.org" }.count
+        let discogs = hosts.filter { $0 == "api.discogs.com" }.count
+        try expect(mbCaa == 3, "one MB search, one CAA manifest, one image for concurrent callers")
+        try expect(discogs >= 1 && !hosts.contains("i.discogs.com"),
+                   "CAA hit still queries Discogs; empty Discogs results must not download images")
         _ = try await lookup.resolve(query)
         let restarted = OfficialCoverLookup(cacheDirectory: directory, client: client)
         _ = try await restarted.resolve(query)
@@ -224,7 +282,11 @@ private struct OfficialCoversCheck {
             _ = try await errors.resolve(query)
             throw CheckError.failed("must surface exhausted retry")
         } catch is URLError {}
-        try expect(await errorServer.count() == 4, "maximum three retries after first attempt")
+        let errorCount = await errorServer.count()
+        let errorHosts = await errorServer.requests.map { $0.url?.host ?? "" }
+        try expect(errorHosts.filter { $0 == "musicbrainz.org" }.count == 4, "maximum three retries after first MusicBrainz attempt")
+        try expect(errorHosts.contains("api.discogs.com"), "Discogs is still queried after a MusicBrainz transport error")
+        try expect(errorCount >= 5, "MusicBrainz retries plus at least one Discogs search")
         let recovered = try await errors.resolve(query)
         try expect(recovered != nil, "network failure must not become a persistent miss")
         print("PASS: retry cap and recovery after exhausted retries")
@@ -267,6 +329,74 @@ private struct OfficialCoversCheck {
         let expiredResult = try await expiredLookup.resolve(query)
         try expect(expiredResult != nil, "confirmed misses expire after seven days")
         print("PASS: confirmed miss expiry")
+
+        let discogsOnlyServer = FixtureServer(.discogsOnly)
+        let discogsOnly = OfficialCoverLookup(cacheDirectory: root.appendingPathComponent("discogs-only"),
+            client: OfficialCoverHTTPClient(transport: { try await discogsOnlyServer.handle($0) }))
+        let discogsOnlyResult = try await discogsOnly.resolve(query)
+        try expect(discogsOnlyResult?.match.source == "discogs", "Discogs must fill a CAA miss")
+        try expect(discogsOnlyResult?.match.url.host == "i.discogs.com", "use the Discogs image URL as returned")
+        let discogsCalls = await discogsOnlyServer.requests
+        try expect(discogsCalls.contains { $0.url?.path == "/database/search" }, "Discogs database search")
+        try expect(discogsCalls.allSatisfy {
+            ($0.value(forHTTPHeaderField: "User-Agent") ?? "").contains("github.com/ZhaoLegs/vinyl-player")
+        }, "User-Agent on Discogs requests")
+        print("PASS: Discogs covers a Cover Art Archive miss")
+
+        let largerServer = FixtureServer(.discogsLarger)
+        let larger = OfficialCoverLookup(cacheDirectory: root.appendingPathComponent("discogs-larger"),
+            client: OfficialCoverHTTPClient(transport: { try await largerServer.handle($0) }))
+        let largerResult = try await larger.resolve(query)
+        try expect(largerResult?.match.source == "discogs", "larger Discogs image must beat a 1×1 CAA image")
+        print("PASS: larger Discogs image wins over CAA")
+
+        let tieServer = FixtureServer(.discogsTie)
+        let tie = OfficialCoverLookup(cacheDirectory: root.appendingPathComponent("discogs-tie"),
+            client: OfficialCoverHTTPClient(transport: { try await tieServer.handle($0) }))
+        let tieResult = try await tie.resolve(query)
+        try expect(tieResult?.match.source != "discogs", "equal pixel area must keep the CAA result")
+        print("PASS: CAA wins a pixel-area tie")
+
+        let spacerServer = FixtureServer(.discogsSpacer)
+        let spacer = OfficialCoverLookup(cacheDirectory: root.appendingPathComponent("discogs-spacer"),
+            client: OfficialCoverHTTPClient(transport: { try await spacerServer.handle($0) }))
+        let spacerResult = try await spacer.resolve(query)
+        try expect(spacerResult?.match.source != "discogs", "spacer.gif must not replace the official cover")
+        print("PASS: Discogs spacer.gif is ignored")
+
+        setenv("DISCOGS_TOKEN", "unit-test-token", 1)
+        let authServer = FixtureServer()
+        let authClient = OfficialCoverHTTPClient(transport: { try await authServer.handle($0) })
+        let discogsURL = URL(string: "https://api.discogs.com/database/search?type=release&artist=Sun&release_title=Stefanie")!
+        _ = try await authClient.request(discogsURL)
+        let authHeader = await authServer.requests.last?.value(forHTTPHeaderField: "Authorization")
+        try expect(authHeader == "Discogs token=unit-test-token", "optional token is sent only to api.discogs.com")
+        unsetenv("DISCOGS_TOKEN")
+        let plainServer = FixtureServer()
+        let plainClient = OfficialCoverHTTPClient(transport: { try await plainServer.handle($0) })
+        _ = try await plainClient.request(discogsURL)
+        try expect(await plainServer.requests.last?.value(forHTTPHeaderField: "Authorization") == nil,
+                   "no Authorization header without a token")
+        print("PASS: optional Discogs token header")
+
+        // One client hitting both hosts: MusicBrainz must not wait out the Discogs 2.5s lane.
+        let laneServer = FixtureServer()
+        let laneClient = OfficialCoverHTTPClient(transport: { try await laneServer.handle($0) })
+        let mbURL = URL(string: "https://musicbrainz.org/ws/2/release-group?query=Stefanie")!
+        _ = try await laneClient.request(discogsURL)
+        let afterDiscogs = Date()
+        _ = try await laneClient.request(mbURL)
+        let mbWait = Date().timeIntervalSince(afterDiscogs)
+        try expect(mbWait < 1.5, "MusicBrainz must not wait for the Discogs 2.5s lane (waited \(mbWait))")
+        // Two Discogs requests on the unauthenticated lane must be ≥ 2.5s apart.
+        let gapServer = FixtureServer()
+        let gapClient = OfficialCoverHTTPClient(transport: { try await gapServer.handle($0) })
+        _ = try await gapClient.request(discogsURL)
+        _ = try await gapClient.request(discogsURL)
+        let gapStarts = await gapServer.starts
+        try expect(gapStarts[1].timeIntervalSince(gapStarts[0]) >= 2.5, "Discogs unauthenticated spacing")
+        print("PASS: Discogs and MusicBrainz throttle on separate host lanes")
+
         print("SELF-CHECK PASSED")
     }
 

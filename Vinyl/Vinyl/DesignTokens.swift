@@ -9,16 +9,34 @@ extension Color {
                   blue: Double(hex & 0xFF) / 255,
                   opacity: alpha)
     }
+
+    /// Light / dark dynamic sRGB color. Resolves from the current trait collection at render time.
+    init(light: UInt, dark: UInt, alpha: Double = 1) {
+        self.init(uiColor: UIColor { traits in
+            let hex = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(red: CGFloat((hex >> 16) & 0xFF) / 255,
+                           green: CGFloat((hex >> 8) & 0xFF) / 255,
+                           blue: CGFloat(hex & 0xFF) / 255,
+                           alpha: alpha)
+        })
+    }
 }
 
 enum DS {
-    // 颜色：取自原片取样
-    static let ink        = Color(hex: 0x1A1A1C)
-    static let inkSoft    = Color(hex: 0x2A2927)
-    static let secondary  = Color(hex: 0x8B8783)
-    static let tertiary   = Color(hex: 0xB6B1AC)
-    static let paper      = Color(hex: 0xF4F1EE)
-    static let accent     = Color(hex: 0x8FD694)
+    // 颜色：浅色取自原片取样；暗色为同一暖灰纸家族的反相，跟随系统外观。
+    static let inkUI      = UIColor { traits in
+        if traits.userInterfaceStyle == .dark {
+            return UIColor(red: 242 / 255, green: 240 / 255, blue: 237 / 255, alpha: 1) // #F2F0ED
+        }
+        return UIColor(red: 26 / 255, green: 26 / 255, blue: 28 / 255, alpha: 1) // #1A1A1C
+    }
+    static let ink        = Color(uiColor: inkUI)
+    static let inkSoft    = Color(light: 0x2A2927, dark: 0xE4E2DF) // 暗色略低于 ink
+    static let secondary  = Color(light: 0x8B8783, dark: 0xA8A49F)
+    static let tertiary   = Color(light: 0xB6B1AC, dark: 0x7A7672)
+    static let paper      = Color(light: 0xF4F1EE, dark: 0x1C1B1A)
+    static let accent     = Color(light: 0x8FD694, dark: 0xA3E3A8)
+    /// 唱片盘面；不跟随主题，始终近黑。
     static let vinyl      = Color(hex: 0x111113)
 
     // 尺寸：以 iPhone 393pt 宽为基准，与原片 480px 屏幕按 0.819 换算
@@ -33,6 +51,8 @@ enum DS {
     static let pullScale: CGFloat  = 0.15
     static let planet: CGFloat     = 86
     static let corner: CGFloat     = 5
+    /// 首页格子封面圆角：字面 6px，按屏幕密度换成 pt（pt = 6 / displayScale；@3x = 2pt，@2x = 3pt）
+    static func gridCoverCorner(scale: CGFloat) -> CGFloat { 6 / max(scale, 1) }
     static let capsule: CGFloat    = 28
 
     /// 首页与详情页共用的左右内容边距（原片实测：网格 / 曲目表 / 发行卡左缘均为 21pt）。
@@ -297,7 +317,11 @@ private struct Blob {
 /// now comes from the album covers (detail page: DetailBackdrop)
 struct AuroraBackground: View {
     var body: some View {
-        LinearGradient(colors: [Color(hex: 0xFAF8F6), Color(hex: 0xEDEAE7), Color(hex: 0xF4F0EE)],
+        LinearGradient(colors: [
+                           Color(light: 0xFAF8F6, dark: 0x222120),
+                           Color(light: 0xEDEAE7, dark: 0x181716),
+                           Color(light: 0xF4F0EE, dark: 0x1C1B1A) // paper family
+                       ],
                        startPoint: .topLeading, endPoint: .bottomTrailing)
             .ignoresSafeArea()
     }
@@ -547,14 +571,13 @@ enum TabBarAppearance {
     static func configure() {
         if #available(iOS 26.0, *) {
             // 只设选中色，其余（材质、折射、高光、内缩、安全区、无障碍）全部交给系统
-            UITabBar.appearance().tintColor =
-                UIColor(red: 26.0 / 255, green: 26.0 / 255, blue: 28.0 / 255, alpha: 1)
+            UITabBar.appearance().tintColor = DS.inkUI
         } else {
-            // iOS 17–25：系统未提供 Liquid Glass，用公开外观 API 配置等效毛玻璃
+            // iOS 17–25：系统未提供 Liquid Glass，用公开外观 API 配置等效毛玻璃（跟随系统浅色 / 暗色材质）
             let appearance = UITabBarAppearance()
             appearance.configureWithTransparentBackground()
-            appearance.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterialLight)
-            appearance.backgroundColor = UIColor.white.withAlphaComponent(0.55)
+            appearance.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)
+            appearance.backgroundColor = .clear
             appearance.shadowColor = .clear
 
             // Icons only — hide any residual tab titles.
@@ -564,11 +587,11 @@ enum TabBarAppearance {
             ]
 
             let normal = appearance.stackedLayoutAppearance.normal
-            normal.iconColor = UIColor(red: 26.0 / 255, green: 26.0 / 255, blue: 28.0 / 255, alpha: 0.72)
+            normal.iconColor = DS.inkUI.withAlphaComponent(0.72)
             normal.titleTextAttributes = hiddenTitle
 
             let selected = appearance.stackedLayoutAppearance.selected
-            selected.iconColor = UIColor(red: 26.0 / 255, green: 26.0 / 255, blue: 28.0 / 255, alpha: 1)
+            selected.iconColor = DS.inkUI
             selected.titleTextAttributes = hiddenTitle
 
             UITabBarItem.appearance().setTitleTextAttributes(hiddenTitle, for: .normal)
@@ -576,8 +599,7 @@ enum TabBarAppearance {
 
             UITabBar.appearance().standardAppearance = appearance
             UITabBar.appearance().scrollEdgeAppearance = appearance
-            UITabBar.appearance().tintColor =
-                UIColor(red: 26.0 / 255, green: 26.0 / 255, blue: 28.0 / 255, alpha: 1)
+            UITabBar.appearance().tintColor = DS.inkUI
         }
     }
 }
@@ -587,6 +609,7 @@ enum TabBarAppearance {
 struct NativeTabBehavior: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
+        #if HAS_IOS27_SDK
         if #available(iOS 27.0, *) {
             // iOS 27：统一的 toolbar 最小化 API，可精确指定作用到 tabBar
             content.toolbarMinimizationBehavior(.onScrollDown, for: .tabBar)
@@ -596,6 +619,14 @@ struct NativeTabBehavior: ViewModifier {
         } else {
             content
         }
+        #else
+        // Xcode 26 SDK 没有 toolbarMinimizationBehavior；iOS 26 用 tabBarMinimizeBehavior。
+        if #available(iOS 26.0, *) {
+            content.tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            content
+        }
+        #endif
     }
 }
 

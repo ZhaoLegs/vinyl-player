@@ -45,6 +45,7 @@ import UIKit
 ///
 /// 这里的 4 个 tab 都是普通 `Tab`（不写 role）—— 系统 tab bar 天然等宽 +
 /// 选中高亮，与「4 个 tab 同处一条胶囊」的设计一致。
+#if HAS_IOS27_SDK
 @available(iOS 27.0, *)
 struct NativeTabBar27Example: View {
     @State private var tab = 0
@@ -80,6 +81,7 @@ struct NativeProminentTab27Example: View {
         .tabViewStyle(.tabBarOnly)
     }
 }
+#endif
 
 // MARK: - ② 底部渐变高斯模糊：iOS 26 系统 scroll edge effect
 
@@ -256,14 +258,14 @@ enum UIKitGlassFactory {
 /// 不是折射玻璃；Apple 明确不建议自己用 UIVisualEffectView 去仿造 Liquid Glass。
 enum LegacyGlassFactory {
     static func blurredView() -> UIVisualEffectView {
-        UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialLight))
+        UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
     }
 
     static func configureTabBar() {
         let appearance = UITabBarAppearance()
         appearance.configureWithTransparentBackground()
-        appearance.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterialLight)
-        appearance.backgroundColor = UIColor.white.withAlphaComponent(0.55)
+        appearance.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)
+        appearance.backgroundColor = .clear
         UITabBar.appearance().standardAppearance = appearance
         UITabBar.appearance().scrollEdgeAppearance = appearance
     }

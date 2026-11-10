@@ -118,6 +118,7 @@ struct MusicSearchView: View {
                 }
             }
         }
+        .tint(.blue)
     }
 
     private func search() async {
@@ -239,6 +240,7 @@ struct MusicCollectionView: View {
                 }
             }
         }
+        .tint(.blue)
     }
 }
 
@@ -269,6 +271,7 @@ struct MusicAccountView: View {
             .navigationTitle("我的")
             .modifier(MiniPlayerBar())
         }
+        .tint(.blue)
     }
 }
 
@@ -340,7 +343,7 @@ struct ArtworkFill: View {
                                   animatesOfficial: animatesOfficial, onResolved: onResolved)
                 } else {
                     ZStack {
-                        Color(hex: 0xE4E0DC)
+                        DS.paper
                         Image(systemName: "music.note")
                             .font(.system(size: render * 0.3))
                             .foregroundStyle(DS.secondary)
@@ -391,12 +394,12 @@ struct MiniArtworkSnapshot: Equatable {
             Image(uiImage: image).resizable().interpolation(.high)
         } else if let artwork {
             if remote {
-                Rectangle().fill(artwork.backgroundColor.map { Color(cgColor: $0) } ?? Color(hex: 0xE4E0DC))
+                Rectangle().fill(artwork.backgroundColor.map { Color(cgColor: $0) } ?? DS.paper)
             } else {
                 ArtworkImage(artwork, width: 320, height: 320)
             }
         } else {
-            Rectangle().fill(Color(hex: 0xE4E0DC))
+            Rectangle().fill(DS.paper)
         }
     }
 }
@@ -664,10 +667,10 @@ struct CachedArtwork: View {
                 if appleURL == nil {
                     ArtworkImage(artwork, width: side, height: side)
                 } else {
-                    Rectangle().fill(artwork.backgroundColor.map { Color(cgColor: $0) } ?? Color(hex: 0xE4E0DC))
+                    Rectangle().fill(artwork.backgroundColor.map { Color(cgColor: $0) } ?? DS.paper)
                 }
             } else {
-                Rectangle().fill(Color(hex: 0xE4E0DC))
+                Rectangle().fill(DS.paper)
             }
         }
         .frame(width: side, height: side)

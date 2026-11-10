@@ -368,6 +368,8 @@
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				"SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=iphoneos27*]" = "DEBUG $(inherited) HAS_IOS27_SDK";
+				"SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=iphonesimulator27*]" = "DEBUG $(inherited) HAS_IOS27_SDK";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
 			name = Debug;
@@ -386,6 +388,8 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
+				"SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=iphoneos27*]" = "$(inherited) HAS_IOS27_SDK";
+				"SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=iphonesimulator27*]" = "$(inherited) HAS_IOS27_SDK";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				VALIDATE_PRODUCT = YES;
@@ -398,7 +402,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 217;
+				CURRENT_PROJECT_VERSION = 218;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Vinyl/Info.plist;
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "允许 Vinyl 读取你的音乐资料库并播放你选择的 Apple Music 歌曲。";
@@ -428,7 +432,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 217;
+				CURRENT_PROJECT_VERSION = 218;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Vinyl/Info.plist;
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "允许 Vinyl 读取你的音乐资料库并播放你选择的 Apple Music 歌曲。";
