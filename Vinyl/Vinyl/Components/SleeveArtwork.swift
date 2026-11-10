@@ -186,6 +186,18 @@ struct SleeveArtwork: View, Animatable {
         return CGRect(x: inset - pullX, y: inset, width: side, height: side)
     }
 
+    /// t361u: on-screen sleeve rect for any pull (same formulas as body: scale 1 - pullScale·pull, or 0.85 when held;
+    /// centre shifted by -sleevePullX·pull). Linear in pull, so an offset/frame driven by it under the same
+    /// transaction moves exactly with the sleeve. pull 1 → x -27…233.1; pull 0 + hold → x 22.95…283.05 = screen 70.95…331.05 (402pt page).
+    static func sleeveRect(pageWidth: CGFloat, pull: CGFloat, hold: Bool) -> CGRect {
+        let scale = hold ? 1 - DS.pullScale : 1 - DS.pullScale * pull
+        let side = DS.sleeve * scale
+        let restLeft = (pageWidth - DS.sleeve) / 2
+        let pullX = restLeft + DS.sleeve * DS.pullScale / 2 - DS.contentInset
+        let inset = (DS.sleeve - side) / 2
+        return CGRect(x: inset - pullX * pull, y: inset, width: side, height: side)
+    }
+
     private var discInset: CGFloat { (DS.sleeve - DS.disc) / 2 }
     private var sleeveRestLeft: CGFloat { (pageWidth - DS.sleeve) / 2 }
     /// 抽出时封套左移量：缩放后的封套左缘正好落在 contentInset

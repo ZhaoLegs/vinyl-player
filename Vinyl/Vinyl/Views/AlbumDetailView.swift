@@ -220,10 +220,10 @@ struct AlbumDetailView: View {
                 // (right; only for an album that isn't the one playing). Both fade in with the top bar after the cover
                 // lands and hide during the flip (0.1s out / 0.2s back). The play slot keeps its width when hidden, so
                 // the lyrics button never moves.
-                // t360u: anchored to the pulled-out sleeve's own rect (0.85, ~260pt, left edge at contentInset), not the
-                // unscaled 306pt frame; fixed there in every state (buttons hide during the flip as before)
+                // t360u / t361u: anchored to the sleeve's actual rect (bottom-left, 10pt inset), not the unscaled 306pt frame
                 .overlay(alignment: .topLeading) {
-                    let r = SleeveArtwork.pulledSleeveRect(pageWidth: pageWidth > 0 ? pageWidth : 402)
+                    // t361u: follows the sleeve's own pull (same animated value / transaction) → slides out and merges back with it
+                    let r = SleeveArtwork.sleeveRect(pageWidth: pageWidth > 0 ? pageWidth : 402, pull: pull, hold: holdSleeveScale)
                     HStack(spacing: CoverButtons.spacing) {
                         GlassCircleButton(systemImage: lyricsMode ? "quote.bubble.fill" : "quote.bubble",
                                           accessibilityText: lyricsMode ? "返回封面" : "歌词", ink: theme.ink) {
