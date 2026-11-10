@@ -365,7 +365,15 @@ struct AlbumDetailView: View {
         .onChange(of: landed) { _, now in
             guard now, !closing else {
                 // 新一次打开开始（landed 复位）：瞬间归零，等这次放大落定再淡入
-                if !now && !closing { setCopy(0, animated: false) }
+                if !now && !closing {
+                    setCopy(0, animated: false)
+                    // t358u: a hint swing stopped mid-way (close / tap) must not carry its ±swing offset into this open
+                    if !swipeBusy && swipeX != 0 {
+                        hintLog("open: reset leftover swipeX \(swipeX)")
+                        var t = Transaction(); t.disablesAnimations = true
+                        withTransaction(t) { swipeX = 0 }
+                    }
+                }
                 return
             }
             withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(duration: 0.4, bounce: 0)) { barIn = 1 }
@@ -544,7 +552,7 @@ struct AlbumDetailView: View {
                 if swipeAxisH == nil {
                     swipeAxisH = abs(dx) > abs(dy) * 1.4
                     // t185u：以识别那一刻的位移为零点，封套 + 唱片从 0 开始跟手，不会跳 10pt
-                    if swipeAxisH == true { swipeBase = dx; onSwipeBegan(); userInteracted() }   // t343u / t350u
+                    if swipeAxisH == true { swipeBase = dx; onSwipeBegan(); userInteracted(dragging: true) }   // t343u / t350u
                 }
                 guard swipeAxisH == true else { return }
                 let x = dx - swipeBase
@@ -612,9 +620,11 @@ struct AlbumDetailView: View {
     }
 
     /// Any user touch on the pager / cover / its buttons cancels the first-open hints and marks them done.
-    private func userInteracted() {
+    private func userInteracted(dragging: Bool = false) {
         if !hintLearned { hintLog("learned (user interaction)") }
         hintToken += 1
+        // t358u: a tap (lyrics / play / cover) during the swing → glide back to centre; a drag owns swipeX itself
+        if !dragging { recentreAfterHint("user interaction") }
         if hintPeek { hintPeek = false }
         if !hintLearned { hintLearned = true }   // a user swipe / flip / button = learned → no more hints
     }
@@ -635,6 +645,14 @@ struct AlbumDetailView: View {
             .accessibilityHidden(true)
             .transition(.opacity)
         }
+    }
+
+    /// t358u: the hint swing leaves swipeX at ±swing when it is stopped between steps; bring the pager back to 0
+    /// with the hint's own centre spring (no-op if a real swipe is running or the pager is already centred).
+    private func recentreAfterHint(_ why: String) {
+        guard !swipeBusy, swipeX != 0, abs(swipeX) <= (pageWidth > 0 ? pageWidth : 402) * SwipeHint.swing + 1 else { return }
+        hintLog("recentre from swipeX \(swipeX) (\(why))")
+        withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.9)) { swipeX = 0 }
     }
 
     private func hintLog(_ s: @autoclosure () -> String) { if SwipeHint.log { print("[t354u] hints: \(s())") } }
@@ -666,12 +684,12 @@ struct AlbumDetailView: View {
                 if next {
                     withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.86)) { swipeX = -swing }
                     try? await Task.sleep(for: .seconds(SwipeHint.spring + SwipeHint.hold))
-                    guard live("swing right") else { hintPeek = false; return }
+                    guard live("swing right") else { hintPeek = false; recentreAfterHint("stopped"); return }
                 }
                 if prev {
                     withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.86)) { swipeX = swing }
                     try? await Task.sleep(for: .seconds(SwipeHint.spring + SwipeHint.hold))
-                    guard live("centre") else { hintPeek = false; return }
+                    guard live("centre") else { hintPeek = false; recentreAfterHint("stopped"); return }
                 }
                 withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.9)) { swipeX = 0 }
                 try? await Task.sleep(for: .seconds(SwipeHint.spring))
@@ -1071,8 +1089,8 @@ struct AlbumDetailView: View {
                     .lineLimit(1)
                 Group {
                     if current {
-                        // t338u: neutral grey = the standard theme's secondary row grey (#7A787B), never the theme / accent tint
-                        EqualizerGlyph(playing: playing, color: DetailTheme.standard.mid, height: TL.glyph * 0.85)
+                        // t359u (reverses t338u): the album page's theme ink, like the row title
+                        EqualizerGlyph(playing: playing, color: ink, height: TL.glyph * 0.85)
                     } else {
                         Image(systemName: "play.fill")
                             .font(.system(size: TL.glyph, weight: .regular))
