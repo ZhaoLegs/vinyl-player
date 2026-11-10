@@ -899,7 +899,7 @@ struct LibraryView: View {
             }
         }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.zoomBackdrop.delay(GridMotion.blurDelay)) {
-            blurRadius = 18
+            blurRadius = 8   // t324u: 18 → 8pt (stacks on the per-tile push blur); dim unchanged
             gridDim = 1
         }
         // Detail copy fades in after the cover has started moving (reference frames 9–16).
@@ -1558,9 +1558,8 @@ struct TilePushAway: ViewModifier {
         let d = max(sqrt(dx * dx + dy * dy), 1)
         return (CGSize(width: dx / d, height: dy / d), d)
     }
-    /// t323u: peak blur grows with distance from the tapped tile: 12pt (adjacent) → 24pt (≥ one screen-height away)
-    static let nearBlur: CGFloat = 12
-    static let farBlur: CGFloat = 24
+    /// t324u: peak blur (near tile … far tile, ≥ one screen-length away), lowered from 12…24pt; the single tuning point
+    static let peakBlur: ClosedRange<CGFloat> = 6...14
     func body(content: Content) -> some View {
         let longer = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
         let g = geometry
@@ -1569,7 +1568,7 @@ struct TilePushAway: ViewModifier {
             .modifier(PushDisplacement(progress: zm.pushAway && g != nil ? 1 : 0,
                                        vector: g.map { CGSize(width: $0.dir.width * longer * Self.factor,
                                                               height: $0.dir.height * longer * Self.factor) } ?? .zero,
-                                       maxBlur: Self.nearBlur + (Self.farBlur - Self.nearBlur) * t,
+                                       maxBlur: Self.peakBlur.lowerBound + (Self.peakBlur.upperBound - Self.peakBlur.lowerBound) * t,
                                        minScale: Self.scale))
     }
 }

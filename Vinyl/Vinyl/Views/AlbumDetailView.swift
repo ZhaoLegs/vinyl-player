@@ -66,6 +66,8 @@ struct AlbumDetailView: View {
     @State private var listBottomY: CGFloat = 0
     /// t251u：封面放大真正落定（landed，来自打开弹簧的 completion）后才淡入：标题 → 曲目表（整块）
     @State private var titleIn: Double = 0
+    /// t325u: top bar (关闭 / title / ☆⋯) appears only after the cover zoom has landed (0.2s easeOut)
+    @State private var chromeIn: Double = 0
     @State private var listIn: Double = 0
     /// t286u: rows rise + fade in one by one after the zoom lands (flipped once per open, no animation on reset)
     @State private var rowsShown = false
@@ -146,7 +148,8 @@ struct AlbumDetailView: View {
                 header
                     .frame(height: 52)
                     .padding(.top, 0)
-                    .opacity(isPresented ? stage(0) : 0)
+                    // t325u: open → hidden until landed, then 0.2s easeOut; close → the existing contentAlpha fade-out
+                    .opacity(isPresented ? (closing ? stage(0) : chromeIn) : 0)
 
                 // 唱片角速度：0 → smoothstep 缓入 → 45°/s 匀速 → smoothstep 缓出 → 0。
                 // 累计角度由角速度解析积分得到，C¹ 连续，不再「突然开始 / 突然停住」。
@@ -316,7 +319,7 @@ struct AlbumDetailView: View {
             // t156u：关闭完成后把逐行时间轴归零，下次打开从头错峰
             guard !shown else { return }
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { reveal = 0; barIn = 0; titleIn = 0; listIn = 0; rowsShown = false; rowsLive = false }
+            withTransaction(t) { reveal = 0; barIn = 0; titleIn = 0; chromeIn = 0; listIn = 0; rowsShown = false; rowsLive = false }
         }
         .task {
             guard demoLevels == nil,
@@ -392,13 +395,14 @@ struct AlbumDetailView: View {
         if DetailReveal.log { print("[t251u] setCopy \(v) animated=\(animated) t=\(Date().timeIntervalSince1970)") }
         if !animated {
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { titleIn = v; listIn = v; if v > 0 { rowsShown = true; if songs != nil { rowsLive = true } } }
+            withTransaction(t) { titleIn = v; chromeIn = v; listIn = v; if v > 0 { rowsShown = true; if songs != nil { rowsLive = true } } }
         } else if v > 0 {
             rowsShown = true   // each row animates itself (TrackRowRise)
             withAnimation(.easeOut(duration: DetailReveal.fadeIn)) { titleIn = v }
+            withAnimation(.easeOut(duration: 0.2)) { chromeIn = v }   // t325u
             withAnimation(.easeOut(duration: DetailReveal.fadeIn).delay(DetailReveal.listDelay)) { listIn = v }
         } else {
-            withAnimation(.easeOut(duration: DetailReveal.fadeOut)) { titleIn = v; listIn = v }
+            withAnimation(.easeOut(duration: DetailReveal.fadeOut)) { titleIn = v; chromeIn = v; listIn = v }
         }
     }
 
