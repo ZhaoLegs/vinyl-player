@@ -639,27 +639,14 @@ struct AlbumDetailView: View {
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    /// t229u：顶栏三图标（添加 / 喜爱 / 共享）→ 歌单 · 下一首 · 队列末尾 → 前往专辑 / 艺人
+    /// 歌曲菜单：喜欢 / 共享 → 前往专辑 / 艺人。
     @ViewBuilder
     private func songMenu(_ song: Song) -> some View {
         let catalog = collection?.isCatalog ?? false
         let key = "am:" + song.id.rawValue
-        MenuTopBar(canAdd: music.canAddToLibrary(song, fromCatalog: catalog),
-                   liked: music.isFavorite(key),
+        MenuTopBar(liked: music.isFavorite(key),
                    shareURL: song.url,
-                   add: { Task { await music.addToLibrary(song) } },
                    like: { Task { await music.toggleFavorite(key, song: song, fromCatalog: catalog) } })
-        Section {
-            if !music.editablePlaylists.isEmpty {
-                Menu {
-                    ForEach(music.editablePlaylists, id: \.id) { pl in
-                        Button(pl.name, systemImage: "music.note.list") { Task { await music.addToPlaylist(song, playlist: pl) } }
-                    }
-                } label: { Label("添加到播放列表", systemImage: "text.badge.plus") }
-            }
-            Button("下一首播放", systemImage: "text.insert") { Task { await music.enqueue(song, next: true, fromCatalog: catalog) } }
-            Button("加到队列末尾", systemImage: "text.append") { Task { await music.enqueue(song, next: false, fromCatalog: catalog) } }
-        }
         Section {
             // 当前页就是这张专辑 → 省略「前往专辑」；歌单里的歌 → 解析它的专辑后用相似专辑同一条换专辑路径打开
             if let album = song.albumTitle, !album.isEmpty, !(collection.map { if case .album = $0 { return true }; return false } ?? false) {
@@ -684,20 +671,10 @@ struct AlbumDetailView: View {
     /// t233u：「更多」菜单 = 首页长按同一结构（不含从首页隐藏）
     @ViewBuilder
     private func detailMenu(_ c: MusicCollection) -> some View {
-        MenuTopBar(canAdd: music.canAddToLibrary(c),
-                   liked: music.isLoved(c),
+        MenuTopBar(liked: music.isLoved(c),
                    shareURL: c.shareURL,
-                   add: { Task { await music.addToLibrary(c) } },
                    like: { Task { await music.toggleLove(c) } })
         Section {
-            if !music.editablePlaylists.isEmpty {
-                Menu {
-                    ForEach(music.editablePlaylists, id: \.id) { pl in
-                        Button(pl.name, systemImage: "music.note.list") { Task { await music.addToPlaylist(c, playlist: pl) } }
-                    }
-                } label: { Label("添加到播放列表", systemImage: "text.badge.plus") }
-            }
-            Button("播放", systemImage: "play.fill") { Task { await music.playCollection(c, shuffle: false) } }
             Button("随机播放", systemImage: "shuffle") { Task { await music.playCollection(c, shuffle: true) } }
         }
         if let url = c.artistURL {
@@ -706,10 +683,6 @@ struct AlbumDetailView: View {
                     Label { Text("前往艺人"); Text(c.artist) } icon: { Image(systemName: "music.microphone") }
                 }
             }
-        }
-        Section {
-            Button("下一首播放", systemImage: "text.insert") { Task { await music.enqueue(c, next: true) } }
-            Button("加到队列末尾", systemImage: "text.append") { Task { await music.enqueue(c, next: false) } }
         }
     }
 
@@ -961,21 +934,15 @@ struct StaggerReveal: AnimatableModifier {
     }
 }
 
-// MARK: - t237u 菜单顶栏（添加 / 喜欢 / 共享）
+// MARK: - 菜单顶栏（喜欢 / 共享）
 
-/// 原来的 ControlGroup 里是「if 添加 + let + 喜欢 + if ShareLink」：子项个数随条件变化，且混入 ShareLink。
-/// 系统把 ControlGroup 桥接成 UIMenu 横排时，混入 ShareLink / 可选项会让横排只渲染部分子项（真机上「喜欢」丢失）。
-/// 现在固定 3 个普通 Button（不可用的置灰而不是移除），共享改为普通按钮弹系统分享面板 → 横排稳定显示三项。
+/// 保持固定两个普通 Button，避免可选 ShareLink 影响原生横排菜单的桥接。
 struct MenuTopBar: View {
-    let canAdd: Bool
     let liked: Bool
     let shareURL: URL?
-    let add: () -> Void
     let like: () -> Void
     var body: some View {
         ControlGroup {
-            Button(action: add) { Label("添加", systemImage: "plus") }
-                .disabled(!canAdd)
             Button(action: like) { Label(liked ? "取消喜欢" : "喜欢", systemImage: liked ? "star.fill" : "star") }
             Button { if let shareURL { ShareSheet.present(shareURL) } } label: { Label("共享", systemImage: "square.and.arrow.up") }
                 .disabled(shareURL == nil)

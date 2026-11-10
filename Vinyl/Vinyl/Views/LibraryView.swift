@@ -511,25 +511,13 @@ struct LibraryView: View {
         }
     }
 
-    // t229u：长按菜单分层对齐 Apple Music Now Playing：顶栏三图标 → 歌单 / 播放 → 前往 → 队列 → 负向（从首页隐藏）
+    // 长按菜单：喜欢 / 共享 → 随机播放 → 前往艺人 → 从首页隐藏。
     @ViewBuilder
     private func collectionMenu(_ c: MusicCollection) -> some View {
-        MenuTopBar(canAdd: music.canAddToLibrary(c),
-                   liked: music.isLoved(c),
+        MenuTopBar(liked: music.isLoved(c),
                    shareURL: c.shareURL,
-                   add: { Task { await music.addToLibrary(c) } },
                    like: { Task { await music.toggleLove(c) } })
         Section {
-            if !music.editablePlaylists.isEmpty {
-                Menu {
-                    ForEach(music.editablePlaylists, id: \.id) { pl in
-                        Button(pl.name, systemImage: "music.note.list") { Task { await music.addToPlaylist(c, playlist: pl) } }
-                    }
-                } label: {
-                    Label("添加到播放列表", systemImage: "text.badge.plus")
-                }
-            }
-            Button("播放", systemImage: "play.fill") { Task { await music.playCollection(c, shuffle: false) } }
             Button("随机播放", systemImage: "shuffle") { Task { await music.playCollection(c, shuffle: true) } }
         }
         if let url = c.artistURL {
@@ -539,10 +527,6 @@ struct LibraryView: View {
                     Label { Text("前往艺人"); Text(c.artist) } icon: { Image(systemName: "music.microphone") }
                 }
             }
-        }
-        Section {
-            Button("下一首播放", systemImage: "text.insert") { Task { await music.enqueue(c, next: true) } }
-            Button("加到队列末尾", systemImage: "text.append") { Task { await music.enqueue(c, next: false) } }
         }
         Section {
             Button("从首页隐藏", systemImage: "eye.slash", role: .destructive) {
