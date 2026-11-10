@@ -1594,7 +1594,7 @@ struct TilePushAway: ViewModifier {
     static let factor: CGFloat = 0.8
     /// t329u: single switch for the push-OUT on open. false = tiles stay put on open (grid blur / dim only);
     /// the return on close is kept either way (tiles snap invisibly to the pushed state, then spring back).
-    static let pushOut = false
+    static let pushOut = true   // t333u: re-enabled
     static let open = Animation.spring(response: 0.36, dampingFraction: 0.88)
     static let close = Animation.spring(response: 0.38, dampingFraction: 0.9)
     static let fade = Animation.easeOut(duration: 0.38)
