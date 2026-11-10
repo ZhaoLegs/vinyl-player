@@ -106,11 +106,13 @@ struct AlbumDetailView: View {
     }
     /// t160u：歌词对象 = 本专辑里正在播放的那首，否则本专辑第一首
     /// t304u：本专辑没在播、但别处有歌在播 → 跟随正在播放的那首
+    /// t319u: the lyrics belong to the album on screen. Its playing track (ApplicationMusicPlayer's current entry,
+    /// matched by song / catalog ID) when this album is playing, otherwise its first playable track — never a
+    /// track from another album (Build 181's t304 fallback to `music.currentSong` showed the old song here).
     private var lyricsSong: Song? {
         guard let songs, !songs.isEmpty else { return nil }
-        if let s = songs.first(where: { music.isCurrent($0) }) { return s }
-        if music.hasCurrentTrack, let playing = music.currentSong { return playing }
-        return songs[0]
+        return LyricsTarget.index(count: songs.count, isCurrent: { music.isCurrent(songs[$0]) },
+                                  playable: { songs[$0].playParameters != nil }).map { songs[$0] }
     }
     private var favoriteOn: Bool { music.isFavorite(favoriteTarget.key) }
 
@@ -532,7 +534,7 @@ struct AlbumDetailView: View {
             // 苹果系统控件库：GlassButtonStyle（.buttonStyle(.glass)），
             // 形状 / 材质 / 按压高光 / 无障碍全部由系统渲染，工程内不自绘圆。
             GlassCircleButton(systemImage: "xmark",
-                              accessibilityText: "关闭", action: onClose)
+                              accessibilityText: "关闭", ink: theme.ink, action: onClose)
             // t276u: invisible twin of the 喜欢 button so the title stays centred between two equal sides
             // t278u: keeps the title centred against the wider capsule on the right (one extra 44pt half)
             if collection != nil {
@@ -575,7 +577,7 @@ struct AlbumDetailView: View {
                     Image(systemName: liked ? "star.fill" : "star")
                         .font(.system(size: DS.barButtonGlyph, weight: .medium))
                         .imageScale(.large)
-                        .foregroundStyle(DS.ink)
+                        .foregroundStyle(theme.ink)   // t320u
                         .frame(width: DS.barButtonSize, height: DS.barButtonSize)
                         .contentShape(Rectangle())
                 }
@@ -585,7 +587,7 @@ struct AlbumDetailView: View {
                     Image(systemName: "ellipsis")
                         .font(.system(size: DS.barButtonGlyph, weight: .medium))
                         .imageScale(.large)
-                        .foregroundStyle(DS.ink)
+                        .foregroundStyle(theme.ink)   // t320u
                         .frame(width: DS.barButtonSize, height: DS.barButtonSize)
                         .contentShape(Rectangle())
                 }
@@ -598,11 +600,11 @@ struct AlbumDetailView: View {
                 if let collection {
                     let liked = music.isLoved(collection)
                     GlassCircleButton(systemImage: liked ? "star.fill" : "star",
-                                      accessibilityText: liked ? "取消喜欢" : "喜欢") {
+                                      accessibilityText: liked ? "取消喜欢" : "喜欢", ink: theme.ink) {
                         Task { await music.toggleLove(collection) }
                     }
                 }
-                GlassCircleMenu(systemImage: "ellipsis", accessibilityText: "更多") {
+                GlassCircleMenu(systemImage: "ellipsis", accessibilityText: "更多", ink: theme.ink) {
                     if let collection { detailMenu(collection) }
                 }
                 .disabled(collection == nil)
@@ -1704,6 +1706,12 @@ struct LyricsPanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: timeline.position) { _, p in anchorPos = p; anchorDate = Date() }
         .onAppear { anchorPos = timeline.position; anchorDate = Date() }
+        // t319u: new track → old lyrics cleared at once, clock re-anchored; the .task below restarts (old one cancelled)
+        .onChange(of: song.id) { _, _ in
+            result = nil; loadedID = nil; loadFailed = false
+            anchorPos = timeline.position; anchorDate = Date()
+            boundaryTick &+= 1
+        }
         .task(id: "\(song.id.rawValue):\(retryID)") {
             let requestID = song.id
             loadFailed = false

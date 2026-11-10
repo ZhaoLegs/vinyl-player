@@ -321,4 +321,15 @@ final class LyricsCoreTests: XCTestCase {
         let n = await stub.requests.count
         XCTAssertEqual(n, 1 + LyricsHTTPClient.foregroundRetries + LyricsHTTPClient.rateLimitExtraRetries)
     }
+
+    // t319u: browsing album Z while album X plays → Z's lyrics (first playable), never X's track
+    func testLyricsTargetFollowsAlbumOnScreen() {
+        let playingID = "x3"
+        let z = ["z1", "z2", "z3"]
+        XCTAssertEqual(LyricsTarget.index(count: z.count, isCurrent: { z[$0] == playingID }, playable: { _ in true }), 0)
+        XCTAssertEqual(LyricsTarget.index(count: 3, isCurrent: { _ in false }, playable: { $0 >= 1 }), 1)
+        // once Z's second track becomes the current entry, the panel follows it
+        XCTAssertEqual(LyricsTarget.index(count: z.count, isCurrent: { z[$0] == "z2" }, playable: { _ in true }), 1)
+        XCTAssertNil(LyricsTarget.index(count: 0, isCurrent: { _ in true }, playable: { _ in true }))
+    }
 }

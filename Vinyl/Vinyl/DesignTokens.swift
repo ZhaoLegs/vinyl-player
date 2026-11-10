@@ -370,6 +370,8 @@ struct GlassCircleButton: View {
     /// 资产图标的边长；默认与原生 toolbar 的 cube 字形同宽（≈21pt）。
     var iconSize: CGFloat = 21
     var accessibilityText: String = ""
+    /// t320u: glyph colour (detail page passes its theme ink; home keeps DS.ink)
+    var ink: Color = DS.ink
     let action: () -> Void
 
     @ViewBuilder
@@ -399,11 +401,11 @@ struct GlassCircleButton: View {
             Button(action: action) { label }
                 .buttonStyle(.glass)              // ← 苹果系统控件库
                 .buttonBorderShape(.circle)       // ← 让系统把玻璃底裁成正圆
-                .tint(DS.ink)
+                .tint(ink)
                 .accessibilityLabel(a11y)
         } else {
             Button(action: action) {
-                label.foregroundStyle(DS.ink)
+                label.foregroundStyle(ink)
                     .padding(7)
                     .background(.ultraThinMaterial, in: Circle())
                     .overlay(Circle().strokeBorder(.white.opacity(0.65), lineWidth: 0.8))
@@ -418,6 +420,7 @@ struct GlassCircleButton: View {
 struct GlassCircleMenu<MenuContent: View>: View {
     let systemImage: String
     var accessibilityText: String = ""
+    var ink: Color = DS.ink   // t320u
     @ViewBuilder let content: () -> MenuContent
 
     private var label: some View {
@@ -432,13 +435,13 @@ struct GlassCircleMenu<MenuContent: View>: View {
     var body: some View {
         if #available(iOS 26.0, *) {
             // t272u: tint only the glyph; a .tint on the Menu itself leaks into the presented menu items
-            Menu { content().menuItemDefaults() } label: { label.foregroundStyle(DS.ink) }
+            Menu { content().menuItemDefaults() } label: { label.foregroundStyle(ink) }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
                 .accessibilityLabel(accessibilityText)
         } else {
             Menu { content().menuItemDefaults() } label: {
-                label.foregroundStyle(DS.ink)
+                label.foregroundStyle(ink)
                     .padding(7)
                     .background(.ultraThinMaterial, in: Circle())
                     .overlay(Circle().strokeBorder(.white.opacity(0.65), lineWidth: 0.8))

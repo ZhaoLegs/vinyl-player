@@ -5,6 +5,16 @@ import CryptoKit
 /// t308u: catalog tracks come back in the storefront's default language (e.g. "Khalil Fong") while the
 /// library header is localized ("方大同"). One display name per artist within an album:
 /// library song's artist > header name when the catalog artist is the catalog album artist > catalog artist.
+/// t319u: which track of the album on screen the lyrics panel shows — the playing one if it is on this album,
+/// else the first playable one, else the first. nil only for an empty album.
+enum LyricsTarget {
+    static func index(count: Int, isCurrent: (Int) -> Bool, playable: (Int) -> Bool) -> Int? {
+        guard count > 0 else { return nil }
+        if let i = (0..<count).first(where: isCurrent) { return i }
+        return (0..<count).first(where: playable) ?? 0
+    }
+}
+
 enum ArtistNames {
     /// catalog song ID → display artist (main actor only; written when a catalog tracklist is merged)
     static var overrides: [String: String] = [:]
