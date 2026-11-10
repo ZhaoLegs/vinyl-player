@@ -258,6 +258,8 @@ struct WaveformBar: View {
     /// shown when `labelPulse` changes (cover landed) and on a tap of the bar; stays (t317u)
     var nowPlayingLabel: String? = nil
     var labelPulse: Int = 0
+    /// t395u: artist part of the bubble, drawn one step smaller (12 → 11pt) after "<title> · "
+    var nowPlayingArtist: String? = nil
     /// t341u: tap on the now-playing bubble (detail page: back to the playing album); nil = bubble ignores touches
     var onLabelTap: (() -> Void)? = nil
     @State private var labelVisible = false
@@ -338,7 +340,8 @@ struct WaveformBar: View {
         // t306u: same bubble (font / padding / 24pt / BubbleGlass / position above the bar / 0.2s fade), centred
         .overlay(alignment: .topLeading) {
             if labelVisible, scrub == nil, let label = nowPlayingLabel {
-                Text(label)
+                Text(nowPlayingArtist.map { "\(label)\(Text(" · \($0)").font(.system(size: 11, weight: .medium, design: .monospaced)))" }
+                     ?? "\(label)")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundStyle(theme.ink)
                     .lineLimit(1)
@@ -618,7 +621,7 @@ struct MiniDiscRotation: ViewModifier {
 /// t189u：迷你播放条字号（标题 13 → 12，第二行 10.5 → 11.5）
 enum MiniText {
     static let title: CGFloat = 12
-    static let artist: CGFloat = 11.5
+    static let artist: CGFloat = 10.5   // t395u: 11.5 → 10.5 (one step down)
 }
 
 struct FloatingText: View {

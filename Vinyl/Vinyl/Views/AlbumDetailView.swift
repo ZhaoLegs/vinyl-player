@@ -1568,9 +1568,9 @@ private struct DetailWaveform: View {
                         },
                         seek: { f in if !idle { music.seek(to: f * music.duration) } },
                         duration: idle ? (first?.duration ?? 0) : music.duration,
-                        nowPlayingLabel: browsing ? (music.currentArtistDisplay.isEmpty ? music.currentTitle
-                            : "\(music.currentTitle) · \(music.currentArtistDisplay)") : nil,
+                        nowPlayingLabel: browsing ? music.currentTitle : nil,
                         labelPulse: browsing && landed ? 1 : 0,
+                        nowPlayingArtist: browsing && !music.currentArtistDisplay.isEmpty ? music.currentArtistDisplay : nil,
                         onLabelTap: browsing ? onReturnToPlaying : nil)
         } else {
             WaveformBar(progress: timeline.demoElapsed / AppleMusicStore.demoDuration,
