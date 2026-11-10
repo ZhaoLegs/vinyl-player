@@ -43,6 +43,7 @@ struct VinylApp: App {
                 .overlay(alignment: .top) { MusicErrorBanner() }
                 .environmentObject(music)
                 .environmentObject(music.timeline)
+                .environmentObject(music.sleep)
         }
     }
 }

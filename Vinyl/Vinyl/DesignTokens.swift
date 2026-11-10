@@ -41,6 +41,8 @@ enum DS {
     /// 系统导航栏玻璃圆钮：在 iOS 27 模拟器里用原生 ToolbarItem 实测直径 136px@3x（≈45.3pt，含玻璃描边），
     /// .glass 样式会在 label 外再加一圈内边距，label 取 30pt 时渲染直径与原生一致。
     static let barButtonLabel: CGFloat = 30
+    /// t276u: gap between paired glass circle buttons (system toolbar pair spacing)
+    static let barButtonPairGap: CGFloat = 8
     /// 原生 toolbar 图标 = 17pt 字号 + .large imageScale（实测与原生 cube 字形同宽同高）。
     static let barButtonGlyph: CGFloat = 17
 
@@ -651,5 +653,32 @@ extension View {
     /// clears any tint / foreground style inherited from the trigger or its ancestors.
     func menuItemDefaults() -> some View {
         self.tint(nil).foregroundStyle(.primary)
+    }
+}
+
+/// t275u: sleep-timer indicator: moon, plus m:ss remaining for the minute modes (monospaced digits).
+struct SleepBadge: View {
+    @EnvironmentObject private var sleep: SleepTimer
+    let color: Color
+    var size: CGFloat = 10.5
+
+    var body: some View {
+        if let mode = sleep.mode {
+            HStack(spacing: 3) {
+                Image(systemName: "moon.zzz.fill")
+                    .font(.system(size: size - 0.5, weight: .medium))
+                if case .minutes = mode, let d = sleep.deadline {
+                    TimelineView(.periodic(from: .now, by: 1)) { tl in
+                        Text(SleepTimer.remainingText(d.timeIntervalSince(tl.date)))
+                            .font(.system(size: size, design: .monospaced))
+                            .monospacedDigit()
+                    }
+                }
+            }
+            .foregroundStyle(color)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("睡眠定时")
+            .transition(.opacity)
+        }
     }
 }

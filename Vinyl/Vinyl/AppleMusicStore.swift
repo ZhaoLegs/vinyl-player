@@ -9,6 +9,27 @@ final class PlaybackTimeline: ObservableObject {
     @Published var demoElapsed: Double = 0.18 * AppleMusicStore.demoDuration
 }
 
+/// t275u: sleep timer. Published only when the mode is set / cleared (the countdown text uses its own TimelineView).
+@MainActor
+final class SleepTimer: ObservableObject {
+    enum Mode: Equatable { case album, minutes(Int) }
+    @Published private(set) var mode: Mode?
+    /// Wall-clock deadline for the minute modes (survives suspension; checked on every clock tick / foreground).
+    @Published private(set) var deadline: Date?
+    var isActive: Bool { mode != nil }
+
+    func set(_ m: Mode?) {
+        mode = m
+        if case .minutes(let n)? = m { deadline = Date().addingTimeInterval(Double(n) * 60) } else { deadline = nil }
+    }
+    func cancel() { set(nil) }
+
+    static func remainingText(_ s: TimeInterval) -> String {
+        let t = max(0, Int(s.rounded(.up)))
+        return String(format: "%d:%02d", t / 60, t % 60)
+    }
+}
+
 /// One player for the entire app. Authorization is requested only after a tap.
 @MainActor
 final class AppleMusicStore: ObservableObject {
@@ -42,6 +63,7 @@ final class AppleMusicStore: ObservableObject {
     /// 队列条目自身的 ID（有时与 Song ID 不同）
     @Published private(set) var currentCatalogID: MusicItemID?
     let timeline = PlaybackTimeline()
+    let sleep = SleepTimer()
     private(set) var position: TimeInterval {
         get { timeline.position }
         set { if timeline.position != newValue { timeline.position = newValue } }
@@ -488,6 +510,28 @@ final class AppleMusicStore: ObservableObject {
         } catch { report(error, action: "播放失败") }
     }
 
+    /// t275u: minute modes = wall-clock deadline (keeps counting across track / album changes);
+    /// album mode = stop when the last entry of the current queue finishes (switching album replaces the queue, so it follows).
+    /// ApplicationMusicPlayer exposes no volume control, so there is no fade: playback is paused at the end point.
+    private func checkSleepTimer() {
+        guard let mode = sleep.mode else { return }
+        switch mode {
+        case .minutes:
+            guard let d = sleep.deadline, Date() >= d else { return }
+            fireSleepTimer()
+        case .album:
+            guard let entry = player.queue.currentEntry, let last = player.queue.entries.last, entry.id == last.id,
+                  duration > 0 else { return }
+            if position >= duration - 0.6 { fireSleepTimer() }
+        }
+    }
+
+    private func fireSleepTimer() {
+        sleep.cancel()
+        if player.state.playbackStatus == .playing { player.pause() }
+        if isPlaying { isPlaying = false }
+    }
+
     func togglePlayback() async {
         guard authorized, hasCurrentTrack, !isPreparing else { return }
         if player.state.playbackStatus == .playing {
@@ -567,6 +611,7 @@ final class AppleMusicStore: ObservableObject {
         position = time.isFinite ? max(0, time) : 0
         let playing = player.state.playbackStatus == .playing
         if isPlaying != playing { isPlaying = playing }
+        checkSleepTimer()
     }
 
     /// The profiling timer supplies a fixed queue snapshot at the real player's 4 Hz cadence.

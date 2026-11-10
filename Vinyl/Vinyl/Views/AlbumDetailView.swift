@@ -14,6 +14,7 @@ struct SleeveFrameKey: PreferenceKey {
 struct AlbumDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var music: AppleMusicStore
+    @EnvironmentObject private var sleep: SleepTimer
     @Environment(\.openURL) private var openURL
     /// t230u：唱片角度 = 已累计角度 + 本段播放以来的角度（暂停时定格，不回 0°）
     @State private var spinBase: Double = 0
@@ -230,6 +231,13 @@ struct AlbumDetailView: View {
                 waveform
                     // t219u：时间条顶边（布局位置；滑入动画的 offset 在后面，不影响这里测得的值）
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TrackInset.space)).minY } action: { barTopY = $0 }
+                    // t275u: sleep timer indicator just above the time bar's trailing end
+                    .overlay(alignment: .topTrailing) {
+                        SleepBadge(color: theme.mid)
+                            .padding(.trailing, 14)
+                            .offset(y: -16)
+                            .allowsHitTesting(false)
+                    }
                     // 与首页 mini player 同宽（与系统 Tab bar 胶囊对齐）
                     .padding(.horizontal, DS.tabBarSideInset)
                     .padding(.bottom, 10)
@@ -515,6 +523,13 @@ struct AlbumDetailView: View {
             // 形状 / 材质 / 按压高光 / 无障碍全部由系统渲染，工程内不自绘圆。
             GlassCircleButton(systemImage: "xmark",
                               accessibilityText: "关闭", action: onClose)
+            // t276u: invisible twin of the 喜欢 button so the title stays centred between two equal sides
+            if collection != nil {
+                GlassCircleButton(systemImage: "heart", action: {})
+                    .hidden()
+                    .accessibilityHidden(true)
+                    .padding(.leading, DS.barButtonPairGap)
+            }
 
             // t129u：标题 / 艺人各限一行，超长在右侧以 … 截断；占满两按钮之间（两侧各留 10pt），绝不压到按钮
             VStack(spacing: 1) {
@@ -535,12 +550,32 @@ struct AlbumDetailView: View {
 
             // t238u：右上角只留「更多」——与左侧关闭钮同规格的系统玻璃圆钮（同 label / 同 glass 样式 → 同直径、同图标、同中线），
             // 点击弹原生 Menu；「喜欢」已并入菜单顶栏（MenuTopBar）
+            // t276u: 喜欢 + 更多 = paired native Liquid Glass circle buttons (same component / size as 关闭)
+            trailingButtons
+        }
+        .padding(.horizontal, DS.contentInset)
+    }
+
+    @ViewBuilder
+    private var trailingButtons: some View {
+        let pair = HStack(spacing: DS.barButtonPairGap) {
+            if let collection {
+                let liked = music.isLoved(collection)
+                GlassCircleButton(systemImage: liked ? "heart.fill" : "heart",
+                                  accessibilityText: liked ? "取消喜欢" : "喜欢") {
+                    Task { await music.toggleLove(collection) }
+                }
+            }
             GlassCircleMenu(systemImage: "ellipsis", accessibilityText: "更多") {
                 if let collection { detailMenu(collection) }
             }
             .disabled(collection == nil)
         }
-        .padding(.horizontal, DS.contentInset)
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: DS.barButtonPairGap) { pair }
+        } else {
+            pair
+        }
     }
 
     // MARK: - 曲目表
@@ -698,12 +733,31 @@ struct AlbumDetailView: View {
         Section {
             Button("随机播放", systemImage: "shuffle") { Task { await music.playCollection(c, shuffle: true) } }
         }
+        // t275u: 睡眠定时 submenu (native Menu; checkmark on the active option; 关闭 only while active)
+        Section {
+            Menu {
+                sleepOption("播完这张专辑", .album)
+                ForEach([15, 30, 45, 60], id: \.self) { n in sleepOption("\(n) 分钟", .minutes(n)) }
+                if sleep.isActive {
+                    Section { Button("关闭", systemImage: "xmark") { sleep.cancel() } }
+                }
+            } label: {
+                Label("睡眠定时", systemImage: "moon.zzz")
+            }
+        }
         if let url = c.artistURL {
             Section {
                 Button { openURL(url) } label: {
                     Label { Text("前往艺人"); Text(c.artist) } icon: { Image(systemName: "music.microphone") }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func sleepOption(_ title: String, _ mode: SleepTimer.Mode) -> some View {
+        Button { sleep.set(mode) } label: {
+            if sleep.mode == mode { Label(title, systemImage: "checkmark") } else { Text(title) }
         }
     }
 

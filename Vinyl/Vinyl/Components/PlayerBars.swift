@@ -187,6 +187,9 @@ struct MiniPlayer: View {
             }
 
             Spacer(minLength: 0)
+            // t275u: sleep timer indicator, just left of the play / next buttons
+            SleepBadge(color: DS.secondary)
+                .padding(.trailing, 6)
             // 给右侧「播放 + 下一首」两键留位（32 + 36 − 9pt 外伸 = 59pt），标题在此之前截断
             Color.clear.frame(width: 59, height: 1)
         }
