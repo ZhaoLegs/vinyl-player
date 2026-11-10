@@ -6,8 +6,16 @@ struct VinylApp: App {
     @Environment(\.scenePhase) private var scenePhase
     private var recordingDemo: Bool {
         ProcessInfo.processInfo.arguments.contains("--record-demo")
+            || ProcessInfo.processInfo.arguments.contains("--debug-mini-cycle")
     }
     init() {
+        if ProcessInfo.processInfo.arguments.contains("--debug-mini-cycle") {
+            setbuf(stdout, nil)
+            if ProcessInfo.processInfo.arguments.contains("--debug-mini-official"),
+               let image = UIImage(named: "cover_06") {
+                OfficialCoverStore.shared.seedMiniDiagnostic(image)
+            }
+        }
         // iOS 26 分支只设置 tintColor，绝不覆盖 UITabBarAppearance 的
         // backgroundEffect / backgroundColor —— 那会把系统原生 Liquid Glass
         // 降格成一层平涂模糊。系统 TabView 自己会渲染折射玻璃胶囊。

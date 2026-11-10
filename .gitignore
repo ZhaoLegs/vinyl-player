@@ -26,3 +26,6 @@ xcuserdata/
 *.key
 .env
 .env.*
+
+# Native mini-flight recordings and extracted frames (paths documented in RESULT.md)
+recordings/mini-flight/
