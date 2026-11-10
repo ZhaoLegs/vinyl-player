@@ -1406,7 +1406,7 @@ enum Lyrics {
     /// t269u: manual lyrics scrolling
     static let barSlide: Double = 0.35        // time bar out / back spring
     static let fling: Double = 0.6            // finger-up deceleration spring
-    static let manualIdle: Double = 2.5       // idle after the fling settles before auto-follow returns
+    static let barDirThreshold: CGFloat = 8   // t280u: finger travel before the bar hides / shows
     static let manualOpacity: Double = 0.75   // non-current lines while scrolling by hand
     /// t252u：换行上滚时，离当前行越远的行越晚起步（每步 28ms，最多 100ms）——瀑布式延迟，不是整块硬滚
     static let staggerStep: Double = 0.028
@@ -1520,7 +1520,9 @@ struct LyricsPanel: View {
     @State private var manual = false
     @State private var dragging = false
     @State private var dragBase: CGFloat = 0
-    @State private var returnTask: Task<Void, Never>?
+    /// t280u: bar visibility follows finger direction (up = hide, down = show), 8pt hysteresis
+    @State private var barHidden = false
+    @State private var dirRef: CGFloat = 0
     @State private var result: LyricsResult?
     @State private var loadedID: MusicItemID?
     @State private var loadFailed = false
@@ -1662,7 +1664,7 @@ struct LyricsPanel: View {
                         .animation(Lyrics.scroll.delay(Lyrics.staggerDelay(d)), value: followY)
                         .offset(y: manualY)
                         .contentShape(Rectangle())
-                        .onTapGesture { seek(to: line) }
+                        .onTapGesture { resumeFollow(); seek(to: line) }
                     }
                 }
                 .padding(.horizontal, DS.contentInset)
@@ -1675,19 +1677,15 @@ struct LyricsPanel: View {
             .contentShape(Rectangle())
             .gesture(manualDrag(lines))
             .modifier(TopProgressiveBlurMask(height: topExtend + LyricsTopFade.height))
-            .onDisappear { returnTask?.cancel(); if manual { onManual(false) } }
+            .onDisappear { if barHidden { barHidden = false; onManual(false) } }
             .task {
                 // diagnostic: --debug-lyrics-drag simulates a manual fling 7s after lyrics appear
                 guard ProcessInfo.processInfo.arguments.contains("--debug-lyrics-drag") else { return }
                 try? await Task.sleep(for: .seconds(7))
                 withAnimation(.easeOut(duration: 0.25)) { manual = true }
-                onManual(true)
+                barHidden = true; onManual(true)
                 withAnimation(.spring(duration: Lyrics.fling, bounce: 0)) { manualY = clampManual(-240, lines: lines) }
                 dragBase = manualY
-                try? await Task.sleep(for: .seconds(Lyrics.fling + Lyrics.manualIdle))
-                withAnimation(Lyrics.scroll) { manualY = 0; manual = false }
-                dragBase = 0
-                onManual(false)
             }
             .onAppear { viewportH = geo.size.height; snapFollow(current, lines: lines, animated: false) }
             .onChange(of: geo.size.height) { _, h in viewportH = h; snapFollow(current, lines: lines, animated: false) }
@@ -1706,41 +1704,50 @@ struct LyricsPanel: View {
             }
             .onChange(of: song.id) { _, _ in
                 followY = 0; lineHeights = [:]
-                manualY = 0; dragBase = 0
+                // t280u: a track change ends manual browsing (auto-follow resumes, bar returns)
+                manualY = 0; dragBase = 0; manual = false
+                if barHidden { barHidden = false; onManual(false) }
             }
         }
     }
 
-    /// t269u: finger drag scrolls lyrics freely; auto-follow resumes Lyrics.manualIdle s after the fling settles.
+    /// t269u/t280u: finger drag scrolls lyrics freely and stays where the user leaves it (no idle return).
+    /// Bar: finger moving up (content forward) slides it out, finger moving down brings it back (8pt hysteresis).
+    /// Auto-follow resumes only on: tapping a line (seek), a track change, or reopening the lyrics.
     private func manualDrag(_ lines: [LyricLine]) -> some Gesture {
         DragGesture(minimumDistance: 6)
             .onChanged { v in
+                let ty = v.translation.height
                 if !dragging {
                     dragging = true
-                    returnTask?.cancel()
                     dragBase = manualY
-                    if !manual {
-                        withAnimation(.easeOut(duration: 0.25)) { manual = true }
-                        onManual(true)
-                    }
+                    dirRef = ty
+                    if !manual { withAnimation(.easeOut(duration: 0.25)) { manual = true } }
+                }
+                if barHidden {
+                    dirRef = min(dirRef, ty)
+                    if ty - dirRef > Lyrics.barDirThreshold { barHidden = false; onManual(false); dirRef = ty }
+                } else {
+                    dirRef = max(dirRef, ty)
+                    if ty - dirRef < -Lyrics.barDirThreshold { barHidden = true; onManual(true); dirRef = ty }
                 }
                 var t = Transaction(); t.disablesAnimations = true
-                withTransaction(t) { manualY = clampManual(dragBase + v.translation.height, lines: lines) }
+                withTransaction(t) { manualY = clampManual(dragBase + ty, lines: lines) }
             }
             .onEnded { v in
                 dragging = false
                 let target = clampManual(dragBase + v.predictedEndTranslation.height, lines: lines)
                 withAnimation(.spring(duration: Lyrics.fling, bounce: 0)) { manualY = target }
                 dragBase = target
-                returnTask?.cancel()
-                returnTask = Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(Lyrics.fling + Lyrics.manualIdle))
-                    guard !Task.isCancelled, !dragging else { return }
-                    withAnimation(Lyrics.scroll) { manualY = 0; manual = false }
-                    dragBase = 0
-                    onManual(false)
-                }
             }
+    }
+
+    /// t280u: back to auto-follow (current line), lines blur again, bar shown.
+    private func resumeFollow() {
+        guard manual || barHidden || manualY != 0 else { return }
+        withAnimation(Lyrics.scroll) { manualY = 0; manual = false }
+        dragBase = 0
+        if barHidden { barHidden = false; onManual(false) }
     }
 
     private func clampManual(_ y: CGFloat, lines: [LyricLine]) -> CGFloat {

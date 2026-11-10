@@ -658,25 +658,17 @@ extension View {
     }
 }
 
-/// t275u: sleep-timer indicator: moon, plus m:ss remaining for the minute modes (monospaced digits).
+/// t275u/t281u: sleep-timer indicator: a small moon while a timer is active.
 struct SleepBadge: View {
     @EnvironmentObject private var sleep: SleepTimer
     let color: Color
     var size: CGFloat = 10.5
 
     var body: some View {
-        if let mode = sleep.mode {
-            HStack(spacing: 3) {
-                Image(systemName: "moon.zzz.fill")
-                    .font(.system(size: size - 0.5, weight: .medium))
-                if case .minutes = mode, let d = sleep.deadline {
-                    TimelineView(.periodic(from: .now, by: 1)) { tl in
-                        Text(SleepTimer.remainingText(d.timeIntervalSince(tl.date)))
-                            .font(.system(size: size, design: .monospaced))
-                            .monospacedDigit()
-                    }
-                }
-            }
+        // t281u: moon only, no countdown digits (and no per-second TimelineView)
+        if sleep.isActive {
+            Image(systemName: "moon.zzz.fill")
+                .font(.system(size: size - 0.5, weight: .medium))
             .foregroundStyle(color)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("睡眠定时")
