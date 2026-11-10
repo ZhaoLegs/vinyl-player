@@ -1463,7 +1463,8 @@ enum Lyrics {
     static let anchor = UnitPoint(x: 0.5, y: 1.0 / 3)   // 当前行滚到列表高度 1/3 处
     static let lineGap: CGFloat = 28      // t289u：24 → 28pt；t248u：16 → 24pt
     // t240u：Apple Music 风格
-    static let fontSize: CGFloat = 22     // t289u：19 → 22pt；t248u：16 → 19pt
+    /// t292u: 设置 › 歌词字号（小 19 / 标准 22 / 大 26pt）；t289u：19 → 22pt；t248u：16 → 19pt
+    static var fontSize: CGFloat { LyricsFontSize.current.points }
     static let activeScale: CGFloat = 1.12
     static let dimOpacity: Double = 0.42     // 非当前行（t243u：0.35 → 0.42，6–8 行可读）
     static let unsungOpacity: Double = 0.5   // 当前行未唱部分
@@ -1481,7 +1482,7 @@ enum Lyrics {
         min(staggerMax, Double(max(0, distance)) * staggerStep)
     }
     /// 未量到高度时的估算（19pt 粗体单行 ≈ 26，加一点行距）
-    static let estimatedLineH: CGFloat = 32   // t289u：22pt 粗体单行 ≈ 30
+    static var estimatedLineH: CGFloat { (32 * fontSize / 22).rounded() }   // t289u：22pt 粗体单行 ≈ 30
     /// 两侧平分放大余量：当前行居中放大后仍不出界，且换行位置与非当前行一致（不重排）
     static let scaleRoom: CGFloat = 44    // t248u：40 → 44。与字号无关：行宽 w = 内容宽 − 44，1.12w ≤ 内容宽 需 44 ≥ 0.107 × 内容宽（≈362pt → 39pt），22pt 仍不裁切
     /// t243u：非当前行模糊 1.5 / 2 / 2.5pt（最多 2.5）
@@ -1504,6 +1505,18 @@ enum Lyrics {
     static let bottomGap: CGFloat = 24     // t175u：最后一行底 → 时间条顶 = 24pt
 }
 
+/// t292u: lyrics font size setting (UserDefaults "lyricsFontSize")
+enum LyricsFontSize: Int, CaseIterable, Identifiable {
+    case small = 0, standard = 1, large = 2
+    static let key = "lyricsFontSize"
+    var id: Int { rawValue }
+    var points: CGFloat { [19, 22, 26][rawValue] }
+    var title: String { ["小", "标准", "大"][rawValue] }
+    static var current: LyricsFontSize {
+        (UserDefaults.standard.object(forKey: key) as? Int).flatMap(LyricsFontSize.init(rawValue:)) ?? .standard
+    }
+}
+
 /// 同步提供首帧缓存；后台数据仓库负责合并请求、磁盘缓存与失败重试。
 @MainActor
 final class LyricsStore {
@@ -1511,6 +1524,7 @@ final class LyricsStore {
     static let maxConcurrent = 3
     private var memory: [String: LyricsCacheEntry] = [:]
     private var upgradeObserver: NSObjectProtocol?
+    func clearMemory() { memory = [:] }
     /// t309u: a NetEase YRC answer that arrived after line-level lyrics replaces the in-memory entry
     private init() {
         upgradeObserver = NotificationCenter.default.addObserver(forName: LyricsRepository.upgraded, object: nil,

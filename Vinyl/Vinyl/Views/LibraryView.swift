@@ -16,6 +16,7 @@ struct LibraryView: View {
     @Environment(\.openURL) private var openURL
     @EnvironmentObject private var music: AppleMusicStore
     @State private var showingSearch = false
+    @State private var showingSettings = false
     /// t125u：转场状态放在共享模型里 —— Tab 里的实例画首页，ContentView 叠在 TabView 之上的实例画详情层
     @EnvironmentObject private var zm: LibraryZoomModel
     var overlayMode = false
@@ -336,6 +337,14 @@ struct LibraryView: View {
                     else { connectMusic() }
                 }
             }
+            // t292u：右上角 = 设置（同款玻璃圆按钮）
+            GlassCircleButton(systemImage: "gearshape", accessibilityText: "设置") { showingSettings = true }
+                .sheet(isPresented: $showingSettings) {
+                    SettingsSheet()
+                        .environmentObject(music)
+                        .environmentObject(music.sleep)
+                        .presentationDetents([.medium, .large])
+                }
         }
         // t217u：顶部居中显示软件名（CFBundleDisplayName，未设置则 "Vinyl"），与左右按钮垂直居中；
         // 详情打开 / 转场期间隐藏，不会透到详情页
@@ -370,6 +379,10 @@ struct LibraryView: View {
                 // safeAreaBar 会把 mini player 贴到底部安全区，并**自动把滚动边缘效果延伸到它**，
                 // 所以不需要再手写 LinearGradient mask。
                 .safeAreaBar(edge: .bottom, spacing: 0) {
+                    VStack(spacing: 10) {
+                    // t293u：未授权 / 无订阅时的 Apple Music 卡片
+                    AppleMusicCard()
+                        .padding(.horizontal, DS.tabBarSideInset)
                     // t158u：没有真实正在播放的曲目时不显示假的 mini player
                     if showMini {
                         MiniPlayer(open: openNowPlaying, suggestion: miniSuggestion,
@@ -380,6 +393,7 @@ struct LibraryView: View {
                             .padding(.horizontal, DS.tabBarSideInset)
                             .padding(.bottom, DS.miniPlayerBottomPadding)
                             .transition(.opacity)
+                    }
                     }
                 }
         } else {
@@ -395,6 +409,7 @@ struct LibraryView: View {
                             .init(color: .clear, location: 1)
                         ], startPoint: .top, endPoint: .bottom)
                     )
+                AppleMusicCard().padding(.horizontal, 16).padding(.bottom, 8)
                 if showMini {
                     MiniPlayer(open: openNowPlaying, suggestion: miniSuggestion,
                                hideDisc: presented && !zm.flyToTile,
@@ -1804,3 +1819,176 @@ struct LibrarySearchSheet: View {
 }
 
 @MainActor enum DebugOnce { static var opened = false; static var hitrate = false }
+
+// MARK: - t292u 设置
+
+/// 首页右上角齿轮打开的原生设置表单（NavigationStack + Form）。
+struct SettingsSheet: View {
+    @EnvironmentObject private var music: AppleMusicStore
+    @EnvironmentObject private var sleep: SleepTimer
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    @AppStorage(LyricsFontSize.key) private var fontSize = LyricsFontSize.standard.rawValue
+    @AppStorage(LyricsTiming.offsetKey) private var offset = 0
+    @State private var cacheBytes: Int?
+    @State private var confirmClear = false
+    @State private var showOffer = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("睡眠定时") {
+                    sleepRow("关闭", nil)
+                    sleepRow("播完这张专辑", .album)
+                    ForEach([15, 30, 45, 60], id: \.self) { n in sleepRow("\(n) 分钟", .minutes(n)) }
+                }
+                Section("歌词") {
+                    Picker("歌词字号", selection: $fontSize) {
+                        ForEach(LyricsFontSize.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    Stepper(value: Binding(get: { offset }, set: { offset = LyricsTiming.clampOffset($0) }),
+                            in: LyricsTiming.offsetRange, step: LyricsTiming.offsetStep) {
+                        LabeledContent("歌词偏移", value: LyricsTiming.offsetLabel(offset))
+                    }
+                    Button("清除歌词缓存", role: .destructive) { confirmClear = true }
+                        .badge(cacheBytes.map { Text(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)) })
+                        .confirmationDialog("清除歌词缓存？", isPresented: $confirmClear, titleVisibility: .visible) {
+                            Button("清除", role: .destructive) {
+                                Task {
+                                    await LyricsRepository.shared.clearCache()
+                                    LyricsStore.shared.clearMemory()
+                                    cacheBytes = await LyricsRepository.shared.cacheBytes()
+                                }
+                            }
+                        } message: { Text("已下载的歌词会在下次打开时重新获取。") }
+                }
+                Section("Apple Music") {
+                    LabeledContent("授权", value: authText)
+                    LabeledContent("订阅", value: subscriptionText)
+                    switch music.authorization {
+                    case .denied, .restricted:
+                        Button("打开设置") { if let u = URL(string: UIApplication.openSettingsURLString) { openURL(u) } }
+                    case .notDetermined:
+                        Button("授权 Apple Music") { Task { await music.connect() } }
+                    default:
+                        if music.subscriptionKnown && !music.canPlayCatalog {
+                            Button("订阅 Apple Music") { showOffer = true }
+                        }
+                    }
+                }
+                Section {
+                    LabeledContent("版本", value: Self.version)
+                }
+            }
+            .navigationTitle("设置")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+            }
+            .musicSubscriptionOffer(isPresented: $showOffer, options: .init(messageIdentifier: .playMusic))
+            .onChange(of: showOffer) { _, open in if !open { Task { await music.refreshAccess() } } }
+            .task { cacheBytes = await LyricsRepository.shared.cacheBytes() }
+        }
+    }
+
+    private func sleepRow(_ title: String, _ mode: SleepTimer.Mode?) -> some View {
+        Button { if let mode { sleep.set(mode) } else { sleep.cancel() } } label: {
+            HStack {
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                if sleep.mode == mode { Image(systemName: "checkmark").foregroundStyle(.tint) }
+            }
+        }
+    }
+
+    private var authText: String {
+        switch music.authorization {
+        case .authorized: return "已授权"
+        case .denied: return "已拒绝"
+        case .restricted: return "受限制"
+        default: return "未授权"
+        }
+    }
+    private var subscriptionText: String {
+        guard music.authorized else { return "—" }
+        guard music.subscriptionKnown else { return "暂时无法获取" }
+        return music.canPlayCatalog ? "可播放完整曲库" : "未订阅"
+    }
+    static var version: String {
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        return "\(v) (\(b))"
+    }
+}
+
+// MARK: - t293u 首页 Apple Music 卡片
+
+/// 仅在「未授权」或「已授权但无订阅」时出现。`--debug-music-card=unauthorized|nosubscription` 强制某一状态（截图用）。
+struct AppleMusicCard: View {
+    @EnvironmentObject private var music: AppleMusicStore
+    @Environment(\.openURL) private var openURL
+    @State private var showOffer = false
+    enum Kind { case unauthorized, noSubscription }
+
+    static let forced: Kind? = {
+        guard let a = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--debug-music-card=") }) else { return nil }
+        switch a.dropFirst("--debug-music-card=".count) {
+        case "unauthorized": return .unauthorized
+        case "nosubscription": return .noSubscription
+        default: return nil
+        }
+    }()
+    private var kind: Kind? {
+        if let f = Self.forced { return f }
+        if !music.authorized { return .unauthorized }
+        if music.subscriptionKnown && !music.canPlayCatalog { return .noSubscription }
+        return nil
+    }
+
+    var body: some View {
+        if let kind {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(kind == .unauthorized ? "连接 Apple Music" : "订阅 Apple Music")
+                        .font(.headline)
+                    Text(kind == .unauthorized ? "授权后可播放你的资料库" : "订阅后可播放完整曲库")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                button(kind)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .modifier(CardGlass())
+            .musicSubscriptionOffer(isPresented: $showOffer, options: .init(messageIdentifier: .playMusic))
+            .onChange(of: showOffer) { _, open in if !open { Task { await music.refreshAccess() } } }
+        }
+    }
+
+    @ViewBuilder
+    private func button(_ kind: Kind) -> some View {
+        let b = Button(kind == .unauthorized ? "授权" : "订阅") {
+            switch kind {
+            case .unauthorized:
+                if music.authorization == .denied || music.authorization == .restricted {
+                    if let u = URL(string: UIApplication.openSettingsURLString) { openURL(u) }
+                } else { Task { await music.connect() } }
+            case .noSubscription:
+                showOffer = true
+            }
+        }
+        if #available(iOS 26.0, *) { b.buttonStyle(.glass) } else { b.buttonStyle(.bordered) }
+    }
+}
+
+private struct CardGlass: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        } else {
+            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+    }
+}

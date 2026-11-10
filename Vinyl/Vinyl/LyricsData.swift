@@ -567,6 +567,18 @@ public actor LyricsRepository {
     /// t287u: memory → in-flight (a foreground caller never waits on a background flight; it starts its own) →
     /// disk (exact key, then ±1s neighbours) → network.
     public static let upgraded = Notification.Name("LyricsRepository.upgraded")
+    /// t292u: 设置 › 清除歌词缓存
+    public func cacheBytes() -> Int {
+        let fm = FileManager.default
+        guard let e = fm.enumerator(at: directory, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var total = 0
+        for case let url as URL in e { total += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0 }
+        return total
+    }
+    public func clearCache() {
+        memory = [:]
+        try? FileManager.default.removeItem(at: directory)
+    }
     private func storeUpgrade(_ key: String, _ entry: LyricsCacheEntry) { memory[key] = entry }
 
     func loadEntry(_ query: LyricsQuery, foreground: Bool = true) async throws -> LyricsCacheEntry {
