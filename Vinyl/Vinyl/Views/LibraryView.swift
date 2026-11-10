@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import CoreImage
 import MusicKit
 
 /// 上报被点击封面在 "library" 坐标空间中的 frame，作为 zoom 转场起点。
@@ -869,6 +870,7 @@ struct LibraryView: View {
 
     private func open() {
         guard !presented else { return }
+        GridBackdrop.shared.capture()   // t335u: grid as it looks now, before the push / blur / dim start
         presented = true
         closing = false
         autoplay = true
@@ -2191,5 +2193,64 @@ final class TrackPrefetch {
         guard let at = settleAt else { return }   // arrived before the settle: reported by settled()
         if Self.log { print("[t330u] settle → tracks \(Int(Date().timeIntervalSince(at) * 1000))ms (not prefetched)") }
         settleAt = nil; pendingPrefetched = nil
+    }
+}
+
+
+/// t335u: the detail page's background colour = a static snapshot of the home screen taken at open (before the
+/// tiles are pushed away), captured at 0.2× scale and pre-blurred once with Core Image, so nothing is re-blurred
+/// per frame. Shown under the detail content with a white wash for legibility.
+@MainActor
+final class GridBackdrop: ObservableObject {
+    static let shared = GridBackdrop()
+    static let blur: CGFloat = 40          // pt (8 px at the 0.2× capture scale)
+    static let wash: Double = 0.6          // white over the blurred covers
+    static let scale: CGFloat = 0.2
+    @Published private(set) var image: UIImage?
+    /// mean relative luminance of the washed backdrop (what the detail text actually sits on)
+    private(set) var pageLuminance: CGFloat = ThemeColor.pageLuminance
+    private let context = CIContext(options: [.cacheIntermediates: false])
+
+    func capture() {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene }).flatMap(\.windows).first(where: \.isKeyWindow) else { return }
+        let t0 = Date()
+        let format = UIGraphicsImageRendererFormat(); format.scale = Self.scale; format.opaque = true
+        let shot = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
+        }
+        guard let cg = shot.cgImage else { return }
+        let input = CIImage(cgImage: cg)
+        let blurred = input.clampedToExtent()
+            .applyingGaussianBlur(sigma: Double(Self.blur * Self.scale) / 2)
+            .cropped(to: input.extent)
+        if let out = context.createCGImage(blurred, from: input.extent) {
+            image = UIImage(cgImage: out, scale: Self.scale, orientation: .up)
+        }
+        var px = [UInt8](repeating: 0, count: 4)
+        let avg = input.applyingFilter("CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: input.extent)])
+        context.render(avg, toBitmap: &px, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+        let w = CGFloat(Self.wash)
+        func mix(_ v: UInt8) -> CGFloat { w + (1 - w) * CGFloat(v) / 255 }
+        pageLuminance = ThemeColor.RGB(r: mix(px[0]), g: mix(px[1]), b: mix(px[2])).luminance
+        if TrackPrefetch.log { print("[t335u] backdrop mean luminance \(String(format: "%.2f", pageLuminance))") }
+        if TrackPrefetch.log { print("[t335u] backdrop captured in \(Int(Date().timeIntervalSince(t0) * 1000))ms") }
+    }
+}
+
+struct DetailBackdrop: View {
+    @ObservedObject private var backdrop = GridBackdrop.shared
+    var body: some View {
+        Color(hex: 0xF4F0EE)        // neutral fallback (no snapshot yet)
+            .overlay {
+                if let image = backdrop.image {
+                    Image(uiImage: image).resizable().interpolation(.medium).scaledToFill()
+                }
+            }
+            .overlay { Color.white.opacity(GridBackdrop.wash) }
+            .clipped()
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
     }
 }

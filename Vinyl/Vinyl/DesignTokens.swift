@@ -293,30 +293,13 @@ private struct Blob {
     let color: Color
 }
 
+/// t336u: neutral warm-grey gradient only — the five self-drawn pastel spots are gone; any colour on screen
+/// now comes from the album covers (detail page: DetailBackdrop)
 struct AuroraBackground: View {
-    private let blobs: [Blob] = [
-        .init(x: 0.12, y: 0.08, radius: 120, opacity: 0.60, color: Color(hex: 0xFFC4D6)),
-        .init(x: 0.88, y: 0.16, radius: 160, opacity: 0.55, color: Color(hex: 0xC6E0FF)),
-        .init(x: 0.78, y: 0.56, radius: 180, opacity: 0.50, color: Color(hex: 0xFFE1B6)),
-        .init(x: 0.18, y: 0.78, radius: 200, opacity: 0.50, color: Color(hex: 0xCEF0DC)),
-        .init(x: 0.50, y: 1.00, radius: 170, opacity: 0.45, color: Color(hex: 0xE4D6FF))
-    ]
-
     var body: some View {
-        ZStack {
-            LinearGradient(colors: [Color(hex: 0xFAF8F6), Color(hex: 0xEDEAE7), Color(hex: 0xF4F0EE)],
-                           startPoint: .topLeading, endPoint: .bottomTrailing)
-            GeometryReader { geo in
-                ForEach(Array(blobs.enumerated()), id: \.offset) { _, b in
-                    RadialGradient(colors: [b.color.opacity(b.opacity), .clear],
-                                   center: .center, startRadius: 0, endRadius: b.radius)
-                        .frame(width: b.radius * 2, height: b.radius * 2)
-                        .position(x: geo.size.width * b.x, y: geo.size.height * b.y)
-                        .blur(radius: 34)
-                }
-            }
-        }
-        .ignoresSafeArea()
+        LinearGradient(colors: [Color(hex: 0xFAF8F6), Color(hex: 0xEDEAE7), Color(hex: 0xF4F0EE)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+            .ignoresSafeArea()
     }
 }
 

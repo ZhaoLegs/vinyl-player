@@ -132,7 +132,8 @@ struct AlbumDetailView: View {
         let _ = TracklistProfile.count("AlbumDetailView.body")
         let _ = GridScrollProfile.recordUpdate("AlbumDetailView")
         ZStack(alignment: .top) {
-            AuroraBackground()
+            // t335u: colour = the home grid's covers (static snapshot, heavily blurred + white wash), not a drawn tint
+            DetailBackdrop()
                 .opacity(closing ? 1 : contentAlpha)
                 .mask(WipeMask(progress: wipe).ignoresSafeArea())
             GeometryReader { geo in
@@ -345,7 +346,12 @@ struct AlbumDetailView: View {
         }
         ThemeColor.cache[key] = picked
         print("[t172u] theme \(title): \(picked.1) \(picked.0?.hex ?? "default black")")
-        let next = picked.0.map { DetailTheme.tinted(Color(red: $0.r, green: $0.g, blue: $0.b)) } ?? .standard
+        // t335u: the page is now the washed cover snapshot, so darken the ink further if that backdrop is darker
+        // than the 0.88 the theme was picked against (keeps ≥ 4.5:1 for the title / rows against its mean)
+        let next = picked.0.map { c -> DetailTheme in
+            let x = ThemeColor.readable(c, page: min(ThemeColor.pageLuminance, GridBackdrop.shared.pageLuminance))
+            return DetailTheme.tinted(Color(red: x.r, green: x.g, blue: x.b))
+        } ?? .standard
         if next != theme { theme = next }
     }
 
@@ -1420,9 +1426,9 @@ enum ThemeColor {
     }
 
     /// 压暗（保持色相）直到对比度达标
-    static func readable(_ c: RGB) -> RGB {
+    static func readable(_ c: RGB, page: CGFloat = pageLuminance) -> RGB {
         var x = c
-        for _ in 0..<40 where (pageLuminance + 0.05) / (x.luminance + 0.05) < minContrast {
+        for _ in 0..<40 where (page + 0.05) / (x.luminance + 0.05) < minContrast {
             x = RGB(r: x.r * 0.92, g: x.g * 0.92, b: x.b * 0.92)
         }
         return x
