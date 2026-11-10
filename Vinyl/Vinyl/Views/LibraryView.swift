@@ -1069,7 +1069,9 @@ struct LibraryView: View {
             guard selectedCollection?.id == c.id, collectionSongs?.count == shown.count else {
                 TrackPrefetch.shared.store(c, full); return
             }
-            collectionSongs = full
+            // t374u: swap with animations disabled → rows (new IDs) just replace in place, nothing re-animates
+            var quiet = Transaction(); quiet.disablesAnimations = true
+            withTransaction(quiet) { collectionSongs = full }
             TrackPrefetch.shared.store(c, full)
         }
     }
@@ -1165,24 +1167,59 @@ struct LibraryView: View {
     /// the opaque detail so that album's tile is on screen (centred) — only when its rest frame isn't visible already.
     /// The close flight then lands on it with the unchanged close animation. iOS 17: no scroll (old fallback).
     private func keepCurrentTileOnScreen() {
-        guard #available(iOS 18, *), presented, !closing, !zm.openFromMini, let key = targetKey else { return }
+        guard presented, !closing, !zm.openFromMini, let key = targetKey else { return }
         let rest = (zm.pushAnchor != nil ? zm.pushFrames[key] : nil) ?? cellFrames[key]
-        if let rest, tileVisible(rest) { return }
-        if GridScrollShift.log { print("[t366u] scroll grid to key \(key) (rest \(rest.map { "\($0.midY)" } ?? "nil"))") }
-        scrollRequest = nil
-        DispatchQueue.main.async { scrollRequest = key }
+        guard #available(iOS 18, *), !(rest.map(tileVisible) ?? false) else {
+            reanchorPush()   // t375u: tile already on screen → push around it now
+            return
+        }
+        // t374u: scroll after the row slide (≤ ~0.9s) so the grid relayout never shares frames with it
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            guard presented, !closing, targetKey == key else { return }
+            if GridScrollShift.log { print("[t366u] scroll grid to key \(key) (rest \(rest.map { "\($0.midY)" } ?? "nil"))") }
+            scrollRequest = nil
+            DispatchQueue.main.async { scrollRequest = key }
+            // t375u: once the scrolled-in tiles are laid out (their frames reported), push them around the new tile
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { reanchorPush() }
+        }
+    }
+
+    /// t375u: re-centre the push-away on the album now shown in the detail. Rest frames = the open-time snapshot
+    /// (shifted with any scroll since) for tiles that were pushed, the live frame for tiles laid out later (those were
+    /// never pushed → they sit at rest). The anchor becomes the current album's tile; every laid-out tile then takes
+    /// the pushed state for its new direction / distance (same rules as on open) with no animation, invisibly behind
+    /// the opaque detail — so on close ALL of them play the existing return, relative to the tile the cover lands on.
+    /// Returns true if anything changed.
+    @discardableResult
+    private func reanchorPush() -> Bool {
+        guard presented, !closing, !zm.openFromMini, zm.pushAnchor != nil, let key = targetKey else { return false }
+        var rest = cellFrames
+        for (k, f) in zm.pushFrames { rest[k] = f }
+        guard let anchor = rest[key] else { return false }
+        if anchor == zm.pushAnchor && rest.keys.allSatisfy({ zm.pushFrames[$0] != nil }) { return false }
+        if GridScrollShift.log { print("[t375u] re-anchor push on key \(key): \(rest.count) tiles (was \(zm.pushFrames.count))") }
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) {
+            zm.pushAnchor = anchor
+            zm.pushFrames = rest
+            zm.objectWillChange.send()   // anchor / frames aren't @Published → redraw TilePushAway once
+        }
+        return true
     }
 
     private func beginCloseFlight() {
         guard presented && !closing else { return }
         // t290u: tiles come back first; the un-pushed frames are the close-flight targets
         if zm.pushAnchor != nil {
+            // t375u: a page change not yet re-anchored (closed right after a swipe) → re-anchor now and start the
+            // return one frame later, exactly like the t329u snap path, so the new pushed state is committed first
+            let reanchored = reanchorPush()
             cellFrames = cellFrames.merging(zm.pushFrames) { _, unpushed in unpushed }
-            if !TilePushAway.pushOut {
+            if !TilePushAway.pushOut || reanchored {
                 // t329u: jump to the pushed-out state with no animation (the grid is still fully covered by the
                 // opaque detail backdrop at this instant, so nothing flashes), then play the return as before
                 var snap = Transaction(); snap.disablesAnimations = true
-                withTransaction(snap) { zm.pushAway = true; zm.pushOpacity = 0 }
+                withTransaction(snap) { if !zm.pushAway { zm.pushAway = true }; if zm.pushOpacity != 0 { zm.pushOpacity = 0 } }
                 // the pushed state must be committed (rendered once) before the return starts, else SwiftUI
                 // coalesces true → false into no change and nothing animates
                 DispatchQueue.main.async {

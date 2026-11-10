@@ -601,8 +601,11 @@ struct AlbumDetailView: View {
                 dragPeek = false
             }
             startReveal(delay: 0.08)   // t154u
-            // let the held rows render once before releasing them, so the row slide still plays (t328u / t337u)
-            DispatchQueue.main.async {
+            // t374u: hold the new album's rows hidden for a fixed beat before releasing them. One runloop hop (205/206)
+            // let the release land on the same frames as the row insertion, the theme crossfade (.animation(value:
+            // theme) at the root) and the settle work → rows sometimes appeared already shown / faded instead of
+            // sliding. The old two-step commit had ~0.38s here; 0.12s keeps the swap snappy and the slide intact.
+            DispatchQueue.main.asyncAfter(deadline: .now() + TrackRowRise.releaseDelay) {
                 swipeBusy = false
                 swipeSettle += 1
                 rowsHold = false; goLiveIfReady()
@@ -1376,6 +1379,8 @@ struct TrackRowRise: ViewModifier {
     static let stagger: Double = 0.035
     static let maxSteps = 8
     static let visibleRows = 12
+    /// t374u: s between the paging swap (new rows hidden) and their release
+    static let releaseDelay: Double = 0.12
 
     func body(content: Content) -> some View {
         let animates = index <= Self.visibleRows
