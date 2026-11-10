@@ -176,6 +176,16 @@ struct SleeveArtwork: View, Animatable {
         set { pull = newValue.first; flip = newValue.second }
     }
 
+    /// t360u: on-screen rect of the pulled-out sleeve (pull = 1, scale 0.85) in this view's own DS.sleeve × DS.sleeve
+    /// frame coordinates (frame centred on the page). 402pt page → x -27…233.1, y 22.95…283.05 (screen x 21…281.1).
+    static func pulledSleeveRect(pageWidth: CGFloat) -> CGRect {
+        let side = DS.sleeve * (1 - DS.pullScale)
+        let restLeft = (pageWidth - DS.sleeve) / 2
+        let pullX = restLeft + DS.sleeve * DS.pullScale / 2 - DS.contentInset
+        let inset = DS.sleeve * DS.pullScale / 2
+        return CGRect(x: inset - pullX, y: inset, width: side, height: side)
+    }
+
     private var discInset: CGFloat { (DS.sleeve - DS.disc) / 2 }
     private var sleeveRestLeft: CGFloat { (pageWidth - DS.sleeve) / 2 }
     /// 抽出时封套左移量：缩放后的封套左缘正好落在 contentInset
