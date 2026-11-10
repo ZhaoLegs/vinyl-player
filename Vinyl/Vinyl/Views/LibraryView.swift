@@ -552,6 +552,7 @@ struct LibraryView: View {
         // 转场期间源格子隐藏：屏幕上始终只有一个封面
         .modifier(TileReveal(progress: zoom, isTarget: presented && zm.flyToTile && selectedCollection?.id == collection.id,
                              closing: closing))
+        .modifier(TilePushAway(zm: zm, key: key))
         .accessibilityLabel("\(collection.title)，\(collection.artist)")
         .onAppear {
             let side = max(1, (gridFrame.width - 2 * DS.contentInset - 3 * 18) / 4)
@@ -736,6 +737,7 @@ struct LibraryView: View {
         .buttonStyle(.plain)
         .modifier(TileReveal(progress: zoom, isTarget: presented && zm.flyToTile && selectedCollection == nil && selectedIndex == index,
                              closing: closing))
+        .modifier(TilePushAway(zm: zm, key: index))
     }
 
 
@@ -857,6 +859,13 @@ struct LibraryView: View {
         withTransaction(noAnim) { wipe = 0 }
         // t149u：按本次格子 → 封套的距离决定弹簧时长（封面、网格缩放、模糊、抽唱片延迟共用）
         Motion.setFlight(start: flightStart, end: flightEnd)
+        // t290u: Cove.X push-away of the other tiles (not when opening from the mini player / reduce motion)
+        if !zm.openFromMini && !reduceMotion {
+            zm.pushAnchor = origin
+            zm.pushFrames = cellFrames
+            withAnimation(TilePushAway.open) { zm.pushAway = true }
+            withAnimation(TilePushAway.fade) { zm.pushOpacity = 0 }
+        } else { zm.pushAnchor = nil }
         if DetailReveal.log { print("[t251u] zoom start t=\(Date().timeIntervalSince1970) fluidOpen=\(Motion.fluidOpen)") }
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Motion.animation(Motion.open),
                       completionCriteria: zm.openFromMini ? .removed : .logicallyComplete) {
@@ -1050,6 +1059,12 @@ struct LibraryView: View {
 
     private func beginCloseFlight() {
         guard presented && !closing else { return }
+        // t290u: tiles come back first; the un-pushed frames are the close-flight targets
+        if zm.pushAnchor != nil {
+            cellFrames = cellFrames.merging(zm.pushFrames) { _, unpushed in unpushed }
+            withAnimation(TilePushAway.close) { zm.pushAway = false }
+            withAnimation(TilePushAway.fade) { zm.pushOpacity = 1 }
+        }
         // t131u：飞回「当前显示的那张专辑」的格子（实时 frame）
         // t222u：从 mini player 打开 → 飞回 mini 唱片；从格子打开 → 当前专辑格子在屏幕上可见就飞回它，否则飞回 mini 唱片
         let tile: CGRect? = zm.openFromMini ? nil : targetKey.flatMap { cellFrames[$0] }.flatMap { tileVisible($0) ? $0 : nil }
@@ -1493,6 +1508,37 @@ struct ArtworkHandoff: AnimatableModifier {
 
 /// t121u：关闭时目标格子在缩小的后 35% 就显示在飞行封面下方（飞行封面四边收拢到它身上再淡出），
 /// 打开 / 详情期间隐藏，保证屏幕上不会同时出现两个不同尺寸的同一封面。
+/// t290u: Cove.X push-away (Cove.X Sources/CoveXKit/Views/MainWindowView.swift, read-only reference):
+/// - offset = unit vector (tapped tile centre → this tile centre) × max(viewport w, h) × 0.8, no scale
+///   (feedRadialScatterOffset 8226–8249; collapsedScatterScale: 1 at 5040 / 5175 / 7440)
+/// - open: spring(response: 0.36, dampingFraction: 0.88) (10094 / 10117), opacity → 0 easeOut 0.38 right after (7905–7911)
+/// - close: spring(response: 0.38, dampingFraction: 0.9) (12772), opacity → 1 easeOut 0.38 (12775)
+/// The tapped tile is never moved (it is hidden by TileReveal while the cover flies).
+struct TilePushAway: ViewModifier {
+    @ObservedObject var zm: LibraryZoomModel
+    let key: Int
+    static let factor: CGFloat = 0.8
+    static let open = Animation.spring(response: 0.36, dampingFraction: 0.88)
+    static let close = Animation.spring(response: 0.38, dampingFraction: 0.9)
+    static let fade = Animation.easeOut(duration: 0.38)
+
+    private var offset: CGSize {
+        // frames snapshotted at open: the live preference frames include this offset (would feed back)
+        guard zm.pushAway, let anchor = zm.pushAnchor, let me = zm.pushFrames[key] else { return .zero }
+        let dx = me.midX - anchor.midX, dy = me.midY - anchor.midY
+        if abs(dx) < 0.5 && abs(dy) < 0.5 { return .zero }          // the tapped tile itself
+        let d = max(sqrt(dx * dx + dy * dy), 1)
+        let screen = UIScreen.main.bounds.size
+        let push = max(screen.width, screen.height) * Self.factor
+        return CGSize(width: dx / d * push, height: dy / d * push)
+    }
+    func body(content: Content) -> some View {
+        content
+            .offset(offset)
+            .opacity(zm.pushAnchor == nil ? 1 : zm.pushOpacity)
+    }
+}
+
 struct TileReveal: AnimatableModifier {
     var progress: CGFloat
     let isTarget: Bool
@@ -1545,6 +1591,11 @@ final class LibraryZoomModel: ObservableObject {
     @Published var origin: CGRect = .zero
     @Published var sleeveFrame: CGRect = .zero
     @Published var selectedIndex: Int = AlbumData.featuredIndex
+    /// t290u: push-away state (TilePushAway); anchor = the tapped tile's global frame (nil = opened from mini)
+    @Published var pushAway = false
+    @Published var pushOpacity: Double = 1
+    var pushAnchor: CGRect?
+    var pushFrames: [Int: CGRect] = [:]
     @Published var pull: CGFloat = 0
     @Published var flip: Double = 0
     /// t187u：网格整体缩小量 0…1（打开 → 1，关闭 → 0）

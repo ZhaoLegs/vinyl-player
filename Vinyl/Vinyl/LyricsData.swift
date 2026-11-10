@@ -566,6 +566,9 @@ public actor LyricsRepository {
 
     /// t287u: memory → in-flight (a foreground caller never waits on a background flight; it starts its own) →
     /// disk (exact key, then ±1s neighbours) → network.
+    public static let upgraded = Notification.Name("LyricsRepository.upgraded")
+    private func storeUpgrade(_ key: String, _ entry: LyricsCacheEntry) { memory[key] = entry }
+
     func loadEntry(_ query: LyricsQuery, foreground: Bool = true) async throws -> LyricsCacheEntry {
         let keys = query.cacheKeys, key = keys[0]
         for k in keys { if let entry = memory[k], entry.valid(at: now()) { LyricsTrace.log("repo memory hit \(query.title)"); return entry } }
@@ -588,7 +591,19 @@ public actor LyricsRepository {
             }
             LyricsTrace.log("repo fetch start \(foreground ? "FG" : "bg") \(query.title)")
             let t = CFAbsoluteTimeGetCurrent()
-            let value = try await Self.fetch(query, client: client, foreground: foreground)
+            // t309u: when line-level lyrics win the race, a later NetEase YRC answer upgrades the cache
+            // (memory + disk + LyricsStore via notification); it is used the next time the panel loads
+            let file0 = files[0]
+            let value = try await Self.fetch(query, client: client, foreground: foreground, upgrade: { better in
+                let entry = LyricsCacheEntry(version: 3, savedAt: now(), value: better)
+                try? JSONEncoder().encode(entry).write(to: file0, options: .atomic)
+                await self.storeUpgrade(key, entry)
+                LyricsTrace.log("repo upgrade \(query.title) → \(better.source)")
+                let info: [String: Any?] = ["title": query.title, "artist": query.artist, "duration": query.duration ?? -1,
+                                            "entry": try? JSONEncoder().encode(entry)]
+                NotificationCenter.default.post(name: LyricsRepository.upgraded, object: nil,
+                                                userInfo: info.compactMapValues { $0 })
+            })
             LyricsTrace.log("repo fetch done \(query.title) via \(value.source) in \(LyricsTrace.ms(since: t))ms")
             let entry = LyricsCacheEntry(version: 3, savedAt: now(), value: value)
             do {
@@ -747,7 +762,21 @@ public actor LyricsRepository {
     /// NetEase answer waits `preferenceGrace` for LRCLIB to keep the old preference order; otherwise synced beats plain.
     static let preferenceGrace: Double = 0.3
     private enum Leg: Sendable { case lrclib, netease }
-    private static func fetch(_ query: LyricsQuery, client: LyricsHTTPClient, foreground: Bool) async throws -> LyricsFetch {
+    private static func fetch(_ query: LyricsQuery, client: LyricsHTTPClient, foreground: Bool,
+                              upgrade: (@Sendable (LyricsFetch) async -> Void)? = nil) async throws -> LyricsFetch {
+        // NetEase runs as its own task so it can outlive the race (YRC upgrade); the group only awaits it
+        let netease: Task<LyricsFetch?, Error>? = (!LyricsTrace.legacy || query.isChinese)
+            ? Task { try await fetchChineseBackup(query, client: client, foreground: foreground) } : nil
+        let result = try await race(query, client: client, foreground: foreground, netease: netease)
+        if let netease, let upgrade, !isYRC(result) {
+            Task.detached(priority: .utility) {
+                if let n = try? await netease.value, isYRC(n) { await upgrade(n) }
+            }
+        }
+        return result
+    }
+    private static func race(_ query: LyricsQuery, client: LyricsHTTPClient, foreground: Bool,
+                             netease: Task<LyricsFetch?, Error>?) async throws -> LyricsFetch {
         try await withThrowingTaskGroup(of: (Leg, Result<LyricsFetch?, Error>)?.self) { group in
             group.addTask {
                 do { return (.lrclib, .success(try await fetchLRCLIB(query, client: client, foreground: foreground))) }
@@ -756,10 +785,10 @@ public actor LyricsRepository {
             var pending = 1
             // t295u: NetEase for every query, not only CJK titles — English-titled Mandopop
             // ("I Do" / Jay Chou) only had LRCLIB's plain text before
-            if !LyricsTrace.legacy || query.isChinese {
+            if let netease {
                 pending += 1
                 group.addTask {
-                    do { return (.netease, .success(try await fetchChineseBackup(query, client: client, foreground: foreground))) }
+                    do { return (.netease, .success(try await netease.value)) }
                     catch { return (.netease, .failure(error)) }
                 }
             }

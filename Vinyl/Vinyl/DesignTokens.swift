@@ -143,10 +143,20 @@ enum Motion {
     static var fluidClose: Double = 0.36
     /// t149u：时长随「位移 + 0.5·尺寸差」的平方根增长（感知等速）：
     /// open = clamp(0.195 + 0.0093·√c, 0.30, 0.42)，close = 0.85·open；c = hypot(dx, dy) + 0.5·|Δsize|（pt）
+    static let farOpen: Double = 0.30
+    static let legacyDurations = ProcessInfo.processInfo.arguments.contains("--zoom-legacy-durations")
+    enum FlightLog { static let on = ProcessInfo.processInfo.arguments.contains("--log-flight") }
     static func flightDurations(start: CGRect, end: CGRect) -> (open: Double, close: Double) {
         let c = Double(hypot(start.midX - end.midX, start.midY - end.midY) + 0.5 * abs(end.width - start.width))
         // t177u：近处更快、远处不变：顶行 ≈ 0.27s（原 0.34），底行仍 ≈ 0.42s；区间 0.24–0.42s
-        let o = min(0.42, max(0.24, 0.27 + 0.0178 * (c.squareRoot() - 15.6)))
+        // t294u: far tiles ~29% shorter (bottom row 0.42 → 0.30s); near tiles unchanged (top row ≈ 0.27s, floor 0.24s):
+        // same √c shape, slope 0.0178 → 0.00357, cap 0.42 → 0.30. `--zoom-legacy-durations` = the t177u curve.
+        if legacyDurations {
+            let o = min(0.42, max(0.24, 0.27 + 0.0178 * (c.squareRoot() - 15.6)))
+            return (o, o * 0.85)
+        }
+        let o = min(farOpen, max(0.24, 0.27 + 0.00357 * (c.squareRoot() - 15.6)))
+        if FlightLog.on { print("[t294u] flight c=\(Int(c))pt open \(String(format: "%.3f", o))s close \(String(format: "%.3f", o * 0.85))s") }
         return (o, o * 0.85)
     }
     static func setFlight(start: CGRect, end: CGRect) {

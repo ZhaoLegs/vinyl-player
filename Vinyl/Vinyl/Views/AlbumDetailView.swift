@@ -1510,6 +1510,20 @@ final class LyricsStore {
     static let shared = LyricsStore()
     static let maxConcurrent = 3
     private var memory: [String: LyricsCacheEntry] = [:]
+    private var upgradeObserver: NSObjectProtocol?
+    /// t309u: a NetEase YRC answer that arrived after line-level lyrics replaces the in-memory entry
+    private init() {
+        upgradeObserver = NotificationCenter.default.addObserver(forName: LyricsRepository.upgraded, object: nil,
+                                                                 queue: .main) { note in
+            guard let info = note.userInfo, let title = info["title"] as? String, let artist = info["artist"] as? String,
+                  let data = info["entry"] as? Data,
+                  let entry = try? JSONDecoder().decode(LyricsCacheEntry.self, from: data) else { return }
+            let d = info["duration"] as? Double
+            MainActor.assumeIsolated {
+                LyricsStore.shared.memory[LyricsStore.shared.keys(title, artist, duration: d.flatMap { $0 > 0 ? $0 : nil })[0]] = entry
+            }
+        }
+    }
     /// 统计（用于日志）
     private(set) var stats = (requested: 0, cached: 0, fetched: 0, found: 0, notFound: 0, failed: 0)
 
