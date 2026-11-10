@@ -1130,7 +1130,7 @@ struct EqualizerGlyph: View {
                 ForEach(0..<3, id: \.self) { i in
                     let speed = [5.1, 6.7, 4.3][i], phase = [0.0, 1.7, 3.1][i]
                     let live = 0.25 + 0.75 * (0.5 + 0.5 * sin(t * speed + phase))
-                    RoundedRectangle(cornerRadius: height * 0.09)
+                    Rectangle()
                         .fill(color)
                         .frame(width: height * 0.2, height: height * (playing ? CGFloat(live) : rest[i]))
                 }
