@@ -2115,12 +2115,14 @@ struct LibrarySearchSheet: View {
 // MARK: - t292u 设置
 
 /// 首页右上角齿轮打开的原生设置表单（NavigationStack + Form）。
-/// 保留：音乐授权、音频（空间音频 / 音频质量 / 交叉淡入淡出）、打赏、版本号。
+/// 保留：音乐授权、音频、打赏、写评价、联系我们、版本号。
 struct SettingsSheet: View {
     @EnvironmentObject private var music: AppleMusicStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(\.requestReview) private var requestReview
     @State private var tipError: String?
+    private static let contactEmail = "bytaosu@gmail.com"
 
     var body: some View {
         NavigationStack {
@@ -2159,6 +2161,15 @@ struct SettingsSheet: View {
                         Button("\(option.yuan) 元") {
                             Task { tipError = await option.purchase() }
                         }
+                    }
+                }
+                Section {
+                    Button("写评价") { requestReview() }
+                    Button("联系我们") {
+                        var components = URLComponents()
+                        components.scheme = "mailto"
+                        components.path = Self.contactEmail
+                        if let u = components.url { openURL(u) }
                     }
                 }
                 Section {
