@@ -792,6 +792,7 @@ struct LibraryView: View {
             miniOwner: zm.openFromMini && !reduceMotion ? zm.miniOwner : nil,
             miniArtwork: zm.openFromMini ? zm.miniArtwork : nil,
             lyricsMode: lyricsMode,
+            holdSleeveScale: zm.mergeHold,
             wipe: wipe,
             keepsSpinning: !recordingRequested,
             motionStart: motionStart,
@@ -887,6 +888,7 @@ struct LibraryView: View {
         pull = 0
         flip = 0
         lyricsMode = false
+        zm.mergeHold = false   // t356u
         motionStart = Date()
         // t187u：原片打开 = 整个网格同步缩到 0.95（f5→f9，≈0.13s，无逐格错峰），模糊在缩小之后才开始
         // t210u：打开时网格不再整体缩小、不再发涟漪
@@ -1002,6 +1004,7 @@ struct LibraryView: View {
             pull = 0
             flip = 0
             lyricsMode = false
+            zm.mergeHold = false   // t356u
             targetKey = key
             if key >= 1000 {
                 let c = music.collections[key - 1000]
@@ -1067,6 +1070,7 @@ struct LibraryView: View {
             pull = 0
             flip = 0
             lyricsMode = false
+            zm.mergeHold = false   // t356u
             let i = music.collections.firstIndex { $0.id == c.id }
             if let i {
                 targetKey = 1000 + i
@@ -1217,6 +1221,7 @@ struct LibraryView: View {
                 pull = 0
                 flip = 0
                 lyricsMode = false
+                zm.mergeHold = false   // t356u
                 zm.openFromMini = false
                 zm.flyToTile = true
             }
@@ -1257,6 +1262,8 @@ struct LibraryView: View {
                 LyricsTrace.mark("lyrics toggle (fade-in delay \(Lyrics.fadeInDelay)s + \(Lyrics.fadeIn)s)")
                 lyricsMode = true
                 if pull > 0.01 {
+                    var hold = Transaction(); hold.disablesAnimations = true
+                    withTransaction(hold) { zm.mergeHold = true }   // t356u
                     withAnimation(merge) { pull = 0 }
                     if animate { try? await Task.sleep(for: .seconds(Lyrics.merge)) }
                 }
@@ -1270,6 +1277,9 @@ struct LibraryView: View {
                 guard presented && !closing else { return }
                 withAnimation(merge) { pull = 1 }
                 if animate { try? await Task.sleep(for: .seconds(Lyrics.merge)) }
+                // t356u: at pull = 1 both scale formulas give 0.85, so dropping the hold is seamless
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { zm.mergeHold = false }
             }
         }
     }
@@ -1783,6 +1793,8 @@ final class LibraryZoomModel: ObservableObject {
     @Published var waveAmp: Double = 0.10
     /// t160u：封面翻到背面 = 歌词模式
     @Published var lyricsMode: Bool = false
+    /// t356u: sleeve keeps its pulled-out scale through the lyrics merge → flip → back
+    @Published var mergeHold = false
     @Published var demoToken: Int = 0
     @Published var motionStart: Date = .distantPast
     @Published var recordingStarted: Bool = false

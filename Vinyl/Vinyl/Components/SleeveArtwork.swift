@@ -169,6 +169,8 @@ struct SleeveArtwork: View, Animatable {
     let spin: Angle
     /// 页面宽度：用来让「抽出状态的封套 + 露出的唱片」整体落在左右 DS.contentInset 之内
     var pageWidth: CGFloat = 402
+    /// t356u: lyrics merge / flip keeps the sleeve at its pulled-out size (0.85) instead of growing back to 1.0
+    var holdPulledScale = false
     var animatableData: AnimatablePair<CGFloat, Double> {
         get { AnimatablePair(pull, flip) }
         set { pull = newValue.first; flip = newValue.second }
@@ -198,7 +200,7 @@ struct SleeveArtwork: View, Animatable {
                 // t186u：翻过 90° 后背面 = 完整封面（无孔、无唱片）；翻回正面时恢复挖孔 + 唱片
                 SleeveCutout(coverName: coverName, artwork: artwork, official: official, snapshot: snapshot, solid: flip > 90).equatable()
             }
-            .scaleEffect(1 - DS.pullScale * pull, anchor: .center)   // 以中心缩放，封套中线不动 → 唱片始终上下居中
+            .scaleEffect(holdPulledScale ? 1 - DS.pullScale : 1 - DS.pullScale * pull, anchor: .center)   // 以中心缩放，封套中线不动 → 唱片始终上下居中
             .offset(x: -sleevePullX * pull)
         }
         .frame(width: DS.sleeve, height: DS.sleeve, alignment: .topLeading)

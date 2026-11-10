@@ -39,6 +39,8 @@ struct AlbumDetailView: View {
     var miniArtwork: MiniArtworkSnapshot? = nil
     /// t160u：点封面翻面后 = 歌词模式（曲目表淡出、歌词淡入）
     var lyricsMode: Bool = false
+    /// t356u: see SleeveArtwork.holdPulledScale
+    var holdSleeveScale: Bool = false
     /// 关闭时背景擦除进度（0 → 1，自上而下变透明）
     var wipe: CGFloat = 0
     /// 正常使用时唱片抽出后一直转（正在播放）；录屏演示按原片在 3.067s 停转。
@@ -190,7 +192,8 @@ struct AlbumDetailView: View {
                     let spin = Angle.degrees(reduceMotion ? 0 : spinAngle(at: timeline.date))
                     SleeveArtwork(coverName: coverName, artwork: collection?.artwork, official: collection?.officialQuery,
                                   snapshot: miniArtwork,
-                                  pull: pull, flip: flip, spin: spin, pageWidth: pageWidth)
+                                  pull: pull, flip: flip, spin: spin, pageWidth: pageWidth,
+                                  holdPulledScale: holdSleeveScale)
                         .frame(width: DS.sleeve, height: DS.sleeve)
                         .contentShape(Rectangle())
                         .onTapGesture { coverTapped(user: true) }
