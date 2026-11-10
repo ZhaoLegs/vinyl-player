@@ -664,17 +664,17 @@ struct AlbumDetailView: View {
                 guard live("nudge") else { return }
                 withAnimation(.easeOut(duration: 0.15)) { hintPeek = true }
                 if next {
-                    withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) { swipeX = -swing }
-                    try? await Task.sleep(for: .seconds(0.55 + SwipeHint.hold))
+                    withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.86)) { swipeX = -swing }
+                    try? await Task.sleep(for: .seconds(SwipeHint.spring + SwipeHint.hold))
                     guard live("swing right") else { hintPeek = false; return }
                 }
                 if prev {
-                    withAnimation(.spring(response: 0.7, dampingFraction: 0.86)) { swipeX = swing }
-                    try? await Task.sleep(for: .seconds(0.7 + SwipeHint.hold))
+                    withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.86)) { swipeX = swing }
+                    try? await Task.sleep(for: .seconds(SwipeHint.spring + SwipeHint.hold))
                     guard live("centre") else { hintPeek = false; return }
                 }
-                withAnimation(.spring(response: 0.55, dampingFraction: 0.9)) { swipeX = 0 }
-                try? await Task.sleep(for: .seconds(0.55))
+                withAnimation(.spring(response: SwipeHint.spring, dampingFraction: 0.9)) { swipeX = 0 }
+                try? await Task.sleep(for: .seconds(SwipeHint.spring))
                 withAnimation(.easeOut(duration: 0.15)) { hintPeek = false }
                 try? await Task.sleep(for: .seconds(SwipeHint.gap))
             }
@@ -2428,8 +2428,9 @@ enum SwipeHint {
     /// t354u: v2 keys — values written while testing 196 are ignored
     static let countKey = "detailHintOpens.v2"
     static let learnedKey = "detailHintLearned.v2"
-    static let swing: CGFloat = 0.4    // t354u: pager swings 40% of the page width each way
-    static let hold: Double = 0.25     // s held at each side
+    static let swing: CGFloat = 0.15   // t357u: 15% of the page width (~60pt) each way (was 0.4)
+    static let hold: Double = 0.15     // t357u: s held at each side (was 0.25)
+    static let spring: Double = 0.45   // t357u: swing spring response (was 0.55 left / 0.7 right / 0.55 centre)
     static let log = ProcessInfo.processInfo.arguments.contains("--log-hints")
         || ProcessInfo.processInfo.arguments.contains("--log-prefetch")
     static let opens = 3               // t352u: hints on the first 3 detail opens
