@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		AB1000000000000000000001 /* AppleMusicStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000002 /* AppleMusicStore.swift */; };
 		AB1000000000000000000003 /* AppleMusicViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000004 /* AppleMusicViews.swift */; };
+		AB1970000000000000000001 /* OfficialCoverLookup.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1970000000000000000002 /* OfficialCoverLookup.swift */; };
 		AB1000000000000000000005 /* Waveform.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000006 /* Waveform.swift */; };
 		ACF7C653C98B10BA2A31F6BD /* VinylApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 812F7662D71E6595B75EDD1C /* VinylApp.swift */; };
 		D185CB9900DE34E2206A20F3 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D87CBA14F66CAE3997FA5C5 /* ContentView.swift */; };
@@ -59,6 +60,7 @@
 /* Begin PBXFileReference section */
 		AB1000000000000000000002 /* AppleMusicStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicStore.swift; sourceTree = "<group>"; };
 		AB1000000000000000000004 /* AppleMusicViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicViews.swift; sourceTree = "<group>"; };
+		AB1970000000000000000002 /* OfficialCoverLookup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfficialCoverLookup.swift; sourceTree = "<group>"; };
 		AB1000000000000000000006 /* Waveform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Waveform.swift; sourceTree = "<group>"; };
 		812F7662D71E6595B75EDD1C /* VinylApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VinylApp.swift; sourceTree = "<group>"; };
 		2D87CBA14F66CAE3997FA5C5 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -180,6 +182,7 @@
 			children = (
 				AB1000000000000000000002 /* AppleMusicStore.swift */,
 				AB1000000000000000000004 /* AppleMusicViews.swift */,
+				AB1970000000000000000002 /* OfficialCoverLookup.swift */,
 				AB1000000000000000000006 /* Waveform.swift */,
 				812F7662D71E6595B75EDD1C /* VinylApp.swift */,
 				2D87CBA14F66CAE3997FA5C5 /* ContentView.swift */,
@@ -312,6 +315,7 @@
 			files = (
 				AB1000000000000000000001 /* AppleMusicStore.swift in Sources */,
 				AB1000000000000000000003 /* AppleMusicViews.swift in Sources */,
+				AB1970000000000000000001 /* OfficialCoverLookup.swift in Sources */,
 				AB1000000000000000000005 /* Waveform.swift in Sources */,
 				ACF7C653C98B10BA2A31F6BD /* VinylApp.swift in Sources */,
 				D185CB9900DE34E2206A20F3 /* ContentView.swift in Sources */,
