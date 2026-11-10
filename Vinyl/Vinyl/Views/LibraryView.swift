@@ -51,9 +51,11 @@ struct LibraryView: View {
     private var demoToken: Int { get { zm.demoToken } nonmutating set { zm.demoToken = newValue } }
     private var motionStart: Date { get { zm.motionStart } nonmutating set { zm.motionStart = newValue } }
     private var recordingStarted: Bool { get { zm.recordingStarted } nonmutating set { zm.recordingStarted = newValue } }
-    private var recordingRequested: Bool {
-        ProcessInfo.processInfo.arguments.contains("--record-demo")
-    }
+    // t364u: launch arguments never change → read once (was an array scan on every body pass)
+    private static let recordingRequestedArg = ProcessInfo.processInfo.arguments.contains("--record-demo")
+    private static let debugMiniOfficialArg = ProcessInfo.processInfo.arguments.contains("--debug-mini-cycle")
+        && ProcessInfo.processInfo.arguments.contains("--debug-mini-official")
+    private var recordingRequested: Bool { Self.recordingRequestedArg }
 
     // 网格几何按原片实测：4 列、列宽 72pt、间距 17pt、左右 27pt
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 18), count: 4)
@@ -270,7 +272,10 @@ struct LibraryView: View {
                 cellFrames = frames
                 // 关闭飞行期间用户滚动首页：目标格子的实时 frame 每帧更新到 origin，
                 // CoverFlight 用当前弹簧进度向这个实时 frame 插值，落点永远在格子上。
-                if closing, !zm.openFromMini, let key = targetKey, let live = frames[key] { origin = live }
+                // t365u: a pushed tile's live frame still carries its push offset (it is flying back in) → track its
+                // rest frame (snapshot at open, shifted with any grid scroll since); unpushed tiles: live frame
+                if closing, !zm.openFromMini, let key = targetKey,
+                   let live = (zm.pushAnchor != nil ? zm.pushFrames[key] : nil) ?? frames[key] { origin = live }
             }
             .task(id: demoToken) {
                 await runDemo()
@@ -481,6 +486,13 @@ struct LibraryView: View {
             }
             }
         }
+        // t366u: while the detail covers the grid, a programmatic scroll moves every tile by the same dy; shift the
+        // push snapshot (anchor + rest frames) with it so push geometry is unchanged and close targets stay exact
+        .modifier(GridScrollShift { dy in
+            guard presented, !closing, zm.pushAnchor != nil, dy != 0 else { return }
+            zm.pushAnchor = zm.pushAnchor?.offsetBy(dx: 0, dy: dy)
+            zm.pushFrames = zm.pushFrames.mapValues { $0.offsetBy(dx: 0, dy: dy) }
+        })
         .onChange(of: scrollRequest) { _, key in
             guard let key else { return }
             // t211u：真实格子的滚动 id = 集合 id（key 仍是 1000 + 位置）
@@ -1102,8 +1114,7 @@ struct LibraryView: View {
     }
     /// t226u：mini player 封面 = 正在播放专辑在格子 / 详情里用的同一张图；歌单里的歌 → 该歌自己的专辑
     private var miniCover: (Artwork?, OfficialCoverQuery?) {
-        if ProcessInfo.processInfo.arguments.contains("--debug-mini-cycle"),
-           ProcessInfo.processInfo.arguments.contains("--debug-mini-official") {
+        if Self.debugMiniOfficialArg {   // t364u
             return (nil, OfficialCoverQuery(id: "mini-official-fixture", title: "Fixture", artist: "Fixture"))
         }
         guard music.hasCurrentTrack else {
@@ -1138,6 +1149,7 @@ struct LibraryView: View {
         TrackPrefetch.shared.prefetch(window)
     }
     private func swipeSettled() {
+        keepCurrentTileOnScreen()   // t366u
         TrackPrefetch.shared.settled(hasTracks: collectionSongs != nil)
         prefetchNeighbours()
         demoToken += 1
@@ -1147,6 +1159,18 @@ struct LibraryView: View {
             guard token == demoToken, presented, !closing, flip < 90 else { return }
             withAnimation(Motion.animation(Motion.pull)) { pull = 1 }
         }
+    }
+
+    /// t366u: after the detail lands on another album (swipe / jump / return-to-playing), scroll the home grid behind
+    /// the opaque detail so that album's tile is on screen (centred) — only when its rest frame isn't visible already.
+    /// The close flight then lands on it with the unchanged close animation. iOS 17: no scroll (old fallback).
+    private func keepCurrentTileOnScreen() {
+        guard #available(iOS 18, *), presented, !closing, !zm.openFromMini, let key = targetKey else { return }
+        let rest = (zm.pushAnchor != nil ? zm.pushFrames[key] : nil) ?? cellFrames[key]
+        if let rest, tileVisible(rest) { return }
+        if GridScrollShift.log { print("[t366u] scroll grid to key \(key) (rest \(rest.map { "\($0.midY)" } ?? "nil"))") }
+        scrollRequest = nil
+        DispatchQueue.main.async { scrollRequest = key }
     }
 
     private func beginCloseFlight() {
@@ -2297,5 +2321,21 @@ struct DetailBackdrop: View {
             .clipped()
             .ignoresSafeArea()
             .allowsHitTesting(false)
+    }
+}
+
+
+/// t366u: reports vertical scroll deltas of the home grid as a frame shift (content moved by -Δoffset). iOS 18+.
+struct GridScrollShift: ViewModifier {
+    static let log = ProcessInfo.processInfo.arguments.contains("--log-prefetch")
+    let shift: (CGFloat) -> Void
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
+                shift(old - new)
+            }
+        } else {
+            content
+        }
     }
 }

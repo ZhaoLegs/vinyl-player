@@ -1504,7 +1504,10 @@ struct EqualizerGlyph: View {
     let playing: Bool
     let color: Color
     var height: CGFloat = 11
-    private let rest: [CGFloat] = [0.35, 0.55, 0.30]
+    private static let rest: [CGFloat] = [0.35, 0.55, 0.30]
+    // t364u: constants hoisted out of the 30 fps TimelineView closure (were 2 array literals per bar per frame)
+    private static let speeds: [Double] = [5.1, 6.7, 4.3]
+    private static let phases: [Double] = [0.0, 1.7, 3.1]
 
     var body: some View {
         let _ = TracklistProfile.count("EqualizerGlyph.body")
@@ -1512,11 +1515,11 @@ struct EqualizerGlyph: View {
             let t = tl.date.timeIntervalSinceReferenceDate
             HStack(alignment: .bottom, spacing: height * 0.16) {
                 ForEach(0..<3, id: \.self) { i in
-                    let speed = [5.1, 6.7, 4.3][i], phase = [0.0, 1.7, 3.1][i]
+                    let speed = Self.speeds[i], phase = Self.phases[i]
                     let live = 0.25 + 0.75 * (0.5 + 0.5 * sin(t * speed + phase))
                     Rectangle()
                         .fill(color)
-                        .frame(width: height * 0.2, height: height * (playing ? CGFloat(live) : rest[i]))
+                        .frame(width: height * 0.2, height: height * (playing ? CGFloat(live) : Self.rest[i]))
                 }
             }
             .frame(height: height, alignment: .bottom)
