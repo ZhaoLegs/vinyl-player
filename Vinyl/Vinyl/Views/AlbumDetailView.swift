@@ -73,11 +73,14 @@ struct AlbumDetailView: View {
     @State private var barTopY: CGFloat = 0
     /// t219u：曲目表滚到底的接近程度 0…1（底部模糊在时间条上方的部分随之收拢，不挡最后一行）
     @State private var scrollEnd = DetailScrollEnd()
+    /// t269u: user is scrolling lyrics by hand -> time bar slides out, lines sharpen
+    @State private var lyricsManual = false
     @StateObject private var trackRows = TrackRows()
     /// 滑入距离 = 播放条高 42 + 底部间距 10 + 底部安全区（整条完全在屏幕外起步）
     /// （不在 body 里读 UIWindow：那会让整个详情层不渲染；底部安全区由页面 GeometryReader 写入）
     @State private var bottomSafe: CGFloat = 34
     private var barTravel: CGFloat { 42 + 10 + bottomSafe }
+    private var lyricsHidesBar: Bool { lyricsManual && lyricsMode && !closing }
     /// nil = 未判定；true = 横向主导（接管）；false = 纵向（交给列表滚动）
     @State private var swipeAxisH: Bool? = nil
     @State private var swipeBusy = false
@@ -186,7 +189,10 @@ struct AlbumDetailView: View {
                                 if let songs, let song = lyricsSong {
                                     LyricsPanel(song: song, songs: songs, albumTitle: title,
                                                 fromCatalog: collection?.isCatalog ?? false,
-                                                topExtend: lyricsGap)
+                                                topExtend: lyricsGap,
+                                                onManual: { v in
+                                                    withAnimation(.spring(duration: Lyrics.barSlide, bounce: 0)) { lyricsManual = v }
+                                                })
                                 } else if songs != nil {
                                     LyricsPanel.emptyText
                                 }
@@ -232,13 +238,16 @@ struct AlbumDetailView: View {
                     // t166u：底部渐变高斯模糊改为独立的更高一层（见 bottomFade），只淡入淡出、不随播放条位移
                     .background(alignment: .bottom) {
                         bottomFade
-                            .offset(y: closing ? 0 : -(1 - barIn) * barTravel)   // 抵消播放条的滑入位移 → 模糊层本身原地淡入
+                            .offset(y: closing ? 0 : -(1 - barIn) * barTravel - (lyricsHidesBar ? barTravel : 0))   // 抵消播放条的滑入位移 → 模糊层本身原地淡入
                     }
                     // t157u：封面放大结束（landed）后，播放条从屏幕底边外向上滑入 + 淡入（spring 0.4s，bounce 0）；
                     // 关闭时仍随 contentAlpha 一起 0.12s 快速淡出（不位移）
                     .opacity(closing ? contentAlpha : (contentAlpha > 0.001 ? Double(barIn) : 0))
                     .offset(y: closing ? 0 : (1 - barIn) * barTravel)
+                    // t269u: manual lyrics scroll -> bar slides below the screen edge, returns when idle
+                    .offset(y: lyricsHidesBar ? barTravel : 0)
             }
+            .onChange(of: lyricsMode) { _, on in if !on { lyricsManual = false } }
             .coordinateSpace(.named(TrackInset.space))
             // 不再给整列加 contentAlpha：封套只受 ArtworkHandoff 控制（全显 / 全隐），
             // 不会出现半透明封套透出唱片的「鬼影」帧；其余内容各自按 stage() 淡入。
@@ -1325,6 +1334,11 @@ enum Lyrics {
     static let dimOpacity: Double = 0.42     // 非当前行（t243u：0.35 → 0.42，6–8 行可读）
     static let unsungOpacity: Double = 0.5   // 当前行未唱部分
     static let scroll = Animation.spring(duration: 0.45, bounce: 0)   // 阻尼 ease-out
+    /// t269u: manual lyrics scrolling
+    static let barSlide: Double = 0.35        // time bar out / back spring
+    static let fling: Double = 0.6            // finger-up deceleration spring
+    static let manualIdle: Double = 2.5       // idle after the fling settles before auto-follow returns
+    static let manualOpacity: Double = 0.75   // non-current lines while scrolling by hand
     /// t252u：换行上滚时，离当前行越远的行越晚起步（每步 28ms，最多 100ms）——瀑布式延迟，不是整块硬滚
     static let staggerStep: Double = 0.028
     static let staggerMax: Double = 0.100
@@ -1431,6 +1445,13 @@ struct LyricsPanel: View {
     let fromCatalog: Bool
     /// t247u：歌词区向上延伸到封面下缘的高度（内容顶部留白 + alpha 渐变带同步加高）
     var topExtend: CGFloat = 0
+    var onManual: (Bool) -> Void = { _ in }
+    // t269u: manual scroll state (offset added on top of the cascading followY)
+    @State private var manualY: CGFloat = 0
+    @State private var manual = false
+    @State private var dragging = false
+    @State private var dragBase: CGFloat = 0
+    @State private var returnTask: Task<Void, Never>?
     @State private var result: LyricsResult?
     @State private var loadedID: MusicItemID?
     @State private var loadFailed = false
@@ -1565,11 +1586,12 @@ struct LyricsPanel: View {
                         }
                         .scaleEffect(isCurrent ? Lyrics.activeScale : 1, anchor: .center)
                         .animation(Lyrics.scaleSpring, value: isCurrent)
-                        .opacity(isCurrent ? 1 : (current < 0 ? Lyrics.unsungOpacity : Lyrics.dimOpacity))
-                        .blur(radius: Lyrics.blur(distance: d))
+                        .opacity(isCurrent ? 1 : (manual ? Lyrics.manualOpacity : (current < 0 ? Lyrics.unsungOpacity : Lyrics.dimOpacity)))
+                        .blur(radius: manual ? 0 : Lyrics.blur(distance: d))
                         // t252u：同一 followY，离当前行越远 delay 越大 → 上滚时逐行迟一点跟上
                         .offset(y: followY)
                         .animation(Lyrics.scroll.delay(Lyrics.staggerDelay(d)), value: followY)
+                        .offset(y: manualY)
                         .contentShape(Rectangle())
                         .onTapGesture { seek(to: line) }
                     }
@@ -1581,15 +1603,84 @@ struct LyricsPanel: View {
                 .frame(maxWidth: .infinity, alignment: .top)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .contentShape(Rectangle())
+            .gesture(manualDrag(lines))
             .modifier(TopProgressiveBlurMask(height: topExtend + LyricsTopFade.height))
+            .onDisappear { returnTask?.cancel(); if manual { onManual(false) } }
+            .task {
+                // diagnostic: --debug-lyrics-drag simulates a manual fling 7s after lyrics appear
+                guard ProcessInfo.processInfo.arguments.contains("--debug-lyrics-drag") else { return }
+                try? await Task.sleep(for: .seconds(7))
+                withAnimation(.easeOut(duration: 0.25)) { manual = true }
+                onManual(true)
+                withAnimation(.spring(duration: Lyrics.fling, bounce: 0)) { manualY = clampManual(-240, lines: lines) }
+                dragBase = manualY
+                try? await Task.sleep(for: .seconds(Lyrics.fling + Lyrics.manualIdle))
+                withAnimation(Lyrics.scroll) { manualY = 0; manual = false }
+                dragBase = 0
+                onManual(false)
+            }
             .onAppear { viewportH = geo.size.height; snapFollow(current, lines: lines, animated: false) }
             .onChange(of: geo.size.height) { _, h in viewportH = h; snapFollow(current, lines: lines, animated: false) }
             .onPreferenceChange(LyricHeightKey.self) { lineHeights.merge($0) { _, n in n }; snapFollow(current, lines: lines, animated: false) }
-            .onChange(of: current) { _, i in snapFollow(i, lines: lines, animated: i >= 0) }
+            .onChange(of: current) { _, i in
+                // t269u: while scrolling by hand keep the view still (manualY absorbs the follow change)
+                if manual {
+                    let before = followY
+                    snapFollow(i, lines: lines, animated: false)
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { manualY += before - followY }
+                    dragBase += before - followY
+                } else {
+                    snapFollow(i, lines: lines, animated: i >= 0)
+                }
+            }
             .onChange(of: song.id) { _, _ in
                 followY = 0; lineHeights = [:]
+                manualY = 0; dragBase = 0
             }
         }
+    }
+
+    /// t269u: finger drag scrolls lyrics freely; auto-follow resumes Lyrics.manualIdle s after the fling settles.
+    private func manualDrag(_ lines: [LyricLine]) -> some Gesture {
+        DragGesture(minimumDistance: 6)
+            .onChanged { v in
+                if !dragging {
+                    dragging = true
+                    returnTask?.cancel()
+                    dragBase = manualY
+                    if !manual {
+                        withAnimation(.easeOut(duration: 0.25)) { manual = true }
+                        onManual(true)
+                    }
+                }
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { manualY = clampManual(dragBase + v.translation.height, lines: lines) }
+            }
+            .onEnded { v in
+                dragging = false
+                let target = clampManual(dragBase + v.predictedEndTranslation.height, lines: lines)
+                withAnimation(.spring(duration: Lyrics.fling, bounce: 0)) { manualY = target }
+                dragBase = target
+                returnTask?.cancel()
+                returnTask = Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(Lyrics.fling + Lyrics.manualIdle))
+                    guard !Task.isCancelled, !dragging else { return }
+                    withAnimation(Lyrics.scroll) { manualY = 0; manual = false }
+                    dragBase = 0
+                    onManual(false)
+                }
+            }
+    }
+
+    private func clampManual(_ y: CGFloat, lines: [LyricLine]) -> CGFloat {
+        let contentH = lines.reduce(CGFloat(0)) { $0 + (lineHeights[$1.id] ?? Lyrics.estimatedLineH) }
+            + Lyrics.lineGap * CGFloat(max(0, lines.count - 1))
+        let top = viewportH / 3                       // first line can come down to 1/3 of the viewport
+        let bottom = -(contentH - viewportH / 3)      // last line can go up to 1/3 of the viewport
+        let total = min(top, max(bottom, followY + y))
+        return total - followY
     }
 
     /// 把当前行中心放到视口 1/3 处。

@@ -287,8 +287,7 @@ struct LibraryView: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
-                .opacity(presented ? 0 : 1)
-                .animation(.easeOut(duration: 0.12), value: presented)
+                // t270u: always present at full opacity (no hide on open / pop-in after the blur on close)
                 .allowsHitTesting(false)
                 .accessibilityAddTraits(.isHeader)
         }
