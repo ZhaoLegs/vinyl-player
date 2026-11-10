@@ -916,7 +916,7 @@ struct LibraryView: View {
     private func upgradeToCatalogTracks(_ c: MusicCollection, shown: [Song]) {
         guard case .album(_, catalog: false) = c else { return }
         Task {
-            guard let full = await c.catalogSongs(), full.count > shown.count,
+            guard let full = await c.catalogSongs(librarySongs: shown), full.count > shown.count,
                   selectedCollection?.id == c.id, collectionSongs?.count == shown.count else { return }
             collectionSongs = full
         }

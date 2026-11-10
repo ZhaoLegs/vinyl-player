@@ -891,28 +891,65 @@ extension AppleMusicStore {
 }
 
 extension MusicCollection {
-    /// t283u: a library album only lists the songs the user saved. Resolve its catalog album
-    /// (① /v1/me/library/albums/{id}/catalog → ② catalog search by title + artist) and read the full,
-    /// paged tracklist. nil = not a library album / not found / failed (callers keep the library tracks).
-    func catalogSongs() async -> [Song]? {
+    /// t283u/t284u: a library album only lists the songs the user saved. Resolve its catalog album and read the
+    /// full, paged tracklist. Routes, in order (each logged):
+    ///  ① /v1/me/library/albums/{id}/catalog  ② a saved song's catalog ID (playParameters) → catalog song → .albums
+    ///  ③ catalog search ("title artist", then title only), matched with Simplified/Traditional-, case- and
+    ///     space-insensitive titles; artist may match either way; track count / release year break ties.
+    /// nil = not a library album / not found / failed (callers keep the library tracks).
+    func catalogSongs(librarySongs: [Song] = []) async -> [Song]? {
         guard case .album(let album, let catalog) = self, !catalog else { return nil }
+        let tag = "[t284u] \(album.title) / \(album.artistName)"
         var found: Album?
-        if let url = URL(string: "https://api.music.apple.com/v1/me/library/albums/\(album.id.rawValue)/catalog"),
-           let r = try? await MusicDataRequest(urlRequest: URLRequest(url: url)).response(),
-           let items = try? JSONDecoder().decode(MusicItemCollection<Album>.self, from: r.data) {
-            found = items.first
+
+        // ① library → catalog relationship
+        if let url = URL(string: "https://api.music.apple.com/v1/me/library/albums/\(album.id.rawValue)/catalog") {
+            do {
+                let r = try await MusicDataRequest(urlRequest: URLRequest(url: url)).response()
+                let items = try? JSONDecoder().decode(MusicItemCollection<Album>.self, from: r.data)
+                print("\(tag) ① relationship HTTP \(r.urlResponse.statusCode), \(items?.count ?? -1) items: \(String(decoding: r.data.prefix(300), as: UTF8.self))")
+                found = items?.first
+            } catch { print("\(tag) ① relationship failed: \(error)") }
         }
+
+        // ② saved song → catalog song → its album
         if found == nil {
-            let norm = { (x: String) in x.lowercased().filter { !$0.isWhitespace } }
-            var req = MusicCatalogSearchRequest(term: "\(album.title) \(album.artistName)", types: [Album.self])
-            req.limit = 10
-            if let res = try? await req.response() {
-                found = res.albums.first { norm($0.title) == norm(album.title) && norm($0.artistName) == norm(album.artistName) }
-                    ?? res.albums.first { norm($0.title) == norm(album.title) }
+            for song in librarySongs.prefix(3) {
+                guard let pp = song.playParameters, let data = try? JSONEncoder().encode(pp),
+                      let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
+                let cid = (obj["catalogId"] as? String) ?? (obj["purchasedId"] as? String)
+                print("\(tag) ② song \(song.title) playParameters=\(obj)")
+                guard let cid, !cid.isEmpty else { continue }
+                do {
+                    var r = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(cid))
+                    r.properties = [.albums]
+                    let cs = try await r.response().items.first
+                    let albums = cs?.albums.map(Array.init) ?? []
+                    print("\(tag) ② catalog song \(cid) -> albums: \(albums.map { "\($0.title) / \($0.artistName) (\($0.trackCount))" })")
+                    let want = Self.norm(album.title)
+                    found = albums.first { Self.norm($0.title) == want } ?? albums.first
+                    if found != nil { break }
+                } catch { print("\(tag) ② catalog song \(cid) failed: \(error)") }
             }
         }
+
+        // ③ search
+        if found == nil {
+            for term in ["\(album.title) \(album.artistName)", album.title] {
+                var req = MusicCatalogSearchRequest(term: term, types: [Album.self])
+                req.limit = 10
+                do {
+                    let res = try await req.response()
+                    let list = Array(res.albums)
+                    print("\(tag) ③ search '\(term)': \(list.map { "\($0.title) / \($0.artistName) (\($0.trackCount))" })")
+                    found = Self.bestMatch(list, for: album, savedCount: librarySongs.count)
+                    if found != nil { break }
+                } catch { print("\(tag) ③ search '\(term)' failed: \(error)") }
+            }
+        }
+
         guard let found else {
-            print("[t283u] no catalog album for \(album.title)")
+            print("\(tag) -> no catalog album")
             return nil
         }
         var tracks = try? await found.with(.tracks).tracks
@@ -921,8 +958,35 @@ extension MusicCollection {
             songs.append(contentsOf: batch.compactMap { if case .song(let s) = $0 { return s }; return nil })
             tracks = batch.hasNextBatch ? (try? await batch.nextBatch()) : nil
         }
-        print("[t283u] \(album.title): catalog \(found.id.rawValue) -> \(songs.count) tracks")
+        print("\(tag) -> catalog \(found.id.rawValue) \(found.title) / \(found.artistName): \(songs.count) tracks")
         return songs.isEmpty ? nil : songs
+    }
+
+    /// Simplified/Traditional-, case-, width- and whitespace/punctuation-insensitive key.
+    static func norm(_ s: String) -> String {
+        let hans = s.applyingTransform(StringTransform("Hant-Hans"), reverse: false) ?? s
+        let folded = hans.folding(options: [.caseInsensitive, .widthInsensitive, .diacriticInsensitive], locale: nil)
+        return String(folded.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(Character.init))
+    }
+
+    private static func bestMatch(_ list: [Album], for album: Album, savedCount: Int) -> Album? {
+        let t = norm(album.title), a = norm(album.artistName)
+        func artistOK(_ x: Album) -> Bool {
+            let b = norm(x.artistName)
+            return !a.isEmpty && !b.isEmpty && (a.contains(b) || b.contains(a))
+        }
+        let titled = list.filter { norm($0.title) == t }
+        let candidates = titled.filter(artistOK).isEmpty ? (titled.count == 1 ? titled : []) : titled.filter(artistOK)
+        let year = album.releaseDate.map { Calendar.current.component(.year, from: $0) }
+        return candidates.max { l, r in
+            func score(_ x: Album) -> Int {
+                var s = 0
+                if let y = year, let xd = x.releaseDate, Calendar.current.component(.year, from: xd) == y { s += 2 }
+                if (x.trackCount) >= savedCount { s += 1 }
+                return s
+            }
+            return score(l) < score(r)
+        }
     }
 
     var shareURL: URL? {
